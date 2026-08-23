@@ -5,7 +5,7 @@ Corn-themed.
 This release ships `cob_interp`, the v0.0.1 interpreter. Its scope is
 intentionally narrow: `pop("text")` is the one fully working statement.
 `while`, `set`, `shuck`, `harvest`, and `trash` are recognized by the
-parser but not yet executed -- see README.md for the roadmap.
+parser but not yet executed.
 
 Binaries are provided for Windows, Linux, and macOS across
 amd64/386/arm64/arm as applicable. Verify downloads against
