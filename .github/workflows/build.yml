@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   # ---------------------------------------------------------------------
@@ -46,6 +48,10 @@ jobs:
   build:
     needs: test
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -177,11 +183,16 @@ jobs:
       run: |
         mkdir -p staging/${{ matrix.archive_name }}
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
-        cp LICENSE.md staging/${{ matrix.archive_name }}/
+        find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
         
         cd staging
         zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
         cd ..
+
+    - name: Attest Build Provenance
+      uses: actions/attest-build-provenance@v4.2.2
+      with:
+        subject-path: dist/${{ matrix.archive_name }}.zip
 
     - name: Generate individual hash and text fragment
       shell: bash
@@ -205,6 +216,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
     - uses: actions/checkout@v6
 
