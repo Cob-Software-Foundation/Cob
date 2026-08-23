@@ -2,19 +2,17 @@ name: Cob
 
 on:
   push:
-  branches: [ "main" ]
+    branches: [ "main" ]
   pull_request:
-  branches: [ "main" ]
+    branches: [ "main" ]
 
 permissions:
   contents: read
 
 jobs:
   # ---------------------------------------------------------------------
-  # Smoke test: build cob_interp natively on Linux and run it against a
-  # known-good .cob sample, asserting on stdout. This is our stand-in for
-  # `go test ./...` -- C has no built-in test runner, so we assert output
-  # by hand.
+  # Smoke test: build cob natively on Linux and run it against a
+  # known-good .cob sample, asserting on stdout.
   # ---------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
@@ -23,7 +21,7 @@ jobs:
       with:
         lfs: true
 
-    - name: Build cob_interp (native)
+    - name: Build cob (native)
       run: |
         gcc -std=c99 -Wall -Wextra -Werror -Iinclude \
             -o cob src/file_io.c src/cob_interp.c
