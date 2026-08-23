@@ -53,3 +53,7 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# TinyCC Build Configurations
+config.h
+config.mak
