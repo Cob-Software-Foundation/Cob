@@ -177,7 +177,7 @@ jobs:
       run: |
         mkdir -p staging/${{ matrix.archive_name }}
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
-        cp LICENSE staging/${{ matrix.archive_name }}/
+        cp LICENSE.md staging/${{ matrix.archive_name }}/
         
         cd staging
         zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
