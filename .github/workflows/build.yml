@@ -178,12 +178,19 @@ jobs:
           src/file_io.c src/cob_interp.c
         ls -la "dist/${{ matrix.output_name }}"
 
-    - name: Package binary and LICENSE into zip
+    - name: Package binary and licenses into zip
       shell: bash
       run: |
         mkdir -p staging/${{ matrix.archive_name }}
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
+        
+        # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
+        
+        # Copy tcc-src/COPYING license file
+        if [ -f "tcc-src/COPYING" ]; then
+          cp "tcc-src/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
+        fi
         
         cd staging
         zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
