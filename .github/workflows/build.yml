@@ -2,9 +2,9 @@ name: Cob
 
 on:
   push:
-    branches: [ "main" ]
+  branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+  branches: [ "main" ]
 
 permissions:
   contents: read
@@ -26,38 +26,24 @@ jobs:
     - name: Build cob_interp (native)
       run: |
         gcc -std=c99 -Wall -Wextra -Werror -Iinclude \
-            -o cob_interp src/file_io.c src/cob_interp.c
+            -o cob src/file_io.c src/cob_interp.c
 
     - name: Run pop() smoke test
       run: |
         cat > smoke.cob << 'EOF'
         pop("smoke test ok")
         EOF
-        ./cob_interp smoke.cob | tee out.txt
+        ./cob smoke.cob | tee out.txt
         grep -qx "smoke test ok" out.txt
 
     - name: Run fast-boot cache smoke test
       run: |
         test -f smoke.strawberry
-        ./cob_interp smoke.cob | tee out2.txt
+        ./cob smoke.cob | tee out2.txt
         grep -qx "smoke test ok" out2.txt
 
   # ---------------------------------------------------------------------
   # Cross-platform build matrix.
-  #
-  # Unlike Go, C has no single toolchain that targets every OS/arch pair,
-  # so `runner` and `cc` vary per matrix entry:
-  #   - Linux targets  -> ubuntu-latest, apt-installed cross-gcc
-  #   - Windows targets-> ubuntu-latest, mingw-w64 (amd64/386) or
-  #                       llvm-mingw (arm64/arm32, which mingw-w64's gcc
-  #                       does not support)
-  #   - macOS targets  -> macos-latest (Apple Silicon runner), using
-  #                       clang's -arch flag to produce both arm64 and
-  #                       amd64 binaries from the one official SDK.
-  #                       (Cross-compiling macOS binaries from Linux
-  #                       requires the Apple SDK, which Apple's license
-  #                       does not permit shipping/using outside macOS
-  #                       hardware -- so darwin targets always run here.)
   # ---------------------------------------------------------------------
   build:
     needs: test
@@ -73,26 +59,30 @@ jobs:
             toolchain: mingw
             cc: x86_64-w64-mingw32-gcc
             apt_pkg: gcc-mingw-w64-x86-64
-            output_name: cob_interp-windows-amd64.exe
+            output_name: cob.exe
+            archive_name: cob-windows-amd64
           - goos: windows
             goarch: '386'
             runner: ubuntu-latest
             toolchain: mingw
             cc: i686-w64-mingw32-gcc
             apt_pkg: gcc-mingw-w64-i686
-            output_name: cob_interp-windows-x86.exe
+            output_name: cob.exe
+            archive_name: cob-windows-386
           - goos: windows
             goarch: arm64
             runner: ubuntu-latest
             toolchain: llvm-mingw
             cc: aarch64-w64-mingw32-clang
-            output_name: cob_interp-windows-arm64.exe
+            output_name: cob.exe
+            archive_name: cob-windows-arm64
           - goos: windows
             goarch: arm
             runner: ubuntu-latest
             toolchain: llvm-mingw
             cc: armv7-w64-mingw32-clang
-            output_name: cob_interp-windows-arm32.exe
+            output_name: cob.exe
+            archive_name: cob-windows-arm32
 
           # ---------------- Linux ----------------
           - goos: linux
@@ -100,7 +90,8 @@ jobs:
             runner: ubuntu-latest
             toolchain: native
             cc: gcc
-            output_name: cob_interp-linux-amd64
+            output_name: cob
+            archive_name: cob-linux-amd64
           - goos: linux
             goarch: '386'
             runner: ubuntu-latest
@@ -108,21 +99,24 @@ jobs:
             cc: gcc
             cflags: "-m32"
             apt_pkg: gcc-multilib
-            output_name: cob_interp-linux-x86
+            output_name: cob
+            archive_name: cob-linux-386
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
             toolchain: cross
             cc: aarch64-linux-gnu-gcc
             apt_pkg: gcc-aarch64-linux-gnu
-            output_name: cob_interp-linux-arm64
+            output_name: cob
+            archive_name: cob-linux-arm64
           - goos: linux
             goarch: arm
             runner: ubuntu-latest
             toolchain: cross
             cc: arm-linux-gnueabihf-gcc
             apt_pkg: gcc-arm-linux-gnueabihf
-            output_name: cob_interp-linux-arm32
+            output_name: cob
+            archive_name: cob-linux-arm32
 
           # ---------------- macOS ----------------
           - goos: darwin
@@ -131,14 +125,16 @@ jobs:
             toolchain: clang-arch
             cc: clang
             cflags: "-arch arm64"
-            output_name: cob_interp-mac-arm64
+            output_name: cob
+            archive_name: cob-darwin-arm64
           - goos: darwin
             goarch: amd64
             runner: macos-latest
             toolchain: clang-arch
             cc: clang
             cflags: "-arch x86_64"
-            output_name: cob_interp-mac-amd64
+            output_name: cob
+            archive_name: cob-darwin-amd64
 
     steps:
     - uses: actions/checkout@v6
@@ -167,7 +163,7 @@ jobs:
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
-    - name: Compile cob_interp
+    - name: Compile cob
       shell: bash
       run: |
         set -euo pipefail
@@ -178,24 +174,32 @@ jobs:
           src/file_io.c src/cob_interp.c
         ls -la "dist/${{ matrix.output_name }}"
 
+    - name: Package binary and LICENSE into zip
+      shell: bash
+      run: |
+        mkdir -p staging/${{ matrix.archive_name }}
+        cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
+        cp LICENSE staging/${{ matrix.archive_name }}/
+        
+        cd staging
+        zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
+        cd ..
+
     - name: Generate individual hash and text fragment
       shell: bash
       run: |
         cd dist
-        sha256sum "${{ matrix.output_name }}" > "${{ matrix.output_name }}.sha256"
-        # NOTE: extension is deliberately NOT .txt -- checksums.txt itself
-        # would match a "*.txt" cleanup glob and get deleted by its own
-        # combine step (see Stitch Checksums Document).
-        sha256sum "${{ matrix.output_name }}" > "${{ matrix.output_name }}.hashfrag"
+        sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.sha256"
+        sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.hashfrag"
 
     - name: Upload temporary matrix artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: artifact-${{ matrix.output_name }}
+        name: artifact-${{ matrix.archive_name }}
         path: |
-          dist/${{ matrix.output_name }}
-          dist/${{ matrix.output_name }}.sha256
-          dist/${{ matrix.output_name }}.hashfrag
+          dist/${{ matrix.archive_name }}.zip
+          dist/${{ matrix.archive_name }}.zip.sha256
+          dist/${{ matrix.archive_name }}.zip.hashfrag
 
   release:
     needs: build
