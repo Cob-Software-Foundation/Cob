@@ -53,8 +53,7 @@ jobs:
           ./configure
           make
           cd ../../tk/unix
-          # Point the compiler to the harfbuzz include directory
-          ./configure --with-tcl=../../tcl/unix CPPFLAGS="-I/usr/include/harfbuzz"
+          ./configure --with-tcl=../../tcl/unix --disable-bidi
           make
 
       - name: Perform CodeQL Static Scan
