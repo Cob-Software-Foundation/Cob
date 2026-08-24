@@ -53,7 +53,8 @@ jobs:
           ./configure
           make
           cd ../../tk/unix
-          ./configure --with-tcl=../../tcl/unix
+          # Pass pkg-config flags for harfbuzz so it finds hb.h
+          ./configure --with-tcl=../../tcl/unix CFLAGS="$(pkg-config --cflags harfbuzz)"
           make
 
       - name: Perform CodeQL Static Scan
