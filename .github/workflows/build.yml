@@ -65,7 +65,6 @@ jobs:
             apt_pkg: gcc-mingw-w64-x86-64
             output_name: cob.exe
             archive_name: cob-windows-amd64
-            is_app: false
           - goos: windows
             goarch: '386'
             runner: ubuntu-latest
@@ -74,7 +73,6 @@ jobs:
             apt_pkg: gcc-mingw-w64-i686
             output_name: cob.exe
             archive_name: cob-windows-386
-            is_app: false
           - goos: windows
             goarch: arm64
             runner: ubuntu-latest
@@ -82,7 +80,6 @@ jobs:
             cc: aarch64-w64-mingw32-clang
             output_name: cob.exe
             archive_name: cob-windows-arm64
-            is_app: false
           - goos: windows
             goarch: arm
             runner: ubuntu-latest
@@ -90,7 +87,6 @@ jobs:
             cc: armv7-w64-mingw32-clang
             output_name: cob.exe
             archive_name: cob-windows-arm32
-            is_app: false
 
           # ---------------- Linux ----------------
           - goos: linux
@@ -100,7 +96,6 @@ jobs:
             cc: gcc
             output_name: cob
             archive_name: cob-linux-amd64
-            is_app: false
           - goos: linux
             goarch: '386'
             runner: ubuntu-latest
@@ -110,7 +105,6 @@ jobs:
             apt_pkg: gcc-multilib
             output_name: cob
             archive_name: cob-linux-386
-            is_app: false
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
@@ -119,7 +113,6 @@ jobs:
             apt_pkg: gcc-aarch64-linux-gnu
             output_name: cob
             archive_name: cob-linux-arm64
-            is_app: false
           - goos: linux
             goarch: arm
             runner: ubuntu-latest
@@ -128,9 +121,8 @@ jobs:
             apt_pkg: gcc-arm-linux-gnueabihf
             output_name: cob
             archive_name: cob-linux-arm32
-            is_app: false
 
-          # ---------------- macOS (Standard Binary) ----------------
+          # ---------------- macOS ----------------
           - goos: darwin
             goarch: arm64
             runner: macos-latest
@@ -139,7 +131,6 @@ jobs:
             cflags: "-arch arm64"
             output_name: cob
             archive_name: cob-darwin-arm64
-            is_app: false
           - goos: darwin
             goarch: amd64
             runner: macos-latest
@@ -148,27 +139,6 @@ jobs:
             cflags: "-arch x86_64"
             output_name: cob
             archive_name: cob-darwin-amd64
-            is_app: false
-
-          # ---------------- macOS (.App Bundle) ----------------
-          - goos: darwin
-            goarch: arm64
-            runner: macos-latest
-            toolchain: clang-arch
-            cc: clang
-            cflags: "-arch arm64"
-            output_name: cob
-            archive_name: cob-darwin-arm64-app
-            is_app: true
-          - goos: darwin
-            goarch: amd64
-            runner: macos-latest
-            toolchain: clang-arch
-            cc: clang
-            cflags: "-arch x86_64"
-            output_name: cob
-            archive_name: cob-darwin-amd64-app
-            is_app: true
 
     steps:
     - uses: actions/checkout@v6
@@ -212,34 +182,19 @@ jobs:
       shell: bash
       run: |
         mkdir -p staging/${{ matrix.archive_name }}
+        cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
         
-        if [ "${{ matrix.is_app }}" = "true" ]; then
-          APP_DIR="staging/Cob.app"
-          mkdir -p "$APP_DIR/Contents/MacOS"
-          mkdir -p "$APP_DIR/Contents/Resources"
-          
-          cp dist/${{ matrix.output_name }} "$APP_DIR/Contents/MacOS/cob"
-          chmod +x "$APP_DIR/Contents/MacOS/cob"
-          
-          find . -maxdepth 1 -iname "license*" -exec cp {} "$APP_DIR/Contents/Resources/" \;
-          if [ -f "tcc-src/COPYING" ]; then
-            cp "tcc-src/COPYING" "$APP_DIR/Contents/Resources/TCC_COPYING"
-          fi
-          
-          cd staging
-          zip -r "../dist/${{ matrix.archive_name }}.zip" Cob.app
-          cd ..
-        else
-          cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
-          find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
-          if [ -f "tcc-src/COPYING" ]; then
-            cp "tcc-src/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
-          fi
-          
-          cd staging
-          zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
-          cd ..
+        # Copy main repository license(s)
+        find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
+        
+        # Copy tcc-src/COPYING license file
+        if [ -f "tcc-src/COPYING" ]; then
+          cp "tcc-src/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
         fi
+        
+        cd staging
+        zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
+        cd ..
 
     - name: Attest Build Provenance
       uses: actions/attest-build-provenance@v4.2.2
@@ -298,4 +253,3 @@ jobs:
         body_path: Release.txt
         files: |
           all-binaries/*
-          
