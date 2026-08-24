@@ -187,9 +187,10 @@ jobs:
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
         
-        # Copy tcc-src/COPYING license file
-        if [ -f "tcc-src/COPYING" ]; then
-          cp "tcc-src/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
+        # Copy src/tcc/COPYING license file (TCC is LGPL-licensed; its
+        # license text must travel with any binary that links it in)
+        if [ -f "src/tcc/COPYING" ]; then
+          cp "src/tcc/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
         fi
         
         cd staging
