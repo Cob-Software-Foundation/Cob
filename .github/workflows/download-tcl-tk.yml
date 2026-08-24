@@ -71,6 +71,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          commit-user-name: github-actions[bot]
+          commit-user-email: 41898282+github-actions[bot]@users.noreply.github.com
           add-paths: |
             src/tcl
             src/tk
