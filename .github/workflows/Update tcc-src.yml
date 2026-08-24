@@ -72,7 +72,7 @@ jobs:
           # Commit and push safely
           if ! git diff-index --quiet HEAD; then
             git commit -m "Automated TCC Upstream Sync - $(date +'%Y-%m-%d')"
-            git push origin HEAD:${{{ github.ref_name }}}
+            git push origin HEAD:${{ github.ref_name }}
           else
             echo "No changes detected in TCC upstream. Skipping commit."
           fi
