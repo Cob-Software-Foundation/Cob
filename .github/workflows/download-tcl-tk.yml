@@ -15,6 +15,12 @@ permissions:
 jobs:
   fetch-and-verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+      attestations: write
+      security-events: write
     steps:
       - name: Checkout your repository
         uses: actions/checkout@v4
@@ -39,7 +45,6 @@ jobs:
         with:
           languages: 'cpp'
           queries: security-extended,security-and-quality
-
 
       - name: Install dependencies
         run: |
