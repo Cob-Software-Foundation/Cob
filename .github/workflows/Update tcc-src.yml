@@ -2,14 +2,21 @@ name: Secure TCC Ingestion & Attested Build
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Pulls from repo.or.cz every day at midnight
+    - cron: '0 0 * * *' # Checks upstream repo.or.cz every day at midnight
   workflow_dispatch: # Allows manual trigger
 
+# Minimal permissions: this job no longer force-pushes straight to main
+# in a single step, but `create-pull-request` below still needs
+# `contents: write` to push its own side branch. The real backstop
+# against unreviewed code landing on main is a branch protection rule
+# on `main` requiring PR review before merge -- permissions here can't
+# enforce that by themselves, so please turn that on in repo Settings.
 permissions:
   contents: write
   id-token: write
   attestations: write
   security-events: write # Required for CodeQL analysis reporting
+  pull-requests: write    # Required to open the sync PR
 
 jobs:
   fetch-and-verify:
@@ -17,14 +24,16 @@ jobs:
     steps:
       - name: Checkout your repository
         uses: actions/checkout@v4
-        with:
-          # FIX 1: Explicitly fetch all history to prevent push rejections
-          fetch-depth: 0 
 
       - name: Ingest Upstream TCC Source
         run: |
           mkdir -p src/tcc
-          # Clone directly from the official upstream server
+          # Clone directly from the official upstream server.
+          # NOTE: this is an unpinned `--depth 1` clone of whatever HEAD
+          # currently is on repo.or.cz -- there is no tag/commit pin or
+          # checksum verification here. That means the diff reviewed in
+          # the resulting PR (see below) IS the security control: nobody
+          # should merge this PR without actually reading what changed.
           git clone --depth 1 https://repo.or.cz/tinycc.git temp-tcc
           # Sync and overwrite files, leaving your core app intact
           rsync -av --delete --exclude='.git' temp-tcc/ src/tcc/
@@ -46,33 +55,40 @@ jobs:
       - name: Perform CodeQL Static Scan
         uses: github/codeql-action/analyze@v3
 
-      # --- ATTESTATION & COMMIT TRACKING ---
+      # --- ATTESTATION ---
+      # This attests "GitHub Actions built this artifact from this repo
+      # state" -- it is build provenance, not a claim that the vendored
+      # TCC source itself has been audited. Read it as "here's proof of
+      # what the CI produced," not as a security clearance for the code.
       - name: Archive Verified Production Binary
         run: |
           mkdir -p dist
-          # FIX 2: Ensure the binary target matches the exact compilation output
           cp src/tcc/tcc dist/my-verified-tcc
 
       - name: Generate Build Attestation
-        # FIX 3: Updated to the correct marketplace action tag version v2
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'dist/my-verified-tcc'
 
-      - name: Commit Fresh Upstream Changes to History
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # FIX 4: Explicitly pull remote changes to handle any midnight race conditions
-          git pull --rebase origin ${{ github.ref_name }}
-          
-          git add src/tcc
-          
-          # Commit and push safely
-          if ! git diff-index --quiet HEAD; then
-            git commit -m "Automated TCC Upstream Sync - $(date +'%Y-%m-%d')"
-            git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "No changes detected in TCC upstream. Skipping commit."
-          fi
+      # --- OPEN A PULL REQUEST INSTEAD OF PUSHING TO main ---
+      # Nothing lands on `main` without a human reviewing the diff. This
+      # action only opens/updates a PR when there's an actual content
+      # change under src/tcc -- if upstream didn't change, no PR is
+      # created and this step is a no-op.
+      - name: Open pull request with upstream changes
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          add-paths: src/tcc
+          commit-message: "Automated TCC upstream sync"
+          branch: automated/tcc-upstream-sync
+          delete-branch: true
+          title: "Automated TCC upstream sync (repo.or.cz/tinycc)"
+          body: |
+            Nightly sync from `https://repo.or.cz/tinycc.git` into `src/tcc/`.
+
+            **This is an unpinned upstream clone (no tag/commit/checksum
+            verification).** Please review the diff before merging --
+            this PR is the review gate, not a formality.
+
+            CodeQL results for this run: see the Security tab.
