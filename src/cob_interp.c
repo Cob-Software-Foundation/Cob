@@ -2,35 +2,47 @@
  * cob_interp.c
  * ---------------------------------------------------------------------
  * Project Obsidian Falcon / Cob Language Toolchain
- * The Cob interpreter binary: `cob_interp <file.cob>`
+ * The Cob interpreter binary: `cob_interp <file.cob> [--no-cache] [--no-gc]`
  *
  * ---------------------------------------------------------------------
- * v0.0.1 SCOPE (by design, per project decision)
+ * v0.0.2 SCOPE -- fully working:
  * ---------------------------------------------------------------------
- * v0.0.1 deliberately narrows to ONE fully working feature end-to-end:
+ *   pop("text")               string output, with \\ \" \n \t escapes
+ *   set <name> = <expr>       integer variables
+ *   while <condition>:        real looping, real nested block bodies
+ *   shuck <library_name>      loads <library_name>.cob (or
+ *                             cob_modules/<library_name>/<library_name>.cob,
+ *                             matching farmer's install layout) and
+ *                             splices its statements in at that point,
+ *                             like a textual include. Cyclic/too-deep
+ *                             shucks are rejected with a clear error.
+ *   harvest(<bytes>)          ONLY when --no-gc is passed: an expression
+ *                             that allocates <bytes> raw memory and
+ *                             returns an opaque handle (a plain integer,
+ *                             not a real pointer -- Cob code can't do
+ *                             pointer arithmetic with it, only pass it
+ *                             to trash()).
+ *   trash(<variable>)         ONLY when --no-gc is passed: frees the
+ *                             handle held in <variable>. Double-free
+ *                             and use of an unknown handle are reported
+ *                             as warnings, not crashes.
+ *   _MakeCache = False        as the literal first line of a .cob file
+ *                             disables the .strawberry cache for that
+ *                             file entirely (neither read nor written).
  *
- *     pop("some text")      -> prints  some text
+ * If a program uses harvest()/trash() but --no-gc was not passed on the
+ * command line, cob_interp refuses to run it with a clear error instead
+ * of silently ignoring the memory keywords -- "unlock" is a real gate,
+ * not just documentation.
  *
- * Everything else in the eventual language spec -- `while <cond>:`
- * blocks, `set <name> = <value>`, `shuck <lib>`, and the --no-gc-gated
- * `harvest(<bytes>)` / `trash(<var>)` pair -- is intentionally left as
- * a clearly-marked, non-crashing stub below (see cob_handle_reserved_
- * keyword()). They are *recognized* by the tokenizer (so a .cob file
- * that uses them doesn't blow up with a confusing parse error) but do
- * not execute yet. This keeps the interpreter small, correct, and easy
- * to extend in v0.0.2+ rather than half-implementing five features.
+ * expr grammar:  expr := term (('+'|'-') term)*
+ *                term := primary (('*'|'/') primary)*
+ *                primary := NUMBER | IDENT | 'harvest' '(' expr ')'
+ * cond grammar:  expr (('=='|'!='|'<'|'>'|'<='|'>=') expr)?  (bare expr
+ *                is a truthiness/nonzero test)
  *
- * What IS fully implemented in this file:
- *   - Loading a .cob file into memory (via file_io.h)
- *   - Line-by-line scanning with leading-space (indentation) tracking,
- *     so indentation errors are caught even though no block keyword
- *     needs it yet.
- *   - A tiny, correct string-literal parser for pop("...") with \\,
- *     \", and \n escape support.
- *   - A minimal .strawberry fast-boot bytecode cache: on first run,
- *     the parsed pop statements are serialized to <file>.strawberry.
- *     On subsequent runs, if that cache file already exists, it is
- *     loaded and executed directly, skipping the text parse entirely.
+ * SAFETY: a `while` loop is capped at COB_MAX_LOOP_ITERATIONS so a
+ * buggy/infinite .cob program can't hang the interpreter forever.
  *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
@@ -41,501 +53,1141 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdint.h>
 
+#define COB_MAX_LOOP_ITERATIONS 10000000UL
+#define COB_MAX_SHUCK_DEPTH 16
+
 /* ---------------------------------------------------------------------
- * .strawberry CACHE FORMAT (v0.0.1)
- * ---------------------------------------------------------------------
- * All integers are little-endian, written with explicit byte shifts so
- * the file is byte-identical regardless of host endianness or struct
- * padding (no raw struct dumps -- keeps this portable across MSVC,
- * MinGW, GCC, and Clang without pragma pack games).
- *
- *   offset 0   : 8 bytes   magic "COBSTRW\0"
- *   offset 8   : 1 byte    format version (currently 1)
- *   offset 9   : 4 bytes   uint32 statement_count
- *   then, statement_count times:
- *     1 byte    opcode (0x01 = OP_POP, the only opcode in v0.0.1)
- *     4 bytes   uint32 text_length
- *     N bytes   raw UTF-8 text to print (already un-escaped)
+ * AST: EXPRESSIONS
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC       "COBSTRW\0"
-#define STRAWBERRY_MAGIC_LEN   8
-#define STRAWBERRY_FORMAT_VER  1
-#define OP_POP                 0x01
+typedef enum { EXPR_NUM, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
 
-/* A single parsed Cob statement. v0.0.1 only ever produces OP_POP
- * statements, but the struct is shaped so later opcodes slot in
- * without a rewrite. */
-typedef struct {
-    uint8_t  opcode;
-    char    *text;   /* heap-owned, un-escaped, NUL-terminated */
-    size_t   text_len;
-} CobStatement;
+typedef struct Expr {
+    ExprKind kind;
+    long num;             /* EXPR_NUM */
+    char *var;            /* EXPR_VAR, owned */
+    char op;              /* EXPR_BINOP: '+' '-' '*' '/' */
+    struct Expr *left;    /* EXPR_BINOP left; EXPR_HARVEST byte-count child */
+    struct Expr *right;   /* EXPR_BINOP right */
+} Expr;
 
-typedef struct {
-    CobStatement *items;
-    size_t        count;
-    size_t        capacity;
-} CobProgram;
-
-static void program_init(CobProgram *p) {
-    p->items = NULL;
-    p->count = 0;
-    p->capacity = 0;
+static Expr *expr_new_num(long n) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_NUM; e->num = n;
+    return e;
 }
-
-static void program_free(CobProgram *p) {
-    size_t i;
-    for (i = 0; i < p->count; i++) {
-        free(p->items[i].text);
-    }
-    free(p->items);
-    p->items = NULL;
-    p->count = 0;
-    p->capacity = 0;
+static Expr *expr_new_var(char *owned_name) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_VAR; e->var = owned_name;
+    return e;
 }
-
-static int program_push(CobProgram *p, uint8_t opcode, char *owned_text, size_t text_len) {
-    if (p->count == p->capacity) {
-        size_t new_cap = (p->capacity == 0) ? 16 : p->capacity * 2;
-        CobStatement *grown = (CobStatement *)realloc(p->items, new_cap * sizeof(CobStatement));
-        if (!grown) return -1;
-        p->items = grown;
-        p->capacity = new_cap;
-    }
-    p->items[p->count].opcode   = opcode;
-    p->items[p->count].text     = owned_text;
-    p->items[p->count].text_len = text_len;
-    p->count++;
+static Expr *expr_new_binop(char op, Expr *l, Expr *r) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_BINOP; e->op = op; e->left = l; e->right = r;
+    return e;
+}
+static Expr *expr_new_harvest(Expr *bytes_expr) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_HARVEST; e->left = bytes_expr;
+    return e;
+}
+static void expr_free(Expr *e) {
+    if (!e) return;
+    if (e->kind == EXPR_VAR) free(e->var);
+    if (e->kind == EXPR_BINOP) { expr_free(e->left); expr_free(e->right); }
+    if (e->kind == EXPR_HARVEST) { expr_free(e->left); }
+    free(e);
+}
+static int expr_uses_harvest(const Expr *e) {
+    if (!e) return 0;
+    if (e->kind == EXPR_HARVEST) return 1;
+    if (e->kind == EXPR_BINOP) return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
     return 0;
 }
 
 /* ---------------------------------------------------------------------
- * STRING LITERAL PARSING FOR  pop("...")
+ * AST: CONDITIONS
  * ------------------------------------------------------------------- */
+typedef enum { COND_TRUTHY, COND_EQ, COND_NE, COND_LT, COND_GT, COND_LE, COND_GE } CondOp;
 
-/* Parses a double-quoted Cob string literal starting at `src[0] == '"'`.
- * Supports \\  \"  \n  \t escapes. Writes a newly malloc'd, un-escaped,
- * NUL-terminated string to *out_text (caller frees) and its length to
- * *out_len. Returns a pointer to the character immediately AFTER the
- * closing quote on success, or NULL if the literal was malformed
- * (unterminated string, etc). */
+typedef struct {
+    Expr *left;
+    CondOp op;
+    Expr *right; /* NULL when op == COND_TRUTHY */
+} Cond;
+
+static void cond_free(Cond *c) {
+    if (!c) return;
+    expr_free(c->left);
+    expr_free(c->right);
+    free(c);
+}
+
+/* ---------------------------------------------------------------------
+ * AST: STATEMENTS / PROGRAM
+ * ------------------------------------------------------------------- */
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH } StmtKind;
+
+typedef struct Program {
+    struct Stmt *items;
+    size_t count, capacity;
+} Program;
+
+typedef struct Stmt {
+    StmtKind kind;
+    char *pop_text; size_t pop_text_len;      /* STMT_POP */
+    char *set_name; Expr *set_expr;           /* STMT_SET */
+    Cond *while_cond; Program while_body;     /* STMT_WHILE */
+    char *trash_name;                         /* STMT_TRASH */
+} Stmt;
+
+static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
+
+static int program_uses_harvest_or_trash(const Program *p) {
+    size_t i;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        switch (s->kind) {
+            case STMT_SET: if (expr_uses_harvest(s->set_expr)) return 1; break;
+            case STMT_TRASH: return 1;
+            case STMT_WHILE:
+                if (program_uses_harvest_or_trash(&s->while_body)) return 1;
+                break;
+            default: break;
+        }
+    }
+    return 0;
+}
+
+static void stmt_free_contents(Stmt *s) {
+    switch (s->kind) {
+        case STMT_POP: free(s->pop_text); break;
+        case STMT_SET: free(s->set_name); expr_free(s->set_expr); break;
+        case STMT_TRASH: free(s->trash_name); break;
+        case STMT_WHILE: {
+            cond_free(s->while_cond);
+            size_t i;
+            for (i = 0; i < s->while_body.count; i++) stmt_free_contents(&s->while_body.items[i]);
+            free(s->while_body.items);
+            break;
+        }
+    }
+}
+
+static void program_free(Program *p) {
+    size_t i;
+    for (i = 0; i < p->count; i++) stmt_free_contents(&p->items[i]);
+    free(p->items);
+    p->items = NULL; p->count = 0; p->capacity = 0;
+}
+
+static int program_push(Program *p, Stmt s) {
+    if (p->count == p->capacity) {
+        size_t new_cap = (p->capacity == 0) ? 8 : p->capacity * 2;
+        Stmt *grown = (Stmt *)realloc(p->items, new_cap * sizeof(Stmt));
+        if (!grown) return -1;
+        p->items = grown;
+        p->capacity = new_cap;
+    }
+    p->items[p->count++] = s;
+    return 0;
+}
+
+/* Moves every statement from `src` into `dst` (ownership transfers --
+ * `src` is left empty and safe to program_free() afterward, since it no
+ * longer owns anything). Used by `shuck` to splice a loaded library's
+ * top-level statements into the importing block. Returns 0/-1. */
+static int program_append_move(Program *dst, Program *src) {
+    size_t i;
+    for (i = 0; i < src->count; i++) {
+        if (program_push(dst, src->items[i]) != 0) {
+            /* Roll the remaining un-moved statements back into src so
+             * nothing leaks and the caller's cleanup still works. */
+            size_t remaining = src->count - i;
+            memmove(src->items, src->items + i, remaining * sizeof(Stmt));
+            src->count = remaining;
+            return -1;
+        }
+    }
+    src->count = 0; /* ownership fully transferred */
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * VARIABLES (linear-scan symbol table -- Cob programs are small)
+ * ------------------------------------------------------------------- */
+typedef struct { char *name; long value; } Var;
+typedef struct { Var *items; size_t count, capacity; } VarTable;
+
+static char *cob_strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = (char *)malloc(len);
+    if (copy) memcpy(copy, s, len);
+    return copy;
+}
+
+static void vars_init(VarTable *t) { t->items = NULL; t->count = 0; t->capacity = 0; }
+static void vars_free(VarTable *t) {
+    size_t i;
+    for (i = 0; i < t->count; i++) free(t->items[i].name);
+    free(t->items);
+    t->items = NULL; t->count = 0; t->capacity = 0;
+}
+static int vars_get(VarTable *t, const char *name, long *out) {
+    size_t i;
+    for (i = 0; i < t->count; i++)
+        if (strcmp(t->items[i].name, name) == 0) { *out = t->items[i].value; return 1; }
+    return 0;
+}
+static int vars_set(VarTable *t, const char *name, long value) {
+    size_t i;
+    for (i = 0; i < t->count; i++)
+        if (strcmp(t->items[i].name, name) == 0) { t->items[i].value = value; return 0; }
+    if (t->count == t->capacity) {
+        size_t new_cap = (t->capacity == 0) ? 8 : t->capacity * 2;
+        Var *grown = (Var *)realloc(t->items, new_cap * sizeof(Var));
+        if (!grown) return -1;
+        t->items = grown;
+        t->capacity = new_cap;
+    }
+    t->items[t->count].name = cob_strdup(name);
+    if (!t->items[t->count].name) return -1;
+    t->items[t->count].value = value;
+    t->count++;
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * MEMORY HANDLES (backing harvest()/trash()). A "handle" is an opaque
+ * 1-based integer index Cob code stores in an ordinary variable --
+ * never a raw pointer, so a malformed Cob program can't corrupt memory
+ * via arbitrary pointer arithmetic, only mismanage its own handles.
+ * ------------------------------------------------------------------- */
+typedef struct { void *ptr; size_t size; int freed; } Handle;
+typedef struct { Handle *items; size_t count, capacity; } HandleTable;
+
+static void handles_init(HandleTable *h) { h->items = NULL; h->count = 0; h->capacity = 0; }
+static void handles_free_all(HandleTable *h) {
+    size_t i;
+    for (i = 0; i < h->count; i++) if (!h->items[i].freed) free(h->items[i].ptr);
+    free(h->items);
+    h->items = NULL; h->count = 0; h->capacity = 0;
+}
+/* Returns the new handle id (>= 1) on success, or 0 if the allocation
+ * itself failed (mirrors malloc's NULL-on-failure convention). */
+static long handle_alloc(HandleTable *h, size_t bytes) {
+    void *ptr = malloc(bytes > 0 ? bytes : 1);
+    if (!ptr) return 0;
+    if (h->count == h->capacity) {
+        size_t new_cap = (h->capacity == 0) ? 8 : h->capacity * 2;
+        Handle *grown = (Handle *)realloc(h->items, new_cap * sizeof(Handle));
+        if (!grown) { free(ptr); return 0; }
+        h->items = grown;
+        h->capacity = new_cap;
+    }
+    h->items[h->count].ptr = ptr;
+    h->items[h->count].size = bytes;
+    h->items[h->count].freed = 0;
+    h->count++;
+    return (long)h->count; /* 1-based id */
+}
+/* Returns 0 on success, -1 if the id is out of range or already freed
+ * (reported by the caller as a warning, not treated as fatal). */
+static int handle_free(HandleTable *h, long id) {
+    size_t idx;
+    if (id < 1 || (size_t)id > h->count) return -1;
+    idx = (size_t)id - 1;
+    if (h->items[idx].freed) return -1;
+    free(h->items[idx].ptr);
+    h->items[idx].ptr = NULL;
+    h->items[idx].freed = 1;
+    return 0;
+}
+
+/* Bundles everything a statement/expression might need to execute, so
+ * we thread one pointer through eval_expr/eval_cond/execute instead of
+ * growing the parameter list every time a new keyword needs state. */
+typedef struct {
+    VarTable *vars;
+    HandleTable *handles;
+    int no_gc; /* 1 if --no-gc was passed on the command line */
+} EvalCtx;
+
+/* ---------------------------------------------------------------------
+ * SMALL PARSE HELPERS
+ * ------------------------------------------------------------------- */
+static const char *skip_blank(const char *p) {
+    while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
+static int is_ident_start(char c) { return isalpha((unsigned char)c) || c == '_'; }
+static int is_ident_char(char c)  { return isalnum((unsigned char)c) || c == '_'; }
+
 static const char *parse_string_literal(const char *src, char **out_text, size_t *out_len) {
-    const char *p;
-    char *buf;
-    size_t buf_cap;
-    size_t buf_len;
-
+    const char *p; char *buf; size_t buf_cap, buf_len;
     if (*src != '"') return NULL;
     p = src + 1;
-
-    buf_cap = 32;
-    buf_len = 0;
+    buf_cap = 32; buf_len = 0;
     buf = (char *)malloc(buf_cap);
     if (!buf) return NULL;
-
     while (*p != '\0' && *p != '"') {
         char c = *p;
         if (c == '\\' && *(p + 1) != '\0') {
             char esc = *(p + 1);
             switch (esc) {
-                case 'n':  c = '\n'; break;
-                case 't':  c = '\t'; break;
-                case '"':  c = '"';  break;
+                case 'n': c = '\n'; break;
+                case 't': c = '\t'; break;
+                case '"': c = '"';  break;
                 case '\\': c = '\\'; break;
-                default:   c = esc;  break; /* unknown escape: keep literal char */
+                default: c = esc; break;
             }
             p += 2;
         } else {
             p += 1;
         }
-
         if (buf_len + 1 >= buf_cap) {
             size_t new_cap = buf_cap * 2;
             char *grown = (char *)realloc(buf, new_cap);
             if (!grown) { free(buf); return NULL; }
-            buf = grown;
-            buf_cap = new_cap;
+            buf = grown; buf_cap = new_cap;
         }
         buf[buf_len++] = c;
     }
-
-    if (*p != '"') { /* unterminated string literal */
-        free(buf);
-        return NULL;
-    }
-
+    if (*p != '"') { free(buf); return NULL; }
     buf[buf_len] = '\0';
-    *out_text = buf;
-    *out_len  = buf_len;
-    return p + 1; /* skip the closing quote */
+    *out_text = buf; *out_len = buf_len;
+    return p + 1;
 }
 
-/* Skips ASCII spaces/tabs in-place, returning the first non-blank char. */
-static const char *skip_blank(const char *p) {
-    while (*p == ' ' || *p == '\t') p++;
+/* Parses a bare identifier at *p (caller has already skipped blanks).
+ * Returns the position after it, or NULL if *p isn't an identifier
+ * start. On success, *out_name is a newly malloc'd, NUL-terminated
+ * copy the caller owns. */
+static const char *parse_identifier(const char *p, char **out_name) {
+    const char *start;
+    size_t len;
+    char *name;
+    if (!is_ident_start(*p)) return NULL;
+    start = p;
+    while (is_ident_char(*p)) p++;
+    len = (size_t)(p - start);
+    name = (char *)malloc(len + 1);
+    if (!name) return NULL;
+    memcpy(name, start, len); name[len] = '\0';
+    *out_name = name;
     return p;
 }
 
 /* ---------------------------------------------------------------------
- * RESERVED-BUT-NOT-YET-IMPLEMENTED KEYWORDS
- * ---------------------------------------------------------------------
- * Called when a trimmed line starts with one of the future keywords
- * (while / set / shuck / harvest / trash). We don't execute them in
- * v0.0.1, but we also don't want the interpreter to choke -- it prints
- * a single, clear notice (once per statement) and moves on, so authors
- * writing forward-looking .cob files aren't blindsided by a crash.
+ * EXPRESSION / CONDITION PARSER
  * ------------------------------------------------------------------- */
-static int cob_handle_reserved_keyword(const char *trimmed_line, int line_no, const char *matched_kw) {
-    fprintf(stderr,
-            "[cob_interp] note: line %d uses reserved keyword '%s' "
-            "(not implemented in v0.0.1 -- only pop() runs today): %s\n",
-            line_no, matched_kw, trimmed_line);
-    return 0;
+static const char *parse_expr(const char *p, Expr **out); /* fwd decl */
+
+static const char *parse_primary(const char *p, Expr **out) {
+    p = skip_blank(p);
+
+    /* harvest(<bytes>) -- only special-cased when directly followed by
+     * '(' after optional blanks; "harvest" with no parens would just be
+     * an ordinary (if oddly named) variable reference. */
+    {
+        size_t kw_len = strlen(COB_KW_HARVEST);
+        if (strncmp(p, COB_KW_HARVEST, kw_len) == 0) {
+            const char *after_kw = skip_blank(p + kw_len);
+            if (*after_kw == '(') {
+                Expr *bytes_expr;
+                const char *after_open = skip_blank(after_kw + 1);
+                const char *after_expr = parse_expr(after_open, &bytes_expr);
+                if (!after_expr) return NULL;
+                after_expr = skip_blank(after_expr);
+                if (*after_expr != ')') { expr_free(bytes_expr); return NULL; }
+                *out = expr_new_harvest(bytes_expr);
+                if (!*out) { expr_free(bytes_expr); return NULL; }
+                return after_expr + 1;
+            }
+        }
+    }
+
+    if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)*(p + 1)))) {
+        char *end;
+        long v = strtol(p, &end, 10);
+        *out = expr_new_num(v);
+        return *out ? end : NULL;
+    }
+    if (is_ident_start(*p)) {
+        char *name;
+        const char *after = parse_identifier(p, &name);
+        if (!after) return NULL;
+        *out = expr_new_var(name);
+        if (!*out) { free(name); return NULL; }
+        return after;
+    }
+    return NULL;
 }
 
-/* Returns 1 and sets *kw_out if `trimmed_line` begins with a reserved
- * future keyword followed by a word boundary (space, '(', or ':'). */
-static int cob_line_is_reserved_keyword(const char *trimmed_line, const char **kw_out) {
-    static const char *reserved[] = {
-        COB_KW_WHILE, COB_KW_SET, COB_KW_SHUCK, COB_KW_HARVEST, COB_KW_TRASH, NULL
-    };
-    int i;
-    for (i = 0; reserved[i] != NULL; i++) {
-        size_t kw_len = strlen(reserved[i]);
-        if (strncmp(trimmed_line, reserved[i], kw_len) == 0) {
-            char boundary = trimmed_line[kw_len];
-            if (boundary == ' ' || boundary == '(' || boundary == ':' || boundary == '\0') {
-                *kw_out = reserved[i];
-                return 1;
+static const char *parse_term(const char *p, Expr **out) {
+    Expr *left;
+    p = parse_primary(p, &left);
+    if (!p) return NULL;
+    for (;;) {
+        const char *q = skip_blank(p);
+        if (*q == '*' || *q == '/') {
+            char op = *q; q++;
+            Expr *right;
+            const char *after = parse_primary(q, &right);
+            if (!after) { expr_free(left); return NULL; }
+            left = expr_new_binop(op, left, right);
+            if (!left) return NULL;
+            p = after;
+        } else break;
+    }
+    *out = left;
+    return p;
+}
+
+static const char *parse_expr(const char *p, Expr **out) {
+    Expr *left;
+    p = parse_term(p, &left);
+    if (!p) return NULL;
+    for (;;) {
+        const char *q = skip_blank(p);
+        if (*q == '+' || *q == '-') {
+            char op = *q; q++;
+            Expr *right;
+            const char *after = parse_term(q, &right);
+            if (!after) { expr_free(left); return NULL; }
+            left = expr_new_binop(op, left, right);
+            if (!left) return NULL;
+            p = after;
+        } else break;
+    }
+    *out = left;
+    return p;
+}
+
+static int parse_comparator(const char **p, CondOp *out) {
+    const char *q = skip_blank(*p);
+    if (q[0] == '=' && q[1] == '=') { *out = COND_EQ; *p = q + 2; return 0; }
+    if (q[0] == '!' && q[1] == '=') { *out = COND_NE; *p = q + 2; return 0; }
+    if (q[0] == '<' && q[1] == '=') { *out = COND_LE; *p = q + 2; return 0; }
+    if (q[0] == '>' && q[1] == '=') { *out = COND_GE; *p = q + 2; return 0; }
+    if (q[0] == '<') { *out = COND_LT; *p = q + 1; return 0; }
+    if (q[0] == '>') { *out = COND_GT; *p = q + 1; return 0; }
+    return -1;
+}
+
+static const char *parse_condition(const char *p, Cond **out) {
+    Expr *left; CondOp op; Expr *right = NULL;
+    p = parse_expr(p, &left);
+    if (!p) return NULL;
+    if (parse_comparator(&p, &op) == 0) {
+        p = parse_expr(p, &right);
+        if (!p) { expr_free(left); return NULL; }
+    } else {
+        op = COND_TRUTHY;
+    }
+    Cond *c = (Cond *)calloc(1, sizeof(Cond));
+    if (!c) { expr_free(left); expr_free(right); return NULL; }
+    c->left = left; c->op = op; c->right = right;
+    *out = c;
+    return p;
+}
+
+/* ---------------------------------------------------------------------
+ * EVALUATION
+ * ------------------------------------------------------------------- */
+static long eval_expr(const Expr *e, EvalCtx *ctx) {
+    switch (e->kind) {
+        case EXPR_NUM: return e->num;
+        case EXPR_VAR: {
+            long v;
+            if (vars_get(ctx->vars, e->var, &v)) return v;
+            fprintf(stderr, "[cob_interp] warning: undefined variable '%s', treated as 0\n", e->var);
+            return 0;
+        }
+        case EXPR_BINOP: {
+            long l = eval_expr(e->left, ctx);
+            long r = eval_expr(e->right, ctx);
+            switch (e->op) {
+                case '+': return l + r;
+                case '-': return l - r;
+                case '*': return l * r;
+                case '/':
+                    if (r == 0) { fprintf(stderr, "[cob_interp] warning: division by zero, result treated as 0\n"); return 0; }
+                    return l / r;
             }
+            return 0;
+        }
+        case EXPR_HARVEST: {
+            long bytes = eval_expr(e->left, ctx);
+            if (bytes < 0) {
+                fprintf(stderr, "[cob_interp] warning: harvest() with negative size, treated as 0\n");
+                bytes = 0;
+            }
+            long id = handle_alloc(ctx->handles, (size_t)bytes);
+            if (id == 0) {
+                fprintf(stderr, "[cob_interp] warning: harvest(%ld) failed (out of memory)\n", bytes);
+            }
+            return id;
         }
     }
     return 0;
 }
 
+static int eval_cond(const Cond *c, EvalCtx *ctx) {
+    long l = eval_expr(c->left, ctx);
+    if (c->op == COND_TRUTHY) return l != 0;
+    long r = eval_expr(c->right, ctx);
+    switch (c->op) {
+        case COND_EQ: return l == r;
+        case COND_NE: return l != r;
+        case COND_LT: return l < r;
+        case COND_GT: return l > r;
+        case COND_LE: return l <= r;
+        case COND_GE: return l >= r;
+        default: return 0;
+    }
+}
+
+static void execute(const Program *prog, EvalCtx *ctx) {
+    size_t i;
+    for (i = 0; i < prog->count; i++) {
+        const Stmt *s = &prog->items[i];
+        switch (s->kind) {
+            case STMT_POP:
+                fwrite(s->pop_text, 1, s->pop_text_len, stdout);
+                fputc('\n', stdout);
+                break;
+            case STMT_SET: {
+                long v = eval_expr(s->set_expr, ctx);
+                if (vars_set(ctx->vars, s->set_name, v) != 0)
+                    fprintf(stderr, "[cob_interp] out of memory setting variable '%s'\n", s->set_name);
+                break;
+            }
+            case STMT_TRASH: {
+                long id;
+                if (!vars_get(ctx->vars, s->trash_name, &id)) {
+                    fprintf(stderr, "[cob_interp] warning: trash() on undefined variable '%s'\n", s->trash_name);
+                    break;
+                }
+                if (handle_free(ctx->handles, id) != 0) {
+                    fprintf(stderr,
+                        "[cob_interp] warning: trash(%s) -- handle %ld is invalid or already freed\n",
+                        s->trash_name, id);
+                }
+                break;
+            }
+            case STMT_WHILE: {
+                unsigned long iterations = 0;
+                while (eval_cond(s->while_cond, ctx)) {
+                    execute(&s->while_body, ctx);
+                    iterations++;
+                    if (iterations >= COB_MAX_LOOP_ITERATIONS) {
+                        fprintf(stderr,
+                            "[cob_interp] warning: while loop hit the %lu-iteration safety cap, stopping it early\n",
+                            COB_MAX_LOOP_ITERATIONS);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------
- * PARSER: .cob TEXT -> CobProgram
+ * STATEMENT PARSERS (each consumes exactly one physical line's content)
  * ------------------------------------------------------------------- */
-
-/* Parses one logical line already known to start (after indentation)
- * with "pop(". Expects: pop("literal") [optional trailing whitespace].
- * On success, pushes an OP_POP statement onto `prog` and returns 0.
- * On malformed input, prints a diagnostic and returns -1. */
-static int parse_pop_statement(const char *trimmed_line, int line_no, CobProgram *prog) {
-    const char *p = trimmed_line + strlen(COB_KW_POP); /* just past "pop" */
-    char *text = NULL;
-    size_t text_len = 0;
-
+static int parse_pop_statement(const char *trimmed_line, int line_no, char **out_text, size_t *out_len) {
+    const char *p = trimmed_line + strlen(COB_KW_POP);
     p = skip_blank(p);
     if (*p != '(') {
         fprintf(stderr, "[cob_interp] syntax error at line %d: expected '(' after pop\n", line_no);
         return -1;
     }
-    p++; /* skip '(' */
-    p = skip_blank(p);
-
-    p = parse_string_literal(p, &text, &text_len);
+    p++; p = skip_blank(p);
+    p = parse_string_literal(p, out_text, out_len);
     if (!p) {
         fprintf(stderr, "[cob_interp] syntax error at line %d: malformed string literal in pop()\n", line_no);
         return -1;
     }
-
     p = skip_blank(p);
     if (*p != ')') {
         fprintf(stderr, "[cob_interp] syntax error at line %d: expected ')' to close pop(\n", line_no);
-        free(text);
-        return -1;
-    }
-    /* Anything after the closing ')' on the same line is ignored in
-     * v0.0.1 (no statement chaining / trailing comments handling yet
-     * beyond a simple '#' check done by the caller). */
-
-    if (program_push(prog, OP_POP, text, text_len) != 0) {
-        fprintf(stderr, "[cob_interp] out of memory building program\n");
-        free(text);
+        free(*out_text);
         return -1;
     }
     return 0;
 }
 
-/* Splits `source` into lines and builds a CobProgram. Tracks leading
- * space counts per non-blank line (indentation) purely for validation
- * right now: v0.0.1 has no block statements that need nested depth, so
- * the only rule enforced is "no tabs" (Cob is spaces-only, matching
- * the project's Python-style indentation design). Returns 0 on success
- * (even if the program is empty), -1 on a hard parse error. */
-static int cob_parse_source(const char *source, CobProgram *prog) {
-    const char *line_start = source;
-    int line_no = 0;
+static int parse_set_statement(const char *after_kw, int line_no, char **out_name, Expr **out_expr) {
+    const char *p = skip_blank(after_kw);
+    char *name;
+    p = parse_identifier(p, &name);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected a variable name after 'set'\n", line_no);
+        return -1;
+    }
+    p = skip_blank(p);
+    if (*p != '=') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected '=' in set statement\n", line_no);
+        free(name);
+        return -1;
+    }
+    p++;
+    Expr *expr;
+    p = parse_expr(p, &expr);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: malformed expression in set statement\n", line_no);
+        free(name);
+        return -1;
+    }
+    *out_name = name;
+    *out_expr = expr;
+    return 0;
+}
 
-    /* When we hit a reserved block-opener keyword (currently only
-     * `while <cond>:`) that we can't execute yet, we must not let its
-     * indented body fall through and run as top-level statements.
-     * `skipping_block` tracks that we're inside such an unimplemented
-     * block, and `skip_base_indent` is the indentation of the keyword
-     * line itself -- any subsequent line indented MORE than that is
-     * part of the unexecuted body and is skipped outright; a line
-     * indented the same or less means the block has ended. */
-    int skipping_block = 0;
-    int skip_base_indent = 0;
+static int parse_while_header(const char *after_kw, int line_no, Cond **out_cond) {
+    Cond *cond;
+    const char *p = parse_condition(after_kw, &cond);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: malformed condition in while statement\n", line_no);
+        return -1;
+    }
+    p = skip_blank(p);
+    if (*p != COB_BLOCK_COLON) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected ':' to open while block\n", line_no);
+        cond_free(cond);
+        return -1;
+    }
+    *out_cond = cond;
+    return 0;
+}
+
+static int parse_trash_statement(const char *after_kw, int line_no, char **out_name) {
+    const char *p = skip_blank(after_kw);
+    if (*p != '(') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected '(' after trash\n", line_no);
+        return -1;
+    }
+    p = skip_blank(p + 1);
+    char *name;
+    p = parse_identifier(p, &name);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected a variable name in trash()\n", line_no);
+        return -1;
+    }
+    p = skip_blank(p);
+    if (*p != ')') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected ')' to close trash(\n", line_no);
+        free(name);
+        return -1;
+    }
+    *out_name = name;
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * LINE SPLITTING
+ * ------------------------------------------------------------------- */
+typedef struct { int indent; char *content; int line_no; } PhysLine;
+typedef struct { PhysLine *items; size_t count, capacity; } PhysLines;
+
+static void physlines_init(PhysLines *pl) { pl->items = NULL; pl->count = 0; pl->capacity = 0; }
+static void physlines_free(PhysLines *pl) {
+    size_t i;
+    for (i = 0; i < pl->count; i++) free(pl->items[i].content);
+    free(pl->items);
+    pl->items = NULL; pl->count = 0; pl->capacity = 0;
+}
+static int physlines_push(PhysLines *pl, int indent, char *owned_content, int line_no) {
+    if (pl->count == pl->capacity) {
+        size_t new_cap = (pl->capacity == 0) ? 32 : pl->capacity * 2;
+        PhysLine *grown = (PhysLine *)realloc(pl->items, new_cap * sizeof(PhysLine));
+        if (!grown) return -1;
+        pl->items = grown; pl->capacity = new_cap;
+    }
+    pl->items[pl->count].indent = indent;
+    pl->items[pl->count].content = owned_content;
+    pl->items[pl->count].line_no = line_no;
+    pl->count++;
+    return 0;
+}
+
+static int cob_strip_leading_makecache_directive(const char **source_ptr) {
+    const char *s = *source_ptr;
+    const char *line_end = strchr(s, '\n');
+    size_t len = line_end ? (size_t)(line_end - s) : strlen(s);
+    char buf[128];
+    size_t i, j = 0;
+    for (i = 0; i < len && j < sizeof(buf) - 1; i++) {
+        char c = s[i];
+        if (c == ' ' || c == '\t' || c == '\r') continue;
+        buf[j++] = (char)tolower((unsigned char)c);
+    }
+    buf[j] = '\0';
+    if (strcmp(buf, "_makecache=false") == 0) {
+        *source_ptr = line_end ? line_end + 1 : s + len;
+        return 1;
+    }
+    return 0;
+}
+
+static int cob_split_lines(const char *source, int start_line_no, PhysLines *out) {
+    const char *line_start = source;
+    int line_no = start_line_no;
+
+    physlines_init(out);
 
     while (*line_start != '\0') {
         const char *line_end = strchr(line_start, '\n');
         size_t raw_len = line_end ? (size_t)(line_end - line_start) : strlen(line_start);
-        char *line_buf;
-        const char *trimmed;
-        int indent;
-
-        line_no++;
-
-        /* Copy the line into a scratch buffer (bounded, freed below) so
-         * we can safely NUL-terminate it for string functions -- the
-         * source buffer itself is treated as read-only. */
-        line_buf = (char *)malloc(raw_len + 1);
-        if (!line_buf) {
-            fprintf(stderr, "[cob_interp] out of memory scanning line %d\n", line_no);
-            return -1;
-        }
+        char *line_buf = (char *)malloc(raw_len + 1);
+        if (!line_buf) { physlines_free(out); return -1; }
         memcpy(line_buf, line_start, raw_len);
         line_buf[raw_len] = '\0';
+        if (raw_len > 0 && line_buf[raw_len - 1] == '\r') line_buf[raw_len - 1] = '\0';
 
-        /* Strip a single trailing '\r' so CRLF source files (common on
-         * Windows) don't corrupt string literals or indentation counts. */
-        if (raw_len > 0 && line_buf[raw_len - 1] == '\r') {
-            line_buf[raw_len - 1] = '\0';
-        }
-
-        /* Reject tabs used for indentation -- Cob v0.0.1 is spaces-only. */
         if (line_buf[0] == '\t') {
-            fprintf(stderr,
-                    "[cob_interp] indentation error at line %d: tabs are not allowed, use spaces\n",
-                    line_no);
+            fprintf(stderr, "[cob_interp] indentation error at line %d: tabs are not allowed, use spaces\n", line_no);
             free(line_buf);
-            program_free(prog);
+            physlines_free(out);
             return -1;
         }
 
-        indent = cob_count_leading_spaces(line_buf);
-        trimmed = skip_blank(line_buf);
+        int indent = 0;
+        while (line_buf[indent] == ' ') indent++;
+        const char *trimmed = line_buf + indent;
 
-        /* Blank line or a full-line comment ('#'): skip, and don't let
-         * it count as a dedent that would end an unimplemented block
-         * (blank lines carry no meaningful indentation). */
         if (*trimmed == '\0' || *trimmed == '#') {
             free(line_buf);
-            line_start = line_end ? line_end + 1 : line_start + raw_len;
+        } else {
+            size_t content_len = strlen(trimmed);
+            char *content = (char *)malloc(content_len + 1);
+            if (!content) { free(line_buf); physlines_free(out); return -1; }
+            memcpy(content, trimmed, content_len + 1);
+            free(line_buf);
+            if (physlines_push(out, indent, content, line_no) != 0) {
+                free(content);
+                physlines_free(out);
+                return -1;
+            }
+        }
+
+        line_no++;
+        line_start = line_end ? line_end + 1 : line_start + raw_len;
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * `shuck` LIBRARY LOADING
+ * ------------------------------------------------------------------- */
+static const char *g_shuck_stack[COB_MAX_SHUCK_DEPTH];
+static int g_shuck_depth = 0;
+
+static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program *out_prog);
+
+/* Loads and fully parses <name>.cob (trying the current directory, then
+ * cob_modules/<name>/<name>.cob -- the layout `farmer harvest` installs
+ * packages into), returning its top-level statements in *out_prog. */
+static int cob_load_library(const char *name, int line_no, Program *out_prog) {
+    char path_a[512], path_b[600];
+    CobFileBuffer buf;
+    CobFileStatus status;
+    int i;
+
+    for (i = 0; i < g_shuck_depth; i++) {
+        if (strcmp(g_shuck_stack[i], name) == 0) {
+            fprintf(stderr, "[cob_interp] error at line %d: circular shuck detected for '%s'\n", line_no, name);
+            return -1;
+        }
+    }
+    if (g_shuck_depth >= COB_MAX_SHUCK_DEPTH) {
+        fprintf(stderr, "[cob_interp] error at line %d: shuck nesting too deep (max %d)\n", line_no, COB_MAX_SHUCK_DEPTH);
+        return -1;
+    }
+
+    snprintf(path_a, sizeof(path_a), "%s%s", name, COB_SOURCE_EXTENSION);
+    snprintf(path_b, sizeof(path_b), "cob_modules%c%s%c%s%s",
+             COB_PATH_SEP, name, COB_PATH_SEP, name, COB_SOURCE_EXTENSION);
+
+    status = cob_file_read_all(path_a, &buf);
+    if (status != COB_FILE_OK) status = cob_file_read_all(path_b, &buf);
+    if (status != COB_FILE_OK) {
+        fprintf(stderr,
+            "[cob_interp] error at line %d: shuck '%s' failed -- tried '%s' and '%s'\n",
+            line_no, name, path_a, path_b);
+        return -1;
+    }
+
+    g_shuck_stack[g_shuck_depth++] = name;
+
+    PhysLines lib_lines;
+    int rc = cob_split_lines(buf.data, 1, &lib_lines);
+    cob_file_free(&buf);
+    if (rc != 0) { g_shuck_depth--; return -1; }
+
+    size_t pos = 0;
+    rc = parse_block(&lib_lines, &pos, -1, out_prog);
+    physlines_free(&lib_lines);
+
+    g_shuck_depth--;
+    return rc;
+}
+
+/* ---------------------------------------------------------------------
+ * RECURSIVE BLOCK PARSER
+ * ------------------------------------------------------------------- */
+static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program *out_prog) {
+    program_init(out_prog);
+
+    while (*pos < lines->count) {
+        PhysLine *pl = &lines->items[*pos];
+        if (pl->indent <= parent_indent) break;
+
+        const char *trimmed = pl->content;
+        int line_no = pl->line_no;
+        size_t kw_len;
+
+        kw_len = strlen(COB_KW_POP);
+        if (strncmp(trimmed, COB_KW_POP, kw_len) == 0 &&
+            (trimmed[kw_len] == '(' || trimmed[kw_len] == ' ')) {
+            char *text; size_t text_len;
+            if (parse_pop_statement(trimmed, line_no, &text, &text_len) != 0) { program_free(out_prog); return -1; }
+            Stmt s; memset(&s, 0, sizeof(s));
+            s.kind = STMT_POP; s.pop_text = text; s.pop_text_len = text_len;
+            if (program_push(out_prog, s) != 0) { free(text); program_free(out_prog); return -1; }
+            (*pos)++;
             continue;
         }
 
-        /* If we're inside the body of an unimplemented block (e.g. a
-         * `while ...:` we can't execute yet), skip any line indented
-         * deeper than the block header -- it belongs to that block and
-         * must NOT run as a stray top-level statement. Once indentation
-         * returns to <= the header's level, the block has ended. */
-        if (skipping_block) {
-            if (indent > skip_base_indent) {
-                free(line_buf);
-                line_start = line_end ? line_end + 1 : line_start + raw_len;
-                continue;
-            }
-            skipping_block = 0; /* dedent: fall through and parse this line normally */
+        kw_len = strlen(COB_KW_SET);
+        if (strncmp(trimmed, COB_KW_SET, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            char *name; Expr *expr;
+            if (parse_set_statement(trimmed + kw_len, line_no, &name, &expr) != 0) { program_free(out_prog); return -1; }
+            Stmt s; memset(&s, 0, sizeof(s));
+            s.kind = STMT_SET; s.set_name = name; s.set_expr = expr;
+            if (program_push(out_prog, s) != 0) { free(name); expr_free(expr); program_free(out_prog); return -1; }
+            (*pos)++;
+            continue;
         }
 
-        if (strncmp(trimmed, COB_KW_POP, strlen(COB_KW_POP)) == 0) {
-            const char *after_kw = trimmed + strlen(COB_KW_POP);
-            if (*after_kw == '(' || *after_kw == ' ') {
-                if (parse_pop_statement(trimmed, line_no, prog) != 0) {
-                    free(line_buf);
-                    program_free(prog);
-                    return -1;
-                }
-                free(line_buf);
-                line_start = line_end ? line_end + 1 : line_start + raw_len;
-                continue;
-            }
+        kw_len = strlen(COB_KW_WHILE);
+        if (strncmp(trimmed, COB_KW_WHILE, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            Cond *cond;
+            if (parse_while_header(trimmed + kw_len, line_no, &cond) != 0) { program_free(out_prog); return -1; }
+            int this_indent = pl->indent;
+            (*pos)++;
+            Program body;
+            if (parse_block(lines, pos, this_indent, &body) != 0) { cond_free(cond); program_free(out_prog); return -1; }
+            Stmt s; memset(&s, 0, sizeof(s));
+            s.kind = STMT_WHILE; s.while_cond = cond; s.while_body = body;
+            if (program_push(out_prog, s) != 0) { cond_free(cond); program_free(&body); program_free(out_prog); return -1; }
+            continue;
         }
 
-        {
-            const char *matched_kw = NULL;
-            if (cob_line_is_reserved_keyword(trimmed, &matched_kw)) {
-                size_t trimmed_len = strlen(trimmed);
-                cob_handle_reserved_keyword(trimmed, line_no, matched_kw);
-
-                /* A block-opener keyword (only `while ...:` in the
-                 * v0.0.1 spec) ends its header with ':'. Since we can't
-                 * execute the block yet, mark everything more-indented
-                 * than this line as unexecuted body, not stray
-                 * top-level statements. */
-                if (trimmed_len > 0 && trimmed[trimmed_len - 1] == COB_BLOCK_COLON) {
-                    skipping_block = 1;
-                    skip_base_indent = indent;
-                }
-
-                free(line_buf);
-                line_start = line_end ? line_end + 1 : line_start + raw_len;
-                continue;
-            }
+        kw_len = strlen(COB_KW_TRASH);
+        if (strncmp(trimmed, COB_KW_TRASH, kw_len) == 0 && trimmed[kw_len] == '(') {
+            char *name;
+            if (parse_trash_statement(trimmed + kw_len, line_no, &name) != 0) { program_free(out_prog); return -1; }
+            Stmt s; memset(&s, 0, sizeof(s));
+            s.kind = STMT_TRASH; s.trash_name = name;
+            if (program_push(out_prog, s) != 0) { free(name); program_free(out_prog); return -1; }
+            (*pos)++;
+            continue;
         }
 
-        fprintf(stderr, "[cob_interp] syntax error at line %d: unrecognized statement: %s\n",
-                line_no, trimmed);
-        free(line_buf);
-        program_free(prog);
+        kw_len = strlen(COB_KW_SHUCK);
+        if (strncmp(trimmed, COB_KW_SHUCK, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            char *lib_name;
+            const char *p = skip_blank(trimmed + kw_len);
+            p = parse_identifier(p, &lib_name);
+            if (!p) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: expected a library name after 'shuck'\n", line_no);
+                program_free(out_prog);
+                return -1;
+            }
+            Program lib_prog;
+            int rc = cob_load_library(lib_name, line_no, &lib_prog);
+            if (rc != 0) { free(lib_name); program_free(out_prog); return -1; }
+            int append_rc = program_append_move(out_prog, &lib_prog);
+            /* Whether the move fully succeeded or partially rolled back,
+             * lib_prog's own array shell (and any un-moved remainder on
+             * failure) still needs freeing -- program_free handles both
+             * cases correctly since it only touches what lib_prog still
+             * owns after program_append_move's bookkeeping. */
+            program_free(&lib_prog);
+            if (append_rc != 0) {
+                fprintf(stderr, "[cob_interp] out of memory splicing shuck '%s'\n", lib_name);
+                free(lib_name);
+                program_free(out_prog);
+                return -1;
+            }
+            free(lib_name);
+            (*pos)++;
+            continue;
+        }
+
+        fprintf(stderr, "[cob_interp] syntax error at line %d: unrecognized statement: %s\n", line_no, trimmed);
+        program_free(out_prog);
         return -1;
     }
-
     return 0;
 }
 
-/* ---------------------------------------------------------------------
- * EXECUTION
- * ------------------------------------------------------------------- */
-static void cob_execute(const CobProgram *prog) {
-    size_t i;
-    for (i = 0; i < prog->count; i++) {
-        const CobStatement *s = &prog->items[i];
-        switch (s->opcode) {
-            case OP_POP:
-                fwrite(s->text, 1, s->text_len, stdout);
-                fputc('\n', stdout);
-                break;
-            default:
-                fprintf(stderr, "[cob_interp] internal error: unknown opcode 0x%02x\n", s->opcode);
-                break;
-        }
-    }
+static int cob_parse_source(const char *source, Program *out_prog, int *out_disable_cache) {
+    *out_disable_cache = cob_strip_leading_makecache_directive(&source);
+
+    PhysLines lines;
+    int start_line_no = *out_disable_cache ? 2 : 1;
+    if (cob_split_lines(source, start_line_no, &lines) != 0) return -1;
+
+    size_t pos = 0;
+    int rc = parse_block(&lines, &pos, -1, out_prog);
+    physlines_free(&lines);
+    return rc;
 }
 
 /* ---------------------------------------------------------------------
- * .strawberry CACHE SERIALIZATION
+ * .strawberry CACHE (binary AST dump, format v2)
  * ------------------------------------------------------------------- */
+#define STRAWBERRY_MAGIC      "COBSTRW2"
+#define STRAWBERRY_MAGIC_LEN  8
 
-static void put_u32_le(unsigned char *dst, uint32_t v) {
-    dst[0] = (unsigned char)(v & 0xFF);
-    dst[1] = (unsigned char)((v >> 8) & 0xFF);
-    dst[2] = (unsigned char)((v >> 16) & 0xFF);
-    dst[3] = (unsigned char)((v >> 24) & 0xFF);
+typedef struct { unsigned char *data; size_t len, cap; } ByteBuf;
+
+static int bytebuf_reserve(ByteBuf *b, size_t extra) {
+    if (b->len + extra <= b->cap) return 0;
+    size_t new_cap = (b->cap == 0) ? 256 : b->cap * 2;
+    while (new_cap < b->len + extra) new_cap *= 2;
+    unsigned char *grown = (unsigned char *)realloc(b->data, new_cap);
+    if (!grown) return -1;
+    b->data = grown; b->cap = new_cap;
+    return 0;
+}
+static int bytebuf_u8(ByteBuf *b, uint8_t v) {
+    if (bytebuf_reserve(b, 1) != 0) return -1;
+    b->data[b->len++] = v;
+    return 0;
+}
+static int bytebuf_u32(ByteBuf *b, uint32_t v) {
+    if (bytebuf_reserve(b, 4) != 0) return -1;
+    b->data[b->len++] = (unsigned char)(v & 0xFF);
+    b->data[b->len++] = (unsigned char)((v >> 8) & 0xFF);
+    b->data[b->len++] = (unsigned char)((v >> 16) & 0xFF);
+    b->data[b->len++] = (unsigned char)((v >> 24) & 0xFF);
+    return 0;
+}
+static int bytebuf_i64(ByteBuf *b, int64_t v) {
+    uint64_t u = (uint64_t)v;
+    if (bytebuf_reserve(b, 8) != 0) return -1;
+    int i;
+    for (i = 0; i < 8; i++) b->data[b->len++] = (unsigned char)((u >> (8 * i)) & 0xFF);
+    return 0;
+}
+static int bytebuf_bytes(ByteBuf *b, const char *s, size_t len) {
+    if (bytebuf_u32(b, (uint32_t)len) != 0) return -1;
+    if (bytebuf_reserve(b, len) != 0) return -1;
+    memcpy(b->data + b->len, s, len);
+    b->len += len;
+    return 0;
 }
 
-static uint32_t get_u32_le(const unsigned char *src) {
-    return (uint32_t)src[0]
-         | ((uint32_t)src[1] << 8)
-         | ((uint32_t)src[2] << 16)
-         | ((uint32_t)src[3] << 24);
-}
-
-/* Serializes `prog` to the .strawberry binary format and writes it to
- * `cache_path`. Non-fatal on failure (a cache write failure should
- * never stop the program from having already run) -- logs a warning
- * instead of propagating an error. */
-static void cob_write_strawberry_cache(const char *cache_path, const CobProgram *prog) {
-    unsigned char *buf;
-    size_t cap, len = 0;
-    size_t i;
-    CobFileStatus status;
-
-    cap = STRAWBERRY_MAGIC_LEN + 1 + 4 + 64; /* rough starting estimate */
-    for (i = 0; i < prog->count; i++) {
-        cap += 1 + 4 + prog->items[i].text_len;
+static int write_expr(ByteBuf *b, const Expr *e) {
+    if (bytebuf_u8(b, (uint8_t)e->kind) != 0) return -1;
+    switch (e->kind) {
+        case EXPR_NUM: return bytebuf_i64(b, (int64_t)e->num);
+        case EXPR_VAR: return bytebuf_bytes(b, e->var, strlen(e->var));
+        case EXPR_BINOP:
+            if (bytebuf_u8(b, (uint8_t)e->op) != 0) return -1;
+            if (write_expr(b, e->left) != 0) return -1;
+            return write_expr(b, e->right);
+        case EXPR_HARVEST:
+            return write_expr(b, e->left);
     }
+    return -1;
+}
+static int write_cond(ByteBuf *b, const Cond *c) {
+    if (bytebuf_u8(b, (uint8_t)c->op) != 0) return -1;
+    if (write_expr(b, c->left) != 0) return -1;
+    if (c->op != COND_TRUTHY) return write_expr(b, c->right);
+    return 0;
+}
+static int write_program(ByteBuf *b, const Program *p);
+static int write_stmt(ByteBuf *b, const Stmt *s) {
+    if (bytebuf_u8(b, (uint8_t)s->kind) != 0) return -1;
+    switch (s->kind) {
+        case STMT_POP: return bytebuf_bytes(b, s->pop_text, s->pop_text_len);
+        case STMT_SET:
+            if (bytebuf_bytes(b, s->set_name, strlen(s->set_name)) != 0) return -1;
+            return write_expr(b, s->set_expr);
+        case STMT_TRASH: return bytebuf_bytes(b, s->trash_name, strlen(s->trash_name));
+        case STMT_WHILE:
+            if (write_cond(b, s->while_cond) != 0) return -1;
+            return write_program(b, &s->while_body);
+    }
+    return -1;
+}
+static int write_program(ByteBuf *b, const Program *p) {
+    if (bytebuf_u32(b, (uint32_t)p->count) != 0) return -1;
+    size_t i;
+    for (i = 0; i < p->count; i++) if (write_stmt(b, &p->items[i]) != 0) return -1;
+    return 0;
+}
 
-    buf = (unsigned char *)malloc(cap);
-    if (!buf) {
-        fprintf(stderr, "[cob_interp] warning: could not allocate .strawberry cache buffer\n");
+static void cob_write_strawberry_cache(const char *cache_path, const Program *prog) {
+    ByteBuf b; memset(&b, 0, sizeof(b));
+    if (bytebuf_reserve(&b, STRAWBERRY_MAGIC_LEN) != 0) return;
+    memcpy(b.data, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN);
+    b.len = STRAWBERRY_MAGIC_LEN;
+
+    if (write_program(&b, prog) != 0) {
+        fprintf(stderr, "[cob_interp] warning: could not build .strawberry cache (out of memory)\n");
+        free(b.data);
         return;
     }
-
-    memcpy(buf + len, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN);
-    len += STRAWBERRY_MAGIC_LEN;
-
-    buf[len++] = STRAWBERRY_FORMAT_VER;
-
-    put_u32_le(buf + len, (uint32_t)prog->count);
-    len += 4;
-
-    for (i = 0; i < prog->count; i++) {
-        const CobStatement *s = &prog->items[i];
-        buf[len++] = s->opcode;
-        put_u32_le(buf + len, (uint32_t)s->text_len);
-        len += 4;
-        memcpy(buf + len, s->text, s->text_len);
-        len += s->text_len;
-    }
-
-    status = cob_file_write_all(cache_path, buf, len);
-    free(buf);
-
-    if (status != COB_FILE_OK) {
+    if (cob_file_write_all(cache_path, b.data, b.len) != COB_FILE_OK)
         fprintf(stderr, "[cob_interp] warning: failed to write fast-boot cache '%s'\n", cache_path);
-    }
+    free(b.data);
 }
 
-/* Attempts to load and validate a .strawberry cache into `prog`.
- * Returns 0 on success, -1 if the cache is missing, truncated, or has
- * a bad magic/version (any of which just means "fall back to parsing
- * the .cob source normally" -- never a fatal condition). */
-static int cob_load_strawberry_cache(const char *cache_path, CobProgram *prog) {
-    CobFileBuffer file;
-    const unsigned char *buf;
-    size_t len;
-    size_t pos;
-    uint32_t count, i;
+typedef struct { const unsigned char *data; size_t len, pos; } ByteReader;
 
-    if (cob_file_read_all(cache_path, &file) != COB_FILE_OK) {
-        return -1;
-    }
-
-    buf = (const unsigned char *)file.data;
-    len = file.size;
-    pos = 0;
-
-    if (len < STRAWBERRY_MAGIC_LEN + 1 + 4 ||
-        memcmp(buf, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN) != 0) {
-        cob_file_free(&file);
-        return -1;
-    }
-    pos += STRAWBERRY_MAGIC_LEN;
-
-    if (buf[pos] != STRAWBERRY_FORMAT_VER) {
-        cob_file_free(&file);
-        return -1;
-    }
-    pos += 1;
-
-    count = get_u32_le(buf + pos);
-    pos += 4;
-
-    program_init(prog);
-
-    for (i = 0; i < count; i++) {
-        uint8_t opcode;
-        uint32_t text_len;
-        char *text_copy;
-
-        if (pos + 1 + 4 > len) { program_free(prog); cob_file_free(&file); return -1; }
-        opcode = buf[pos]; pos += 1;
-        text_len = get_u32_le(buf + pos); pos += 4;
-
-        if (pos + text_len > len) { program_free(prog); cob_file_free(&file); return -1; }
-
-        text_copy = (char *)malloc((size_t)text_len + 1);
-        if (!text_copy) { program_free(prog); cob_file_free(&file); return -1; }
-        memcpy(text_copy, buf + pos, text_len);
-        text_copy[text_len] = '\0';
-        pos += text_len;
-
-        if (program_push(prog, opcode, text_copy, text_len) != 0) {
-            free(text_copy);
-            program_free(prog);
-            cob_file_free(&file);
-            return -1;
-        }
-    }
-
-    cob_file_free(&file);
+static int reader_u8(ByteReader *r, uint8_t *out) {
+    if (r->pos + 1 > r->len) return -1;
+    *out = r->data[r->pos++];
     return 0;
+}
+static int reader_u32(ByteReader *r, uint32_t *out) {
+    if (r->pos + 4 > r->len) return -1;
+    *out = (uint32_t)r->data[r->pos] | ((uint32_t)r->data[r->pos+1] << 8) |
+           ((uint32_t)r->data[r->pos+2] << 16) | ((uint32_t)r->data[r->pos+3] << 24);
+    r->pos += 4;
+    return 0;
+}
+static int reader_i64(ByteReader *r, int64_t *out) {
+    if (r->pos + 8 > r->len) return -1;
+    uint64_t u = 0; int i;
+    for (i = 0; i < 8; i++) u |= ((uint64_t)r->data[r->pos + i]) << (8 * i);
+    r->pos += 8;
+    *out = (int64_t)u;
+    return 0;
+}
+static int reader_bytes_alloc(ByteReader *r, char **out_str, size_t *out_len) {
+    uint32_t len;
+    if (reader_u32(r, &len) != 0) return -1;
+    if (r->pos + len > r->len) return -1;
+    char *s = (char *)malloc((size_t)len + 1);
+    if (!s) return -1;
+    memcpy(s, r->data + r->pos, len);
+    s[len] = '\0';
+    r->pos += len;
+    *out_str = s;
+    if (out_len) *out_len = len;
+    return 0;
+}
+
+static int read_expr(ByteReader *r, Expr **out) {
+    uint8_t kind;
+    if (reader_u8(r, &kind) != 0) return -1;
+    switch (kind) {
+        case EXPR_NUM: {
+            int64_t v;
+            if (reader_i64(r, &v) != 0) return -1;
+            *out = expr_new_num((long)v);
+            return *out ? 0 : -1;
+        }
+        case EXPR_VAR: {
+            char *name;
+            if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
+            *out = expr_new_var(name);
+            if (!*out) { free(name); return -1; }
+            return 0;
+        }
+        case EXPR_BINOP: {
+            uint8_t op;
+            if (reader_u8(r, &op) != 0) return -1;
+            Expr *l, *rr;
+            if (read_expr(r, &l) != 0) return -1;
+            if (read_expr(r, &rr) != 0) { expr_free(l); return -1; }
+            *out = expr_new_binop((char)op, l, rr);
+            if (!*out) { expr_free(l); expr_free(rr); return -1; }
+            return 0;
+        }
+        case EXPR_HARVEST: {
+            Expr *inner;
+            if (read_expr(r, &inner) != 0) return -1;
+            *out = expr_new_harvest(inner);
+            if (!*out) { expr_free(inner); return -1; }
+            return 0;
+        }
+        default: return -1;
+    }
+}
+static int read_cond(ByteReader *r, Cond **out) {
+    uint8_t op;
+    if (reader_u8(r, &op) != 0) return -1;
+    Cond *c = (Cond *)calloc(1, sizeof(Cond));
+    if (!c) return -1;
+    c->op = (CondOp)op;
+    if (read_expr(r, &c->left) != 0) { free(c); return -1; }
+    if (op != COND_TRUTHY) {
+        if (read_expr(r, &c->right) != 0) { expr_free(c->left); free(c); return -1; }
+    }
+    *out = c;
+    return 0;
+}
+static int read_program(ByteReader *r, Program *out);
+static int read_stmt(ByteReader *r, Stmt *out) {
+    uint8_t kind;
+    if (reader_u8(r, &kind) != 0) return -1;
+    memset(out, 0, sizeof(*out));
+    out->kind = (StmtKind)kind;
+    switch (out->kind) {
+        case STMT_POP: return reader_bytes_alloc(r, &out->pop_text, &out->pop_text_len);
+        case STMT_SET:
+            if (reader_bytes_alloc(r, &out->set_name, NULL) != 0) return -1;
+            return read_expr(r, &out->set_expr);
+        case STMT_TRASH: return reader_bytes_alloc(r, &out->trash_name, NULL);
+        case STMT_WHILE:
+            if (read_cond(r, &out->while_cond) != 0) return -1;
+            return read_program(r, &out->while_body);
+        default: return -1;
+    }
+}
+static int read_program(ByteReader *r, Program *out) {
+    uint32_t count, i;
+    program_init(out);
+    if (reader_u32(r, &count) != 0) return -1;
+    for (i = 0; i < count; i++) {
+        Stmt s;
+        if (read_stmt(r, &s) != 0) { program_free(out); return -1; }
+        if (program_push(out, s) != 0) { stmt_free_contents(&s); program_free(out); return -1; }
+    }
+    return 0;
+}
+
+static int cob_load_strawberry_cache(const char *cache_path, Program *out_prog) {
+    CobFileBuffer file;
+    if (cob_file_read_all(cache_path, &file) != COB_FILE_OK) return -1;
+
+    ByteReader r; r.data = (const unsigned char *)file.data; r.len = file.size; r.pos = 0;
+
+    if (r.len < STRAWBERRY_MAGIC_LEN || memcmp(r.data, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN) != 0) {
+        cob_file_free(&file);
+        return -1;
+    }
+    r.pos = STRAWBERRY_MAGIC_LEN;
+
+    int rc = read_program(&r, out_prog);
+    cob_file_free(&file);
+    return rc;
 }
 
 /* ---------------------------------------------------------------------
@@ -543,34 +1195,35 @@ static int cob_load_strawberry_cache(const char *cache_path, CobProgram *prog) {
  * ------------------------------------------------------------------- */
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s <file.cob> [--no-cache]\n"
-        "  --no-cache   ignore/skip writing the .strawberry fast-boot cache\n",
+        "Usage: %s <file.cob> [--no-cache] [--no-gc]\n"
+        "  --no-cache   ignore/skip the .strawberry fast-boot cache\n"
+        "  --no-gc      unlock harvest(<bytes>) / trash(<variable>)\n"
+        "\n"
+        "If a .cob file's first line is exactly `_MakeCache = False`\n"
+        "(whitespace/case-insensitive), the .strawberry cache is\n"
+        "disabled for that file automatically.\n",
         argv0);
 }
 
 int main(int argc, char **argv) {
     const char *src_path = NULL;
     int use_cache = 1;
+    int no_gc = 0;
     char cache_path[1024];
-    CobProgram prog;
+    Program prog;
+    EvalCtx ctx;
+    VarTable vars;
+    HandleTable handles;
     int i;
 
-    if (cob_check_hidden_version_flag(argc, argv)) {
-        return 0;
-    }
+    if (cob_check_hidden_version_flag(argc, argv)) return 0;
+    if (argc < 2) { print_usage(argv[0]); return 1; }
 
-    if (argc < 2) {
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    /* Flags (e.g. --no-cache) may appear before or after the source
-     * path -- scan the whole argv rather than assuming a fixed slot,
-     * so `cob_interp --no-cache file.cob` and `cob_interp file.cob
-     * --no-cache` both work. The first non-flag argument is the file. */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-cache") == 0) {
             use_cache = 0;
+        } else if (strcmp(argv[i], COB_FLAG_NO_GC) == 0) {
+            no_gc = 1;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "[cob_interp] error: unrecognized flag '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -583,61 +1236,73 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-
     if (src_path == NULL) {
         fprintf(stderr, "[cob_interp] error: no source file given\n");
         print_usage(argv[0]);
         return 1;
     }
-
     if (!cob_str_ends_with(src_path, COB_SOURCE_EXTENSION)) {
-        fprintf(stderr, "[cob_interp] error: expected a %s file, got '%s'\n",
-                COB_SOURCE_EXTENSION, src_path);
+        fprintf(stderr, "[cob_interp] error: expected a %s file, got '%s'\n", COB_SOURCE_EXTENSION, src_path);
         return 1;
     }
-
     if (cob_make_cache_path(src_path, cache_path, sizeof(cache_path)) != 0) {
         fprintf(stderr, "[cob_interp] error: source path too long to derive cache path\n");
         return 1;
     }
 
-    program_init(&prog);
+    CobFileBuffer source;
+    if (cob_file_read_all(src_path, &source) != COB_FILE_OK) {
+        fprintf(stderr, "[cob_interp] error: could not read source file '%s'\n", src_path);
+        return 1;
+    }
 
-    /* Fast-boot path: if a .strawberry cache already sits next to the
-     * source file, skip parsing entirely and run straight from it. */
+    int disable_cache_directive;
+    {
+        const char *peek = source.data;
+        disable_cache_directive = cob_strip_leading_makecache_directive(&peek);
+    }
+    if (disable_cache_directive) use_cache = 0;
+
+    program_init(&prog);
+    vars_init(&vars);
+    handles_init(&handles);
+    ctx.vars = &vars; ctx.handles = &handles; ctx.no_gc = no_gc;
+
     if (use_cache && cob_file_exists(cache_path)) {
         if (cob_load_strawberry_cache(cache_path, &prog) == 0) {
-            cob_execute(&prog);
-            program_free(&prog);
+            cob_file_free(&source);
+            if (!no_gc && program_uses_harvest_or_trash(&prog)) {
+                fprintf(stderr, "[cob_interp] error: this program uses harvest()/trash() -- rerun with --no-gc\n");
+                program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+                return 1;
+            }
+            execute(&prog, &ctx);
+            program_free(&prog); vars_free(&vars); handles_free_all(&handles);
             return 0;
         }
-        /* Corrupt/incompatible cache: fall through and reparse from
-         * source, then overwrite the cache with a fresh copy below. */
         fprintf(stderr, "[cob_interp] note: cache '%s' unreadable, reparsing source\n", cache_path);
         program_init(&prog);
     }
 
-    {
-        CobFileBuffer source;
-        CobFileStatus status = cob_file_read_all(src_path, &source);
-        if (status != COB_FILE_OK) {
-            fprintf(stderr, "[cob_interp] error: could not read source file '%s'\n", src_path);
-            return 1;
-        }
-
-        if (cob_parse_source(source.data, &prog) != 0) {
-            cob_file_free(&source);
-            return 1;
-        }
+    if (cob_parse_source(source.data, &prog, &disable_cache_directive) != 0) {
         cob_file_free(&source);
+        vars_free(&vars); handles_free_all(&handles);
+        return 1;
+    }
+    cob_file_free(&source);
+
+    if (!no_gc && program_uses_harvest_or_trash(&prog)) {
+        fprintf(stderr, "[cob_interp] error: this program uses harvest()/trash() -- rerun with --no-gc\n");
+        program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+        return 1;
     }
 
-    cob_execute(&prog);
+    execute(&prog, &ctx);
 
-    if (use_cache) {
-        cob_write_strawberry_cache(cache_path, &prog);
-    }
+    if (use_cache) cob_write_strawberry_cache(cache_path, &prog);
 
     program_free(&prog);
+    vars_free(&vars);
+    handles_free_all(&handles);
     return 0;
 }

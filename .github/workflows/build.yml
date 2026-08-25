@@ -64,6 +64,7 @@ jobs:
             cc: x86_64-w64-mingw32-gcc
             apt_pkg: gcc-mingw-w64-x86-64
             output_name: cob.exe
+            farmer_output_name: farmer.exe
             archive_name: cob-windows-amd64
           - goos: windows
             goarch: '386'
@@ -72,6 +73,7 @@ jobs:
             cc: i686-w64-mingw32-gcc
             apt_pkg: gcc-mingw-w64-i686
             output_name: cob.exe
+            farmer_output_name: farmer.exe
             archive_name: cob-windows-386
           - goos: windows
             goarch: arm64
@@ -79,6 +81,7 @@ jobs:
             toolchain: llvm-mingw
             cc: aarch64-w64-mingw32-clang
             output_name: cob.exe
+            farmer_output_name: farmer.exe
             archive_name: cob-windows-arm64
           - goos: windows
             goarch: arm
@@ -86,6 +89,7 @@ jobs:
             toolchain: llvm-mingw
             cc: armv7-w64-mingw32-clang
             output_name: cob.exe
+            farmer_output_name: farmer.exe
             archive_name: cob-windows-arm32
 
           # ---------------- Linux ----------------
@@ -95,6 +99,7 @@ jobs:
             toolchain: native
             cc: gcc
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-linux-amd64
           - goos: linux
             goarch: '386'
@@ -104,6 +109,7 @@ jobs:
             cflags: "-m32"
             apt_pkg: gcc-multilib
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-linux-386
           - goos: linux
             goarch: arm64
@@ -112,6 +118,7 @@ jobs:
             cc: aarch64-linux-gnu-gcc
             apt_pkg: gcc-aarch64-linux-gnu
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-linux-arm64
           - goos: linux
             goarch: arm
@@ -120,6 +127,7 @@ jobs:
             cc: arm-linux-gnueabihf-gcc
             apt_pkg: gcc-arm-linux-gnueabihf
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-linux-arm32
 
           # ---------------- macOS ----------------
@@ -130,6 +138,7 @@ jobs:
             cc: clang
             cflags: "-arch arm64"
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-darwin-arm64
           - goos: darwin
             goarch: amd64
@@ -138,6 +147,7 @@ jobs:
             cc: clang
             cflags: "-arch x86_64"
             output_name: cob
+            farmer_output_name: farmer
             archive_name: cob-darwin-amd64
 
     steps:
@@ -167,7 +177,7 @@ jobs:
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
-    - name: Compile cob
+    - name: Compile cob and farmer
       shell: bash
       run: |
         set -euo pipefail
@@ -176,13 +186,83 @@ jobs:
           -Iinclude \
           -o "dist/${{ matrix.output_name }}" \
           src/file_io.c src/cob_interp.c
-        ls -la "dist/${{ matrix.output_name }}"
+        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
+          -Iinclude \
+          -o "dist/${{ matrix.farmer_output_name }}" \
+          src/file_io.c src/farmer.c
+        ls -la "dist/${{ matrix.output_name }}" "dist/${{ matrix.farmer_output_name }}"
+
+    # -----------------------------------------------------------------
+    # popcorn_comp -- statically links src/tcc/libtcc.c, which needs a
+    # matching libtcc1.a (TCC's own runtime archive) built for the SAME
+    # target. We've only proven that build (./configure && make
+    # libtcc1.a) end-to-end for native Linux so far, so that's the only
+    # matrix entry this runs for right now rather than silently
+    # skipping or faking cross-target support. Expanding this to the
+    # other 9 targets is real follow-up work: mingw/llvm-mingw targets
+    # need TCC's win32 runtime libs (src/tcc/win32/lib), and macOS
+    # needs its own libtcc1.a built per-arch.
+    # -----------------------------------------------------------------
+    - name: Build TCC runtime (libtcc1.a) for popcorn_comp
+      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      run: |
+        cd src/tcc
+        sh ./configure --prefix=/tmp/tccinstall
+        make libtcc1.a
+
+    - name: Compile popcorn_comp (native Linux amd64 only, see comment above)
+      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        gcc -std=c99 -O2 -Wall -Wextra -Iinclude -Isrc/tcc \
+          -DPOPCORN_TCC_RUNTIME_DIR='"runtime"' \
+          -o dist/popcorn_comp \
+          src/file_io.c src/popcorn_comp.c src/tcc/libtcc.c \
+          -ldl -lpthread -lm
+        ls -la dist/popcorn_comp
+
+    - name: Smoke test popcorn_comp end-to-end
+      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd dist
+        cat > smoke.cob << 'EOF'
+        set x = 3
+        while x > 0:
+            pop("counting down")
+            set x = x - 1
+        pop("liftoff")
+        EOF
+        ./cob smoke.cob > interp_out.txt
+        # TCC needs its own include/ dir alongside libtcc1.a to resolve
+        # {B}/include (see tcc.h's CONFIG_TCC_SYSINCLUDEPATHS) -- the
+        # real packaged runtime/ folder isn't assembled until the
+        # packaging step below, so point straight at the checked-out
+        # src/tcc tree for this smoke test via the env-var override.
+        POPCORN_TCC_RUNTIME_DIR="$GITHUB_WORKSPACE/src/tcc" \
+          ./popcorn_comp smoke.strawberry -o smoke_native
+        ./smoke_native > compiled_out.txt
+        diff interp_out.txt compiled_out.txt && echo "popcorn_comp output matches cob_interp: OK"
+        rm -f smoke.cob smoke.strawberry smoke_native interp_out.txt compiled_out.txt
 
     - name: Package binary and licenses into zip
       shell: bash
       run: |
         mkdir -p staging/${{ matrix.archive_name }}
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
+        cp dist/${{ matrix.farmer_output_name }} staging/${{ matrix.archive_name }}/
+        if [ -f "dist/popcorn_comp" ]; then
+          cp dist/popcorn_comp staging/${{ matrix.archive_name }}/
+          # popcorn_comp looks for runtime/libtcc1.a and runtime/include/
+          # next to itself by default (see POPCORN_TCC_RUNTIME_DIR in
+          # src/popcorn_comp.c) -- bundle that folder so a downloaded
+          # release works standalone, with no source checkout needed.
+          mkdir -p staging/${{ matrix.archive_name }}/runtime/include
+          cp src/tcc/libtcc1.a staging/${{ matrix.archive_name }}/runtime/
+          cp -r src/tcc/include/* staging/${{ matrix.archive_name }}/runtime/include/
+        fi
         
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;

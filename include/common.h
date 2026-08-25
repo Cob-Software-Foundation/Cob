@@ -39,8 +39,8 @@ extern "C" {
 #define COB_PROJECT_CODENAME    "Project Obsidian Falcon"
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
-#define COB_VERSION_PATCH       1
-#define COB_VERSION_STRING      "0.0.1"
+#define COB_VERSION_PATCH       2
+#define COB_VERSION_STRING      "0.0.2"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/pixel-pulse-labs/Cob"
 
@@ -130,13 +130,21 @@ static inline void cob_print_license(void) {
 #endif
 
 /* ---------------------------------------------------------------------
- * 4. COB VOCABULARY (v0.0.1 SPEC)
- *    The full corn-themed keyword set recognized by cob_interp.c and
- *    popcorn_comp.c. Declared here as string literals so every tool
- *    (and the shuck-time library scanner in the interpreter) agrees on
- *    exact spelling. NOTE: these are the raw token spellings; the
- *    interpreter's tokenizer does the whitespace/indent-sensitive
- *    parsing around them.
+ * 4. COB VOCABULARY (as of v0.0.2)
+ *    The full corn-themed keyword set. Declared here as string
+ *    literals so every tool agrees on exact spelling. NOTE: these are
+ *    the raw token spellings; each tool's own tokenizer does the
+ *    whitespace/indent-sensitive parsing around them.
+ *
+ *    Status per keyword:
+ *      while, set, pop   fully implemented (cob_interp.c, popcorn_comp.c)
+ *      shuck             fully implemented -- cob_interp.c splices in
+ *                         the named library's statements at parse time;
+ *                         farmer.c is what actually installs libraries
+ *                         into COB_FARMER_MODULES_DIR for shuck to find
+ *      harvest, trash    fully implemented, but gated behind
+ *                         COB_FLAG_NO_GC (see below) in both
+ *                         cob_interp.c and popcorn_comp.c
  * ------------------------------------------------------------------- */
 #define COB_KW_WHILE        "while"      /* while <condition>:            */
 #define COB_KW_SET           "set"       /* set <name> = <value>          */
@@ -146,17 +154,35 @@ static inline void cob_print_license(void) {
 #define COB_KW_TRASH          "trash"    /* trash(<variable>) [--no-gc]    */
 #define COB_BLOCK_COLON       ':'        /* block opener terminator        */
 
-/* CLI flag recognized by popcorn_comp.c / cob_interp.c that unlocks the
+/* CLI flag recognized by cob_interp.c / popcorn_comp.c that unlocks the
  * low-level manual-memory keywords (harvest/trash). Off by default --
- * Cob is garbage-collected unless the farmer/dev explicitly opts out. */
+ * Cob is garbage-collected unless the farmer/dev explicitly opts out.
+ * A program using harvest()/trash() without this flag is refused
+ * outright rather than silently ignoring the keywords. */
 #define COB_FLAG_NO_GC        "--no-gc"
 
 /* Fast-boot bytecode cache file extension written by cob_interp.c next
- * to the source .cob file, e.g. "myprogram.cob" -> "myprogram.strawberry" */
+ * to the source .cob file, e.g. "myprogram.cob" -> "myprogram.strawberry".
+ * A .cob file whose literal first line is `_MakeCache = False`
+ * (whitespace/case-insensitive) disables this cache entirely for that
+ * file -- see cob_interp.c's cob_strip_leading_makecache_directive(). */
 #define COB_CACHE_EXTENSION   ".strawberry"
 
 /* Source file extension recognized by all Cob tools. */
 #define COB_SOURCE_EXTENSION  ".cob"
+
+/* Base URL for farmer's static package registry, hosted for free on
+ * GitHub Pages -- see farmer.c for the full protocol. Overridable at
+ * runtime via the COB_FARMER_BASE_URL environment variable (handy for
+ * local testing against a dev server, or pointing at a private mirror
+ * without rebuilding). */
+#define COB_FARMER_DEFAULT_BASE_URL "https://pixel-pulse-labs.github.io/Cob"
+#define COB_FARMER_BASE_URL_ENV     "COB_FARMER_BASE_URL"
+
+/* Local workspace folder farmer installs packages into, and shuck
+ * (see cob_interp.c) looks for them in as its second candidate path:
+ * cob_modules/<name>/<name>.cob */
+#define COB_FARMER_MODULES_DIR "cob_modules"
 
 /* ---------------------------------------------------------------------
  * 5. SMALL SHARED UTILITIES
@@ -174,7 +200,7 @@ static inline int cob_str_ends_with(const char *str, const char *suffix) {
 }
 
 /* Counts leading ASCII space characters on a line (tabs are treated as
- * a hard error upstream by the caller -- Cob v0.0.1 is spaces-only, in
+ * a hard error upstream by the caller -- Cob is spaces-only, in
  * the spirit of Python's recommended style). Returns the count. */
 static inline int cob_count_leading_spaces(const char *line) {
     int n = 0;
