@@ -39,6 +39,18 @@ jobs:
           rsync -av --delete --exclude='.git' temp-tcc/ src/tcc/
           rm -rf temp-tcc
 
+      # Defensive safeguard: TCC's own vendored .gitignore has a
+      # `conftest*` pattern meant to ignore the *compiled* ./conftest-$$
+      # binary, but it collaterally matches the tracked source file
+      # conftest.c too -- which ./configure genuinely needs. As long as
+      # this path is already tracked in git history, a plain `git add`
+      # picks up changes to it normally (.gitignore only blocks staging
+      # *new/untracked* files, never updates to tracked ones) -- but
+      # force-adding here is a second line of defense in case it's ever
+      # untracked again for some other reason.
+      - name: Ensure conftest.c stays tracked despite upstream's .gitignore
+        run: git add -f src/tcc/conftest.c
+
       # --- SECURITY SHIELD ---
       - name: Initialize CodeQL Analysis
         uses: github/codeql-action/init@v3
