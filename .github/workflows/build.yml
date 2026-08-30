@@ -219,14 +219,28 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p dist
-        for target in cob_interp:${{ matrix.output_name }} farmer:${{ matrix.farmer_output_name }} popcorn_comp:${{ matrix.popcorn_output_name }}; do
-          src_name="${target%%:*}"
-          out_name="${target##*:}"
-          ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-            -Iinclude \
-            -o "dist/${out_name}" \
-            src/file_io.c "src/${src_name}.c"
-        done
+
+        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
+          -Iinclude \
+          -o "dist/${{ matrix.output_name }}" \
+          src/file_io.c src/cob_interp.c
+
+        # farmer needs vendor/miniz (statically-linked zip extraction --
+        # see src/farmer.c's header comment) in addition to include/,
+        # unlike the other two tools.
+        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
+          -Iinclude -Ivendor/miniz -D_POSIX_C_SOURCE=200809L -DMINIZ_NO_ZLIB_APIS \
+          -o "dist/${{ matrix.farmer_output_name }}" \
+          src/file_io.c src/farmer.c \
+          vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c \
+          vendor/miniz/miniz_tinfl.c vendor/miniz/miniz_zip.c \
+          -lm
+
+        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
+          -Iinclude \
+          -o "dist/${{ matrix.popcorn_output_name }}" \
+          src/file_io.c src/popcorn_comp.c
+
         ls -la dist/
 
     # popcorn_comp itself has zero build-time dependency on any C
