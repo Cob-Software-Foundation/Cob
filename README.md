@@ -1,8 +1,8 @@
 # Cob™ (Project Obsidian Falcon)
 
-Cob is a corn-themed hybrid programming language combining Python-style indentation with low-level capability. It features a cross-platform interpreter, a native compiler powered by TinyCC, and its own package manager.
+Cob is a corn-themed hybrid programming language combining Python-style indentation with low-level capability. It features a cross-platform interpreter, a native compiler powered by Zig, and its own package manager.
 
-Development, stewardship, and project rights are co-managed by the **Cob Software Foundation™ (CSF)** and **Pixel Pulse**. Language evolution and architectural changes are handled transparently via the Cob Enhancement Proposal (CEP) process.
+Development, stewardship, and project rights are co-managed by the **Cob Software Foundation™ (CSF)** and **Pixel Pulse**.
 
 ## 🚀 Key Features
 
@@ -53,7 +53,7 @@ trash(buffer)
 
 ## 📜 Governance
 
-Cob is actively maintained under the shared direction of **Pixel Pulse** and the **CSF** board. Major features, library extensions, and breaking changes are introduced, reviewed, and approved via **CEPs** as outlined in `CEP-0001.md`.
+Cob is actively maintained under the shared direction of **Pixel Pulse** and the **CSF** board.
 
 ## ⚖️ License & Trademark
 
