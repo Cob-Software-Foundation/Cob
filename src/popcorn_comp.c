@@ -2,58 +2,72 @@
  * popcorn_comp.c
  * ---------------------------------------------------------------------
  * Project Obsidian Falcon / Cob Language Toolchain
- * The Cob native compiler: `popcorn_comp <file.strawberry> -o <output> [--no-gc]`
+ * The Cob native compiler: `popcorn_comp <file.strawberry> -o <output>
+ *                            [--no-gc] [--cc <path>] [--emit-c <path.c>]`
  *
  * ---------------------------------------------------------------------
- * HOW THIS WORKS
+ * HOW THIS WORKS (v0.0.3 architecture -- spawns a real C compiler)
  * ---------------------------------------------------------------------
- * Rather than shelling out to gcc/clang or dynamically linking a system
- * copy of TCC, this binary statically links TCC's actual compiler
- * source (src/tcc/libtcc.c, included as one translation unit -- see
- * the Makefile) directly into itself, exactly as the project spec
- * requires. At runtime it:
+ * Earlier versions of popcorn_comp statically linked TCC's own compiler
+ * source (libtcc.c) directly into this binary. That was dropped by
+ * project decision in favor of a conventional design: popcorn_comp
+ * transpiles a .strawberry AST to plain C, writes it to a temp file,
+ * then spawns a real C compiler (gcc/clang/cc -- native or cross) as a
+ * subprocess to turn that C into a native executable.
  *
- *   1. Reads a .strawberry bytecode file (the same format cob_interp.c
- *      writes -- see the format comment near STRAWBERRY_MAGIC below;
- *      the two files intentionally keep independent copies of the
- *      *reader* so popcorn_comp has no dependency on cob_interp.c).
- *   2. Transpiles the AST directly to a small, self-contained C source
- *      string (no external runtime library needed -- pop() becomes
- *      printf, variables become plain C `long` locals, harvest/trash
- *      become malloc/free).
- *   3. Feeds that C source to the embedded TCC via tcc_compile_string()
- *      and writes a real native executable with tcc_output_file().
+ * Why the switch: TCC ships a genuine embeddable library API
+ * (tcc_new/tcc_compile_string/tcc_output_file) designed for exactly
+ * the in-process use case, but only ever targets the ONE platform it
+ * was itself compiled for -- true cross-compilation meant bundling a
+ * separately-built libtcc per target. GCC has no embeddable API at
+ * all (it's cc1/as/ld orchestrated as separate processes no matter
+ * what), so "embed GCC the way we embedded TCC" isn't a smaller
+ * version of the same trick -- that trick doesn't exist for GCC.
+ * Spawning a real compiler trades "no external executables" for
+ * "works with whatever real, well-tested compiler is already the
+ * standard tool for the target platform" -- the same tradeoff tools
+ * like Zig's C backend or Cython make.
  *
  * ---------------------------------------------------------------------
- * ON CobOS / CobArch AND CROSS-COMPILATION -- READ THIS
+ * CHOOSING WHICH COMPILER TO SPAWN
  * ---------------------------------------------------------------------
- * TCC's code generator is a compile-time choice (TCC_TARGET_X86_64,
- * TCC_TARGET_I386, TCC_TARGET_ARM64, ... -- baked into libtcc.c when
- * *this popcorn_comp binary itself* was built). A single statically-
- * linked popcorn_comp binary can only ever emit code for the ONE
- * target it was compiled for. True "one binary cross-compiles to any
- * of 10 platforms" is not something a single static libtcc supports --
- * that would require bundling N separate libtcc builds (one per
- * target) inside one executable, which upstream TCC does not do.
+ * Resolved in this order (see resolve_compiler() below):
+ *   1. --cc <path>            explicit override, always wins
+ *   2. $CobCC                 environment variable override
+ *   3. $CobOS / $CobArch      looked up in a small table of known
+ *                             cross-compiler binary names -- the same
+ *                             ones .github/workflows/build.yml already
+ *                             installs to cross-build the Cob tools
+ *                             themselves (e.g. x86_64-w64-mingw32-gcc)
+ *   4. "cc", then "gcc"       plain PATH lookup, for the common case of
+ *                             compiling natively on a machine that
+ *                             already has a C toolchain
  *
- * So: popcorn_comp reads CobOS/CobArch via getenv() as the spec
- * requires, and checks them against POPCORN_HOST_OS/POPCORN_HOST_ARCH
- * (this binary's own compiled-in target, from common.h). If they
- * match (or are unset, meaning "use the host"), it proceeds. If they
- * name a *different* target, it fails with a clear explanation rather
- * than silently producing a host binary mislabeled as something else.
- * Real cross-target support means building separate popcorn_comp
- * binaries per target -- exactly the same pattern build.yml already
- * uses for cob_interp -- each statically linking a libtcc built with
- * a different TCC_TARGET_* macro. That's future work, not a lie this
- * binary tells about itself.
+ * IMPORTANT HONESTY NOTE: the cross-compiler binary names in step 3
+ * are Linux-amd64-*hosted* tools -- they run on a Linux build machine
+ * and *emit* code for another platform, but are NOT compilers that
+ * will run on an actual Windows/ARM machine. A "self-contained
+ * popcorn_comp that works with zero setup" on those platforms means
+ * bundling a genuinely native-hosted toolchain for that platform (e.g.
+ * a WinLibs-style standalone MinGW-w64 build that runs ON Windows) --
+ * that's real follow-up work, not something step 3 provides by itself.
+ * What step 3 IS useful for: cross-compiling from a build server that
+ * already has these cross-gcc packages installed, which is exactly
+ * what build.yml's CI runner has.
  *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
 
+/* Must come before any system headers: readlink() (used to find this
+ * executable's own path on Linux, for locating a bundled zig/ folder)
+ * isn't visible under strict -std=c99 on glibc without requesting
+ * POSIX explicitly. */
+#if !defined(_MSC_VER) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "common.h"
 #include "file_io.h"
-#include "libtcc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,13 +76,13 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-/* Where popcorn_comp looks for libtcc1.a and TCC's bundled headers at
- * runtime. The Makefile passes this via -D pointing at src/tcc for
- * local/dev builds; a packaged release should instead ship a
- * "runtime/" directory next to the popcorn_comp binary and pass that
- * path here instead. */
-#ifndef POPCORN_TCC_RUNTIME_DIR
-#define POPCORN_TCC_RUNTIME_DIR "."
+#if defined(_WIN32)
+#  include <windows.h>
+#elif defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#  include <unistd.h>
+#else
+#  include <unistd.h> /* readlink */
 #endif
 
 /* ---------------------------------------------------------------------
@@ -461,15 +475,253 @@ fail:
 /* ---------------------------------------------------------------------
  * MAIN
  * ------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+ * COMPILER RESOLUTION -- deciding which real C compiler to spawn
+ * ------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------
+ * COMPILER RESOLUTION -- deciding which real C compiler to spawn
+ * ---------------------------------------------------------------------
+ * Default backend is Zig's `zig cc` (a Clang-based drop-in C compiler
+ * that ships bundled libc/CRT files for essentially every OS/arch it
+ * supports, all in ONE Zig install). That's a genuinely better fit
+ * for CobOS/CobArch cross-compiling than a table of separately
+ * installed cross-gcc binaries: instead of needing a different
+ * toolchain package per target, cross-compiling is just a `-target
+ * <triple>` flag Zig already knows how to satisfy on its own.
+ * See COB_ZIG_TARGETS below for the (CobOS, CobArch) -> Zig triple
+ * mapping. Linux targets default to musl libc rather than glibc,
+ * producing fully static binaries with no runtime libc dependency --
+ * a better match for "standalone executable" than a dynamically
+ * linked glibc binary would be.
+ * ------------------------------------------------------------------- */
+
+typedef struct { const char *os; const char *arch; const char *triple; } ZigTargetEntry;
+static const ZigTargetEntry COB_ZIG_TARGETS[] = {
+    { "windows", "amd64", "x86_64-windows-gnu" },
+    { "windows", "386",   "x86-windows-gnu" },
+    { "windows", "arm64", "aarch64-windows-gnu" },
+    /* windows/arm (32-bit ARM) intentionally not supported -- cut per
+     * project decision; it was also the entry we were least confident
+     * about (32-bit ARM Windows is a niche LLVM target). */
+    { "linux",   "amd64", "x86_64-linux-musl" },
+    { "linux",   "386",   "x86-linux-musl" },
+    { "linux",   "arm64", "aarch64-linux-musl" },
+    { "linux",   "arm",   "arm-linux-musleabihf" },
+    { "darwin",  "amd64", "x86_64-macos" },
+    { "darwin",  "arm64", "aarch64-macos" },
+    { NULL, NULL, NULL }
+};
+
+/* ---------------------------------------------------------------------
+ * BUNDLED ZIG DETECTION
+ * ---------------------------------------------------------------------
+ * Official releases ship a "zig/" folder (a full Zig distribution --
+ * the "zig"/"zig.exe" binary plus the "lib/" directory it needs at
+ * runtime for its bundled libc headers and standard library) right
+ * next to the popcorn_comp binary. This is checked before falling
+ * back to a plain "zig cc" on PATH, so a downloaded release works
+ * standalone with no separate Zig install required. Local/dev builds
+ * (no bundled zig/ folder present) transparently fall back to PATH.
+ * ------------------------------------------------------------------- */
+
+/* Returns a newly malloc'd string containing the directory this
+ * executable lives in (no trailing separator), or NULL if it can't be
+ * determined. Deliberately does NOT rely on argv[0], which can be
+ * unreliable (e.g. resolved via a PATH search, or a relative path
+ * that's no longer valid after a chdir) -- uses the platform's real
+ * "path to the running executable" API instead. */
+static char *get_executable_dir(void) {
+    char buf[4096];
+    char *last_sep;
+
+#if defined(_WIN32)
+    DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) return NULL;
+#elif defined(__APPLE__)
+    uint32_t size = (uint32_t)sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return NULL;
+#else
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len <= 0) return NULL;
+    buf[len] = '\0';
+#endif
+
+    last_sep = strrchr(buf, '/');
+#if defined(_WIN32)
+    { char *bs = strrchr(buf, '\\'); if (bs && (!last_sep || bs > last_sep)) last_sep = bs; }
+#endif
+    if (!last_sep) return NULL;
+    *last_sep = '\0';
+
+    {
+        size_t dir_len = strlen(buf);
+        char *result = (char *)malloc(dir_len + 1);
+        if (!result) return NULL;
+        memcpy(result, buf, dir_len + 1);
+        return result;
+    }
+}
+
+/* Looks for <exe_dir>/zig/zig (or zig.exe on Windows). If found,
+ * returns a newly malloc'd, already-quoted invocation like
+ * "\"/path/to/zig/zig\" cc" ready to have arguments appended. Returns
+ * NULL if no bundled Zig is present (caller falls back to PATH). */
+static char *find_bundled_zig_cc(void) {
+    char *dir = get_executable_dir();
+    char path[4200];
+    char *result;
+    size_t path_len;
+
+    if (!dir) return NULL;
+#if defined(_WIN32)
+    snprintf(path, sizeof(path), "%s\\zig\\zig.exe", dir);
+#else
+    snprintf(path, sizeof(path), "%s/zig/zig", dir);
+#endif
+    free(dir);
+
+    if (!cob_file_exists(path)) return NULL;
+
+    path_len = strlen(path);
+    result = (char *)malloc(path_len + 8); /* 2 quotes + " cc" + NUL */
+    if (!result) return NULL;
+    snprintf(result, path_len + 8, "\"%s\" cc", path);
+    return result;
+}
+
+/* Returns a full compiler *command* (may include arguments, e.g.
+ * "zig cc -target x86_64-windows-gnu", or a bundled path like
+ * "\"/path/to/zig/zig\" cc -target ...") to invoke, per the resolution
+ * order documented at the top of this file. The returned string is
+ * either heap-owned (caller must free(), whenever *out_owned is 1) or
+ * a static literal (caller must NOT free()). Returns NULL on an
+ * unresolvable request (already reported to stderr). */
+static char *resolve_compiler(const char *cli_cc_override, int *out_owned) {
+    const char *env_cc;
+    const char *want_os, *want_arch;
+    char *base_cmd;
+    int base_owned;
+    int i;
+
+    *out_owned = 0;
+
+    if (cli_cc_override && cli_cc_override[0] != '\0') {
+        return (char *)cli_cc_override;
+    }
+
+    env_cc = getenv("CobCC");
+    if (env_cc && env_cc[0] != '\0') {
+        return (char *)env_cc;
+    }
+
+    /* Base zig invocation: a bundled zig/ folder next to this
+     * executable if present (official releases), otherwise plain
+     * "zig cc" relying on PATH (local/dev builds, or a system-wide
+     * Zig install). */
+    base_cmd = find_bundled_zig_cc();
+    if (base_cmd) {
+        base_owned = 1;
+    } else {
+        base_cmd = (char *)"zig cc";
+        base_owned = 0;
+    }
+
+    want_os = getenv("CobOS");
+    want_arch = getenv("CobArch");
+    if (want_os && want_arch) {
+        for (i = 0; COB_ZIG_TARGETS[i].os != NULL; i++) {
+            if (strcmp(COB_ZIG_TARGETS[i].os, want_os) == 0 &&
+                strcmp(COB_ZIG_TARGETS[i].arch, want_arch) == 0) {
+                size_t cap = strlen(base_cmd) + 64;
+                char *cmd = (char *)malloc(cap);
+                if (!cmd) { if (base_owned) free(base_cmd); return NULL; }
+                snprintf(cmd, cap, "%s -target %s", base_cmd, COB_ZIG_TARGETS[i].triple);
+                if (base_owned) free(base_cmd);
+                *out_owned = 1;
+                return cmd;
+            }
+        }
+        /* CobOS/CobArch given but not in our table -- rather than
+         * silently falling back to a native compile that would
+         * produce the WRONG platform's binary, refuse clearly. */
+        fprintf(stderr,
+            "[popcorn_comp] error: no known Zig target for CobOS=%s CobArch=%s.\n"
+            "  Pass --cc <path> or set $CobCC to the compiler you want used.\n",
+            want_os, want_arch);
+        if (base_owned) free(base_cmd);
+        return NULL;
+    }
+
+    /* No explicit target requested: base_cmd (bundled or PATH zig) is
+     * already exactly the native compile command we want. */
+    *out_owned = base_owned;
+    return base_cmd;
+}
+
+/* Runs `compiler -std=c99 -O2 -o out_path in_path`, quoting both paths
+ * for the shell. Returns 0 on success (subprocess exited 0 AND the
+ * output file actually exists -- exit-code alone isn't fully reliable
+ * for catching every failure mode across shells/platforms). */
+static int cob_spawn_compile(const char *compiler, const char *in_path, const char *out_path) {
+    char cmd[2048];
+    char *q_in, *q_out;
+    size_t in_len = strlen(in_path), out_len = strlen(out_path);
+    int rc;
+
+    /* Simple, portable shell-quoting: wrap in double quotes and escape
+     * any embedded double quotes/backslashes. Compiler-supplied paths
+     * here are always ones popcorn_comp itself generated (a temp file
+     * path and the user's -o argument), never arbitrary network input,
+     * but we quote anyway as standard practice for anything crossing
+     * into a shell command line. */
+    q_in = (char *)malloc(in_len * 2 + 3);
+    q_out = (char *)malloc(out_len * 2 + 3);
+    if (!q_in || !q_out) { free(q_in); free(q_out); return -1; }
+    {
+        size_t i, j = 0;
+        q_in[j++] = '"';
+        for (i = 0; i < in_len; i++) {
+            if (in_path[i] == '"' || in_path[i] == '\\') q_in[j++] = '\\';
+            q_in[j++] = in_path[i];
+        }
+        q_in[j++] = '"'; q_in[j] = '\0';
+    }
+    {
+        size_t i, j = 0;
+        q_out[j++] = '"';
+        for (i = 0; i < out_len; i++) {
+            if (out_path[i] == '"' || out_path[i] == '\\') q_out[j++] = '\\';
+            q_out[j++] = out_path[i];
+        }
+        q_out[j++] = '"'; q_out[j] = '\0';
+    }
+
+    snprintf(cmd, sizeof(cmd), "%s -std=c99 -O2 -o %s %s", compiler, q_out, q_in);
+    free(q_in); free(q_out);
+
+    fprintf(stderr, "[popcorn_comp] spawning: %s\n", cmd);
+    rc = system(cmd);
+    if (rc != 0) return -1;
+    if (!cob_file_exists(out_path)) return -1;
+    return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * MAIN
+ * ------------------------------------------------------------------- */
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s <file%s> -o <output> [--no-gc] [--emit-c <path.c>]\n"
+        "Usage: %s <file%s> -o <output> [--no-gc] [--cc <compiler>] [--emit-c <path.c>]\n"
         "  --no-gc        required if the program uses harvest()/trash()\n"
+        "  --cc PATH      explicit compiler to spawn (default: resolved from\n"
+        "                 CobCC / CobOS+CobArch / PATH -- see file header comment)\n"
         "  --emit-c PATH  also write the generated C source for inspection\n"
         "\n"
         "Environment:\n"
-        "  CobOS    windows|linux|darwin  (must match this build's target)\n"
-        "  CobArch  amd64|386|arm64       (must match this build's target)\n",
+        "  CobCC    explicit compiler command/path override\n"
+        "  CobOS    windows|linux|darwin  (looked up in a small cross-compiler table)\n"
+        "  CobArch  amd64|386|arm64|arm\n",
         argv0, COB_CACHE_EXTENSION);
 }
 
@@ -477,6 +729,7 @@ int main(int argc, char **argv) {
     const char *in_path = NULL;
     const char *out_path = NULL;
     const char *emit_c_path = NULL;
+    const char *cc_override = NULL;
     int no_gc = 0;
     int i;
 
@@ -488,6 +741,9 @@ int main(int argc, char **argv) {
             out_path = argv[++i];
         } else if (strcmp(argv[i], "--no-gc") == 0) {
             no_gc = 1;
+        } else if (strcmp(argv[i], "--cc") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "[popcorn_comp] error: --cc needs an argument\n"); return 1; }
+            cc_override = argv[++i];
         } else if (strcmp(argv[i], "--emit-c") == 0) {
             if (i + 1 >= argc) { fprintf(stderr, "[popcorn_comp] error: --emit-c needs an argument\n"); return 1; }
             emit_c_path = argv[++i];
@@ -508,25 +764,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* --- CobOS / CobArch validation (see the file-top comment) --- */
-    const char *want_os = getenv("CobOS");
-    const char *want_arch = getenv("CobArch");
-    if (want_os && strcmp(want_os, COB_OS_NAME) != 0) {
-        fprintf(stderr,
-            "[popcorn_comp] error: CobOS=%s requested, but this popcorn_comp binary\n"
-            "  was statically built for '%s' and cannot target another OS.\n"
-            "  Build a separate popcorn_comp for '%s' (see .github/workflows/build.yml\n"
-            "  for the same per-target pattern used for cob_interp).\n",
-            want_os, COB_OS_NAME, want_os);
-        return 1;
-    }
-    if (want_arch && strcmp(want_arch, COB_ARCH_NAME) != 0) {
-        fprintf(stderr,
-            "[popcorn_comp] error: CobArch=%s requested, but this popcorn_comp binary\n"
-            "  was statically built for '%s' and cannot target another arch.\n",
-            want_arch, COB_ARCH_NAME);
-        return 1;
-    }
+    int compiler_owned;
+    char *compiler = resolve_compiler(cc_override, &compiler_owned);
+    if (!compiler) return 1; /* resolve_compiler() already printed why */
 
     /* --- load and check the bytecode --- */
     Program prog;
@@ -544,49 +784,42 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[popcorn_comp] error: out of memory generating C source\n");
         return 1;
     }
-    if (emit_c_path) {
-        if (cob_file_write_all(emit_c_path, c_source, strlen(c_source)) != COB_FILE_OK) {
-            fprintf(stderr, "[popcorn_comp] warning: could not write --emit-c file '%s'\n", emit_c_path);
-        }
+
+    /* The generated C always needs to live in a real file on disk for
+     * a spawned compiler to read (unlike libtcc's tcc_compile_string,
+     * a subprocess can't be handed an in-memory string directly). Use
+     * --emit-c's path if given so it doubles as the compile input and
+     * the inspectable artifact; otherwise use a temp file next to the
+     * requested output and clean it up afterward. */
+    char temp_c_path[600];
+    int using_emit_c_as_input = (emit_c_path != NULL);
+    if (using_emit_c_as_input) {
+        snprintf(temp_c_path, sizeof(temp_c_path), "%s", emit_c_path);
+    } else {
+        snprintf(temp_c_path, sizeof(temp_c_path), "%s.popcorn_tmp.c", out_path);
     }
 
-    /* --- compile via the statically-linked TCC --- */
-    TCCState *s = tcc_new();
-    if (!s) {
-        fprintf(stderr, "[popcorn_comp] error: tcc_new() failed\n");
+    if (cob_file_write_all(temp_c_path, c_source, strlen(c_source)) != COB_FILE_OK) {
+        fprintf(stderr, "[popcorn_comp] error: could not write generated C source to '%s'\n", temp_c_path);
         free(c_source);
         return 1;
     }
-    /* TCC needs to find its own runtime archive (libtcc1.a) and headers
-     * at runtime; point it at the tree this binary was built from.
-     * Overridable via the POPCORN_TCC_RUNTIME_DIR environment variable
-     * (used by CI, and by anyone running popcorn_comp from a location
-     * other than a full source checkout) without needing a rebuild. A
-     * packaged release ships a "runtime/" dir (libtcc1.a + include/)
-     * next to the popcorn_comp binary and expects to be run from that
-     * directory -- see README for the exact layout. */
-    const char *runtime_dir = getenv("POPCORN_TCC_RUNTIME_DIR");
-    if (!runtime_dir || runtime_dir[0] == '\0') runtime_dir = POPCORN_TCC_RUNTIME_DIR;
-    tcc_set_lib_path(s, runtime_dir);
-    tcc_set_output_type(s, TCC_OUTPUT_EXE);
-
-    if (tcc_compile_string(s, c_source) < 0) {
-        fprintf(stderr, "[popcorn_comp] error: internal error -- generated C source failed to compile\n");
-        if (!emit_c_path) fprintf(stderr, "  (rerun with --emit-c out.c to inspect the generated source)\n");
-        tcc_delete(s);
-        free(c_source);
-        return 1;
-    }
-    if (tcc_output_file(s, out_path) != 0) {
-        fprintf(stderr, "[popcorn_comp] error: failed to write output executable '%s'\n", out_path);
-        tcc_delete(s);
-        free(c_source);
-        return 1;
-    }
-
-    tcc_delete(s);
     free(c_source);
 
-    fprintf(stderr, "[popcorn_comp] wrote %s (target: %s/%s)\n", out_path, COB_OS_NAME, COB_ARCH_NAME);
+    /* --- spawn the real compiler --- */
+    if (cob_spawn_compile(compiler, temp_c_path, out_path) != 0) {
+        fprintf(stderr,
+            "[popcorn_comp] error: '%s' failed to compile the generated C source\n"
+            "  (rerun with --emit-c out.c to inspect it, or check that '%s' is a valid,\n"
+            "  installed compiler on PATH)\n",
+            compiler, compiler);
+        if (!using_emit_c_as_input) remove(temp_c_path);
+        return 1;
+    }
+
+    if (!using_emit_c_as_input) remove(temp_c_path);
+
+    fprintf(stderr, "[popcorn_comp] wrote %s (compiler: %s)\n", out_path, compiler);
+    if (compiler_owned) free(compiler);
     return 0;
 }

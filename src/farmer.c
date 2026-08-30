@@ -26,20 +26,29 @@
  *      verified against it before extraction.
  *   3. Unzip into cob_modules/<package>/ -- the exact layout
  *      cob_interp.c's `shuck <package>` already looks for
- *      (cob_modules/<package>/<package>.cob).
+ *      (cob_modules/<package>/<package.cob>). Extraction is done
+ *      in-process via the statically-linked miniz library (see
+ *      vendor/miniz/), not by shelling out to unzip/Expand-Archive --
+ *      every extracted entry's path is checked against zip-slip path
+ *      traversal before anything is written (see
+ *      cob_is_safe_zip_entry_name() below).
  *
  * ---------------------------------------------------------------------
- * WHY system() AND NOT A REAL HTTP CLIENT
+ * WHY system() FOR DOWNLOADS BUT NOT FOR UNZIPPING
  * ---------------------------------------------------------------------
  * Per the project spec, farmer shells out to curl (Unix) or PowerShell
- * (Windows) rather than linking an HTTP/TLS library -- this keeps the
- * whole toolchain dependency-free and trivially portable, at the cost
- * of going through the shell. Because of that, every single value that
- * reaches a shell command line -- package name, URLs, file paths -- is
- * validated BEFORE being interpolated into a command string. This is
- * not optional hardening; without it, `farmer harvest "; rm -rf ~"`
- * would be a real vulnerability. See cob_validate_package_name() and
- * cob_shell_quote_single() below.
+ * (Windows) for the actual network fetch, rather than linking an
+ * HTTP/TLS library -- this keeps the whole toolchain dependency-free
+ * and trivially portable, at the cost of going through the shell for
+ * that one step. Unzipping doesn't have the same tradeoff: miniz is a
+ * small, real, embeddable library (unlike an HTTP/TLS stack), so
+ * there's no reason to pay the external-process cost there too.
+ * Because network fetches still go through the shell, every single
+ * value that reaches a shell command line -- package name, URLs, file
+ * paths -- is validated BEFORE being interpolated into a command
+ * string. This is not optional hardening; without it,
+ * `farmer harvest "; rm -rf ~"` would be a real vulnerability. See
+ * cob_validate_package_name() and cob_shell_quote_single() below.
  *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
@@ -55,6 +64,7 @@
 
 #include "common.h"
 #include "file_io.h"
+#include "miniz.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -252,40 +262,113 @@ static int cob_download(const char *url, const char *out_path) {
     return 0;
 }
 
+/* Returns 1 if `entry_name` (a zip archive entry's stored path, which
+ * per the ZIP spec always uses forward slashes) is safe to join onto
+ * an extraction directory, 0 if it looks like a zip-slip path
+ * traversal attempt or an absolute/drive-rooted path. This matters
+ * because farmer extracts zips downloaded from the network -- a
+ * malicious "../../../../etc/cron.d/evil" entry name must never be
+ * allowed to write outside the intended destination directory. */
+static int cob_is_safe_zip_entry_name(const char *entry_name) {
+    size_t len = strlen(entry_name);
+    if (len == 0) return 0;
+    if (entry_name[0] == '/' || entry_name[0] == '\\') return 0; /* absolute */
+    if (strchr(entry_name, ':') != NULL) return 0;                /* e.g. "C:/..." */
+    if (strcmp(entry_name, "..") == 0) return 0;
+    if (strncmp(entry_name, "../", 3) == 0) return 0;
+    if (strstr(entry_name, "/../") != NULL) return 0;
+    if (len >= 3 && strcmp(entry_name + len - 3, "/..") == 0) return 0;
+    return 1;
+}
+
+/* Recursively creates `dir_path` and all missing parent directories
+ * (a portable mkdir -p), stopping at the first component that already
+ * exists as a directory. Modifies a scratch copy, not the input. */
+static void cob_mkdir_recursive(const char *dir_path) {
+    char buf[1024];
+    size_t i, len;
+
+    len = strlen(dir_path);
+    if (len >= sizeof(buf)) return; /* path too long, extraction will fail loudly later */
+    memcpy(buf, dir_path, len + 1);
+
+    for (i = 1; i < len; i++) {
+        if (buf[i] == '/' || buf[i] == '\\') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            COB_MKDIR(buf);
+            buf[i] = saved;
+        }
+    }
+    COB_MKDIR(buf);
+}
+
 /* Extracts the zip at `zip_path` into directory `dest_dir` (created if
- * needed). Returns 0 on success. */
+ * needed) using the statically-linked miniz library -- no external
+ * unzip/Expand-Archive process, so this works identically and with no
+ * extra runtime dependency on every platform. Returns 0 on success. */
 static int cob_unzip(const char *zip_path, const char *dest_dir) {
-    char *cmd;
-    int rc;
+    mz_zip_archive zip;
+    int num_files, i;
+    int rc = 0;
 
     COB_MKDIR(dest_dir);
 
-#if defined(COB_OS_WINDOWS)
-    char *q_zip = cob_powershell_quote_single(zip_path);
-    char *q_dest = cob_powershell_quote_single(dest_dir);
-    if (!q_zip || !q_dest) { free(q_zip); free(q_dest); return -1; }
-    size_t cmd_cap = strlen(q_zip) + strlen(q_dest) + 128;
-    cmd = (char *)malloc(cmd_cap);
-    if (!cmd) { free(q_zip); free(q_dest); return -1; }
-    snprintf(cmd, cmd_cap,
-        "powershell -NoProfile -NonInteractive -Command "
-        "\"Expand-Archive -Path %s -DestinationPath %s -Force\"",
-        q_zip, q_dest);
-    free(q_zip); free(q_dest);
-#else
-    char *q_zip = cob_shell_quote_single(zip_path);
-    char *q_dest = cob_shell_quote_single(dest_dir);
-    if (!q_zip || !q_dest) { free(q_zip); free(q_dest); return -1; }
-    size_t cmd_cap = strlen(q_zip) + strlen(q_dest) + 128;
-    cmd = (char *)malloc(cmd_cap);
-    if (!cmd) { free(q_zip); free(q_dest); return -1; }
-    snprintf(cmd, cmd_cap, "unzip -o -q %s -d %s", q_zip, q_dest);
-    free(q_zip); free(q_dest);
-#endif
+    memset(&zip, 0, sizeof(zip));
+    if (!mz_zip_reader_init_file(&zip, zip_path, 0)) {
+        fprintf(stderr, "farmer: error: '%s' is not a valid zip archive\n", zip_path);
+        return -1;
+    }
 
-    rc = system(cmd);
-    free(cmd);
-    return rc == 0 ? 0 : -1;
+    num_files = (int)mz_zip_reader_get_num_files(&zip);
+    for (i = 0; i < num_files; i++) {
+        mz_zip_archive_file_stat st;
+        char full_path[1200];
+
+        if (!mz_zip_reader_file_stat(&zip, (mz_uint)i, &st)) {
+            fprintf(stderr, "farmer: error: could not read entry %d of '%s'\n", i, zip_path);
+            rc = -1;
+            break;
+        }
+
+        if (!cob_is_safe_zip_entry_name(st.m_filename)) {
+            fprintf(stderr,
+                "farmer: error: refusing to extract unsafe archive entry '%s'\n",
+                st.m_filename);
+            rc = -1;
+            break;
+        }
+
+        snprintf(full_path, sizeof(full_path), "%s%c%s", dest_dir, COB_PATH_SEP, st.m_filename);
+
+        if (mz_zip_reader_is_file_a_directory(&zip, (mz_uint)i)) {
+            cob_mkdir_recursive(full_path);
+            continue;
+        }
+
+        /* Ensure the entry's parent directory exists (zip files aren't
+         * required to list directory entries before the files inside
+         * them -- many archivers omit them entirely). */
+        {
+            char parent[1200];
+            char *last_sep;
+            snprintf(parent, sizeof(parent), "%s", full_path);
+            last_sep = strrchr(parent, '/');
+#if defined(COB_OS_WINDOWS)
+            { char *bs = strrchr(parent, '\\'); if (bs && (!last_sep || bs > last_sep)) last_sep = bs; }
+#endif
+            if (last_sep) { *last_sep = '\0'; cob_mkdir_recursive(parent); }
+        }
+
+        if (!mz_zip_reader_extract_to_file(&zip, (mz_uint)i, full_path, 0)) {
+            fprintf(stderr, "farmer: error: failed to extract '%s' from '%s'\n", st.m_filename, zip_path);
+            rc = -1;
+            break;
+        }
+    }
+
+    mz_zip_reader_end(&zip);
+    return rc;
 }
 
 /* ---------------------------------------------------------------------

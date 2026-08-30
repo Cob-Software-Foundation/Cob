@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cob Language Documentation</title>
+<style>
+  :root {
+    --bg: #0d0f0c;
+    --panel: #15180f;
+    --corn: #f2c14e;
+    --corn-dim: #b8933a;
+    --leaf: #6a9955;
+    --text: #e8e6d9;
+    --text-dim: #9a978a;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  .layout { display: flex; max-width: 72rem; margin: 0 auto; }
+  nav {
+    width: 14rem;
+    flex-shrink: 0;
+    padding: 2.5rem 1rem 3rem 1.5rem;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  nav h1 { font-size: 1.3rem; color: var(--corn); margin: 0 0 0.15rem; }
+  nav .codename { color: var(--text-dim); font-family: var(--mono); font-size: 0.75rem; margin-bottom: 1.5rem; }
+  nav ul { list-style: none; margin: 0; padding: 0; }
+  nav li { margin: 0.15rem 0; }
+  nav a { color: var(--text-dim); text-decoration: none; font-size: 0.9rem; display: block; padding: 0.2rem 0; }
+  nav a:hover { color: var(--corn); }
+  nav .section-label {
+    color: var(--leaf); text-transform: uppercase; font-size: 0.72rem;
+    letter-spacing: 0.08em; margin: 1.2rem 0 0.3rem;
+  }
+  main { flex: 1; padding: 2.5rem 1.5rem 6rem; min-width: 0; }
+  section { margin-bottom: 3rem; scroll-margin-top: 1.5rem; }
+  h2 {
+    color: var(--corn);
+    font-size: 1.4rem;
+    border-bottom: 1px solid #2a2d20;
+    padding-bottom: 0.6rem;
+  }
+  h3 { color: var(--leaf); font-size: 1.05rem; margin-top: 2rem; font-family: var(--mono); }
+  p { color: var(--text); }
+  .dim { color: var(--text-dim); }
+  pre {
+    background: var(--panel);
+    border: 1px solid #2a2d20;
+    border-radius: 6px;
+    padding: 1rem 1.3rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.55;
+  }
+  code {
+    font-family: var(--mono);
+    background: var(--panel);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+  pre code { background: none; padding: 0; }
+  .kw { color: var(--corn-dim); }
+  .str { color: var(--leaf); }
+  .com { color: #5c5f4f; }
+  a { color: var(--corn); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 1px solid #2a2d20; font-size: 0.9rem; }
+  th { color: var(--leaf); font-weight: 600; }
+  .note {
+    border-left: 3px solid var(--corn-dim);
+    background: var(--panel);
+    padding: 0.8rem 1rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+  }
+  .flag { font-family: var(--mono); color: var(--corn); }
+</style>
+</head>
+<body>
+
+<div class="layout">
+<nav>
+  <h1>Cob</h1>
+  <div class="codename">Project Obsidian Falcon</div>
+
+  <div class="section-label">Guide</div>
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#toolchain">The toolchain</a></li>
+  </ul>
+
+  <div class="section-label">Language</div>
+  <ul>
+    <li><a href="#pop">pop</a></li>
+    <li><a href="#set">set</a></li>
+    <li><a href="#while">while</a></li>
+    <li><a href="#shuck">shuck</a></li>
+    <li><a href="#harvest-trash">harvest / trash</a></li>
+    <li><a href="#makecache">_MakeCache</a></li>
+  </ul>
+
+  <div class="section-label">Tools</div>
+  <ul>
+    <li><a href="#cob-interp">cob_interp</a></li>
+    <li><a href="#popcorn-comp">popcorn_comp</a></li>
+    <li><a href="#farmer">farmer</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<section id="overview">
+  <h2>Overview</h2>
+  <p>
+    Cob is a corn-themed hybrid language with Python-style,
+    indentation-and-colon block structure. A program is a sequence of
+    statements; blocks (currently only <code>while</code>) are opened
+    with a trailing <code>:</code> and their body is whatever's
+    indented further than the header line.
+  </p>
+  <pre><span class="kw">set</span> x = 5
+<span class="kw">while</span> x &gt; 0:
+    pop(<span class="str">"counting down"</span>)
+    <span class="kw">set</span> x = x - 1
+pop(<span class="str">"liftoff"</span>)</pre>
+  <p class="dim">Indentation is spaces only &mdash; tabs are a hard error.</p>
+</section>
+
+<section id="toolchain">
+  <h2>The toolchain</h2>
+  <table>
+    <tr><th>Tool</th><th>What it does</th></tr>
+    <tr><td><code>cob_interp</code></td><td>Interprets a .cob file directly, with a fast-boot .strawberry bytecode cache.</td></tr>
+    <tr><td><code>popcorn_comp</code></td><td>Compiles a .strawberry file to a real, standalone native executable.</td></tr>
+    <tr><td><code>farmer</code></td><td>The package manager &mdash; installs .cob libraries from a static registry.</td></tr>
+  </table>
+</section>
+
+<section id="pop">
+  <h2>Language reference</h2>
+
+  <h3>pop("text")</h3>
+  <p>Writes <code>text</code> to stdout followed by a newline.</p>
+  <pre>pop(<span class="str">"hello"</span>)          <span class="com"># hello</span>
+pop(<span class="str">"line one\nline two"</span>)</pre>
+  <p>Supported escapes inside the string literal: <code>\\</code>, <code>\"</code>, <code>\n</code>, <code>\t</code>.</p>
+
+  <h3 id="set">set &lt;name&gt; = &lt;expr&gt;</h3>
+  <p>
+    Assigns an integer to a variable, creating it if it doesn't exist
+    yet. Expressions support <code>+ - * /</code> with standard
+    precedence (<code>*</code>/<code>/</code> bind tighter than
+    <code>+</code>/<code>-</code>), variable references, and integer
+    literals.
+  </p>
+  <pre><span class="kw">set</span> a = 2 + 3 * 4     <span class="com"># 14</span>
+<span class="kw">set</span> b = a - 1</pre>
+
+  <h3 id="while">while &lt;condition&gt;:</h3>
+  <p>
+    Loops while the condition is true. A bare expression is a
+    truthiness test (nonzero); a comparison uses
+    <code>== != &lt; &gt; &lt;= &gt;=</code>. Loops nest to any depth
+    and are capped at 10,000,000 iterations as a safety net against
+    runaway/infinite programs.
+  </p>
+  <pre><span class="kw">while</span> a != 0:
+    pop(<span class="str">"tick"</span>)
+    <span class="kw">set</span> a = a - 1</pre>
+
+  <h3 id="shuck">shuck &lt;library_name&gt;</h3>
+  <p>
+    Loads <code>&lt;library_name&gt;.cob</code> (checking the current
+    directory first, then
+    <code>cob_modules/&lt;library_name&gt;/&lt;library_name&gt;.cob</code>
+    &mdash; the layout <a href="#farmer"><code>farmer harvest</code></a>
+    installs into) and splices its statements in at that point, like a
+    textual include. Circular imports and excessive nesting depth are
+    rejected with a clear error.
+  </p>
+  <pre><span class="kw">shuck</span> greeter
+pop(<span class="str">"back in the main program"</span>)</pre>
+
+  <h3 id="harvest-trash">harvest(&lt;bytes&gt;) / trash(&lt;variable&gt;)</h3>
+  <p>
+    Low-level manual memory: <code>harvest(n)</code> is an expression
+    that allocates <code>n</code> bytes and returns an opaque integer
+    handle; <code>trash(v)</code> frees the handle held in <code>v</code>.
+    Both require the <span class="flag">--no-gc</span> flag &mdash; a
+    program that uses either without it is refused outright by both
+    <code>cob_interp</code> and <code>popcorn_comp</code>, not silently
+    ignored.
+  </p>
+  <pre><span class="kw">set</span> p = harvest(64)
+trash(p)</pre>
+  <div class="note">
+    Handles are plain integers, not real pointers &mdash; Cob code
+    can't do pointer arithmetic with them, only pass them to
+    <code>trash()</code>. Double-free and unknown-handle use are
+    reported as warnings, not crashes.
+  </div>
+
+  <h3 id="makecache">_MakeCache = False</h3>
+  <p>
+    If the literal first line of a .cob file is
+    <code>_MakeCache = False</code> (whitespace/case-insensitive), the
+    .strawberry fast-boot cache is disabled entirely for that file
+    &mdash; neither read nor written.
+  </p>
+  <pre>_MakeCache = False
+pop(<span class="str">"always reparsed fresh"</span>)</pre>
+</section>
+
+<section id="cob-interp">
+  <h2>Tool reference</h2>
+
+  <h3>cob_interp</h3>
+  <pre>cob_interp &lt;file.cob&gt; [--no-cache] [--no-gc]</pre>
+  <table>
+    <tr><td><span class="flag">--no-cache</span></td><td>Skip reading/writing the .strawberry cache for this run.</td></tr>
+    <tr><td><span class="flag">--no-gc</span></td><td>Unlock <code>harvest()</code>/<code>trash()</code>.</td></tr>
+  </table>
+</section>
+
+<section id="popcorn-comp">
+  <h3 id="popcorn-comp-h">popcorn_comp</h3>
+  <pre>popcorn_comp &lt;file.strawberry&gt; -o &lt;output&gt; [--no-gc] [--cc &lt;compiler&gt;] [--emit-c &lt;path.c&gt;]</pre>
+  <p>
+    Transpiles the bytecode to plain C, then spawns a real C compiler
+    to produce a native executable. Default backend is
+    <a href="https://ziglang.org/">Zig</a>'s <code>zig cc</code> &mdash;
+    a Clang-based drop-in C compiler that bundles libc/CRT files for
+    essentially every target in one install, which is what makes
+    <code>CobOS</code>/<code>CobArch</code> cross-compiling a plain
+    <code>-target</code> flag instead of needing a separately
+    installed cross-toolchain per platform.
+  </p>
+  <p>Compiler is resolved in this order:</p>
+  <table>
+    <tr><td><span class="flag">--cc &lt;path&gt;</span></td><td>Explicit override, always wins.</td></tr>
+    <tr><td><code>$CobCC</code></td><td>Environment variable override.</td></tr>
+    <tr><td><code>$CobOS</code> / <code>$CobArch</code></td><td>Looked up in a table of Zig target triples.</td></tr>
+    <tr><td><code>zig cc</code></td><td>Default: native compile, Zig auto-detects the host.</td></tr>
+  </table>
+  <pre>CobOS=windows CobArch=amd64 popcorn_comp prog.strawberry -o prog.exe
+<span class="com"># -&gt; spawns: zig cc -target x86_64-windows-gnu ...</span></pre>
+  <div class="note">
+    Linux targets default to <b>musl</b> libc rather than glibc,
+    producing fully static binaries with no runtime libc dependency.
+  </div>
+</section>
+
+<section id="farmer">
+  <h3 id="farmer-h">farmer</h3>
+  <pre>farmer harvest &lt;package&gt;</pre>
+  <p>
+    Fetches <code>{registry}/api/v1/packages/&lt;package&gt;.json</code>,
+    verifies the metadata's <code>name</code> field matches what was
+    requested, downloads the package zip, verifies its
+    <code>sha256</code> if one was provided, and unzips it into
+    <code>cob_modules/&lt;package&gt;/</code> &mdash; ready for
+    <a href="#shuck"><code>shuck &lt;package&gt;</code></a>.
+  </p>
+  <table>
+    <tr><td><code>$COB_FARMER_BASE_URL</code></td><td>Override the registry base URL.</td></tr>
+  </table>
+  <p>
+    The registry itself lives at
+    <a href="https://github.com/pixel-pulse-labs/cpi">pixel-pulse-labs/cpi</a>,
+    served for free via GitHub Pages &mdash; no server, just static
+    JSON files.
+  </p>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>

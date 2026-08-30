@@ -48,6 +48,14 @@ jobs:
   build:
     needs: test
     runs-on: ${{ matrix.runner }}
+    env:
+      # Bundled into each release so popcorn_comp works standalone with
+      # no separate Zig install -- see the "Download and bundle Zig"
+      # step below and src/popcorn_comp.c's find_bundled_zig_cc().
+      # Bump this to pick up newer Zig releases; verify the exact
+      # filenames still match https://ziglang.org/download/ first, as
+      # Zig's release naming has changed between versions before.
+      ZIG_VERSION: "0.16.0"
     permissions:
       contents: read
       id-token: write
@@ -65,7 +73,11 @@ jobs:
             apt_pkg: gcc-mingw-w64-x86-64
             output_name: cob.exe
             farmer_output_name: farmer.exe
+            popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-amd64
+            zig_target: x86_64-windows
+            zig_ext: zip
+
           - goos: windows
             goarch: '386'
             runner: ubuntu-latest
@@ -74,7 +86,11 @@ jobs:
             apt_pkg: gcc-mingw-w64-i686
             output_name: cob.exe
             farmer_output_name: farmer.exe
+            popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-386
+            zig_target: x86-windows
+            zig_ext: zip
+
           - goos: windows
             goarch: arm64
             runner: ubuntu-latest
@@ -82,17 +98,15 @@ jobs:
             cc: aarch64-w64-mingw32-clang
             output_name: cob.exe
             farmer_output_name: farmer.exe
+            popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-arm64
-          - goos: windows
-            goarch: arm
-            runner: ubuntu-latest
-            toolchain: llvm-mingw
-            cc: armv7-w64-mingw32-clang
-            output_name: cob.exe
-            farmer_output_name: farmer.exe
-            archive_name: cob-windows-arm32
+          # windows/arm (32-bit ARM) intentionally not supported -- cut
+          # per project decision.
 
           # ---------------- Linux ----------------
+            zig_target: aarch64-windows
+            zig_ext: zip
+
           - goos: linux
             goarch: amd64
             runner: ubuntu-latest
@@ -100,7 +114,11 @@ jobs:
             cc: gcc
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-linux-amd64
+            zig_target: x86_64-linux
+            zig_ext: tarxz
+
           - goos: linux
             goarch: '386'
             runner: ubuntu-latest
@@ -110,7 +128,11 @@ jobs:
             apt_pkg: gcc-multilib
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-linux-386
+            zig_target: x86-linux
+            zig_ext: tarxz
+
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
@@ -119,7 +141,11 @@ jobs:
             apt_pkg: gcc-aarch64-linux-gnu
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm64
+            zig_target: aarch64-linux
+            zig_ext: tarxz
+
           - goos: linux
             goarch: arm
             runner: ubuntu-latest
@@ -128,9 +154,13 @@ jobs:
             apt_pkg: gcc-arm-linux-gnueabihf
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm32
 
           # ---------------- macOS ----------------
+            zig_target: arm-linux
+            zig_ext: tarxz
+
           - goos: darwin
             goarch: arm64
             runner: macos-latest
@@ -139,7 +169,11 @@ jobs:
             cflags: "-arch arm64"
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-darwin-arm64
+            zig_target: aarch64-macos
+            zig_ext: tarxz
+
           - goos: darwin
             goarch: amd64
             runner: macos-latest
@@ -148,7 +182,10 @@ jobs:
             cflags: "-arch x86_64"
             output_name: cob
             farmer_output_name: farmer
+            popcorn_output_name: popcorn_comp
             archive_name: cob-darwin-amd64
+            zig_target: x86_64-macos
+            zig_ext: tarxz
 
     steps:
     - uses: actions/checkout@v6
@@ -167,7 +204,7 @@ jobs:
       if: matrix.toolchain == 'cross'
       run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_pkg }}
 
-    - name: Install llvm-mingw (Windows arm64 / arm32)
+    - name: Install llvm-mingw (Windows arm64)
       if: matrix.toolchain == 'llvm-mingw'
       run: |
         LLVM_MINGW_VERSION="20260421"
@@ -177,53 +214,39 @@ jobs:
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
-    - name: Compile cob and farmer
+    - name: Compile cob, farmer, and popcorn_comp
       shell: bash
       run: |
         set -euo pipefail
         mkdir -p dist
-        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-          -Iinclude \
-          -o "dist/${{ matrix.output_name }}" \
-          src/file_io.c src/cob_interp.c
-        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-          -Iinclude \
-          -o "dist/${{ matrix.farmer_output_name }}" \
-          src/file_io.c src/farmer.c
-        ls -la "dist/${{ matrix.output_name }}" "dist/${{ matrix.farmer_output_name }}"
+        for target in cob_interp:${{ matrix.output_name }} farmer:${{ matrix.farmer_output_name }} popcorn_comp:${{ matrix.popcorn_output_name }}; do
+          src_name="${target%%:*}"
+          out_name="${target##*:}"
+          ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
+            -Iinclude \
+            -o "dist/${out_name}" \
+            src/file_io.c "src/${src_name}.c"
+        done
+        ls -la dist/
 
-    # -----------------------------------------------------------------
-    # popcorn_comp -- statically links src/tcc/libtcc.c, which needs a
-    # matching libtcc1.a (TCC's own runtime archive) built for the SAME
-    # target. We've only proven that build (./configure && make
-    # libtcc1.a) end-to-end for native Linux so far, so that's the only
-    # matrix entry this runs for right now rather than silently
-    # skipping or faking cross-target support. Expanding this to the
-    # other 9 targets is real follow-up work: mingw/llvm-mingw targets
-    # need TCC's win32 runtime libs (src/tcc/win32/lib), and macOS
-    # needs its own libtcc1.a built per-arch.
-    # -----------------------------------------------------------------
-    - name: Build TCC runtime (libtcc1.a) for popcorn_comp
-      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-      run: |
-        cd src/tcc
-        sh ./configure --prefix=/tmp/tccinstall
-        make libtcc1.a
+    # popcorn_comp itself has zero build-time dependency on any C
+    # toolchain beyond the one compiling it -- it transpiles .strawberry
+    # to C and spawns a real compiler AT RUNTIME (see its file-header
+    # comment for the full design and honesty notes on cross-compiler
+    # bundling). We can only actually *run* the smoke test where the
+    # resulting popcorn_comp binary can execute, i.e. natively.
+    # popcorn_comp defaults to spawning `zig cc` when no --cc/CobOS/CobArch
+    # override is given (see src/popcorn_comp.c's header comment) -- the
+    # smoke test below exercises exactly that default path, so Zig needs
+    # to actually be installed here for it to mean anything.
+    - name: Install Zig (for popcorn_comp's default compiler backend)
+      if: matrix.toolchain == 'native'
+      uses: mlugg/setup-zig@v2
+      with:
+        version: latest
 
-    - name: Compile popcorn_comp (native Linux amd64 only, see comment above)
-      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-      shell: bash
-      run: |
-        set -euo pipefail
-        gcc -std=c99 -O2 -Wall -Wextra -Iinclude -Isrc/tcc \
-          -DPOPCORN_TCC_RUNTIME_DIR='"runtime"' \
-          -o dist/popcorn_comp \
-          src/file_io.c src/popcorn_comp.c src/tcc/libtcc.c \
-          -ldl -lpthread -lm
-        ls -la dist/popcorn_comp
-
-    - name: Smoke test popcorn_comp end-to-end
-      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+    - name: Smoke test popcorn_comp end-to-end (native only)
+      if: matrix.toolchain == 'native'
       shell: bash
       run: |
         set -euo pipefail
@@ -236,16 +259,50 @@ jobs:
         pop("liftoff")
         EOF
         ./cob smoke.cob > interp_out.txt
-        # TCC needs its own include/ dir alongside libtcc1.a to resolve
-        # {B}/include (see tcc.h's CONFIG_TCC_SYSINCLUDEPATHS) -- the
-        # real packaged runtime/ folder isn't assembled until the
-        # packaging step below, so point straight at the checked-out
-        # src/tcc tree for this smoke test via the env-var override.
-        POPCORN_TCC_RUNTIME_DIR="$GITHUB_WORKSPACE/src/tcc" \
-          ./popcorn_comp smoke.strawberry -o smoke_native
+        ./popcorn_comp smoke.strawberry -o smoke_native
         ./smoke_native > compiled_out.txt
         diff interp_out.txt compiled_out.txt && echo "popcorn_comp output matches cob_interp: OK"
         rm -f smoke.cob smoke.strawberry smoke_native interp_out.txt compiled_out.txt
+
+    # -----------------------------------------------------------------
+    # Download and bundle the real, official, host-runnable Zig
+    # release for THIS target platform. This is not the toolchain used
+    # to cross-build the Cob tools above (those run on the ubuntu-latest
+    # runner) -- it's a copy of Zig that will actually RUN on the end
+    # user's machine once they unzip this release, since popcorn_comp
+    # defaults to spawning a bundled zig/zig(.exe) next to itself
+    # before falling back to a system-wide Zig install (see
+    # find_bundled_zig_cc() in src/popcorn_comp.c). Verified real
+    # filenames against https://ziglang.org/download/ -- if this ever
+    # 404s, that naming scheme has changed upstream and needs rechecking.
+    # -----------------------------------------------------------------
+    - name: Download and bundle Zig for popcorn_comp
+      shell: bash
+      run: |
+        set -euo pipefail
+        ZIG_BASENAME="zig-${{ matrix.zig_target }}-${ZIG_VERSION}"
+        if [ "${{ matrix.zig_ext }}" = "zip" ]; then
+          ZIG_FILE="${ZIG_BASENAME}.zip"
+        else
+          ZIG_FILE="${ZIG_BASENAME}.tar.xz"
+        fi
+        ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_FILE}"
+        echo "Fetching $ZIG_URL"
+        curl -fsSL -o "zig_download.${{ matrix.zig_ext }}" "$ZIG_URL"
+
+        mkdir -p zig_extracted
+        if [ "${{ matrix.zig_ext }}" = "zip" ]; then
+          unzip -q "zig_download.zip" -d zig_extracted
+        else
+          tar xf "zig_download.tar.xz" -C zig_extracted
+        fi
+
+        mkdir -p "staging/${{ matrix.archive_name }}/zig"
+        # The archive extracts to a single top-level "zig-<target>-<ver>/"
+        # directory -- move its contents (the zig binary plus the lib/
+        # folder it needs at runtime) into the release's zig/ folder.
+        mv "zig_extracted/${ZIG_BASENAME}"/* "staging/${{ matrix.archive_name }}/zig/"
+        rm -rf zig_download.${{ matrix.zig_ext }} zig_extracted
 
     - name: Package binary and licenses into zip
       shell: bash
@@ -253,26 +310,11 @@ jobs:
         mkdir -p staging/${{ matrix.archive_name }}
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
         cp dist/${{ matrix.farmer_output_name }} staging/${{ matrix.archive_name }}/
-        if [ -f "dist/popcorn_comp" ]; then
-          cp dist/popcorn_comp staging/${{ matrix.archive_name }}/
-          # popcorn_comp looks for runtime/libtcc1.a and runtime/include/
-          # next to itself by default (see POPCORN_TCC_RUNTIME_DIR in
-          # src/popcorn_comp.c) -- bundle that folder so a downloaded
-          # release works standalone, with no source checkout needed.
-          mkdir -p staging/${{ matrix.archive_name }}/runtime/include
-          cp src/tcc/libtcc1.a staging/${{ matrix.archive_name }}/runtime/
-          cp -r src/tcc/include/* staging/${{ matrix.archive_name }}/runtime/include/
-        fi
-        
+        cp dist/${{ matrix.popcorn_output_name }} staging/${{ matrix.archive_name }}/
+
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
-        
-        # Copy src/tcc/COPYING license file (TCC is LGPL-licensed; its
-        # license text must travel with any binary that links it in)
-        if [ -f "src/tcc/COPYING" ]; then
-          cp "src/tcc/COPYING" staging/${{ matrix.archive_name }}/TCC_COPYING
-        fi
-        
+
         cd staging
         zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
         cd ..

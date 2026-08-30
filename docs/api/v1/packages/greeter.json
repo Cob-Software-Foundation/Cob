@@ -1,0 +1,7 @@
+{
+  "name": "greeter",
+  "version": "1.0.0",
+  "description": "A tiny example Cob package -- prints a greeting and exposes a greetings_given variable.",
+  "zip_url": "https://pixel-pulse-labs.github.io/cpi/packages/greeter-1.0.0.zip",
+  "sha256": "1dfa11e4edea43e23305eda3eb6ee4207c6364e6ee85a45172e288b407584bde"
+}

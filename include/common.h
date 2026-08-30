@@ -176,7 +176,7 @@ static inline void cob_print_license(void) {
  * runtime via the COB_FARMER_BASE_URL environment variable (handy for
  * local testing against a dev server, or pointing at a private mirror
  * without rebuilding). */
-#define COB_FARMER_DEFAULT_BASE_URL "https://pixel-pulse-labs.github.io/Cob"
+#define COB_FARMER_DEFAULT_BASE_URL "https://pixel-pulse-labs.github.io/cpi"
 #define COB_FARMER_BASE_URL_ENV     "COB_FARMER_BASE_URL"
 
 /* Local workspace folder farmer installs packages into, and shuck
