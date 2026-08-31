@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Community — Cob</title>
+<meta name="description" content="Get help, report issues, publish a package, or contribute to Cob.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .cgrid{display:grid; grid-template-columns:repeat(2, 1fr); gap:20px;}
+  .ccard{background:var(--white); border:1px solid var(--line); border-radius:10px; padding:28px 26px;}
+  .ccard .cicon{width:42px; height:42px; border-radius:9px; background:var(--silk); display:flex; align-items:center; justify-content:center; font-size:19px; margin-bottom:16px;}
+  .ccard h3{font-size:18px; margin-bottom:8px;}
+  .ccard p{margin:0 0 16px; font-size:14.5px; color:rgba(28,26,15,0.7);}
+  .ccard a.go{font-size:14px; font-weight:600; color:var(--husk-deep); text-decoration:none; border-bottom:1px solid rgba(35,64,20,0.3);}
+  .ccard a.go:hover{border-bottom-color:var(--husk-deep);}
+
+  .registry-panel{
+    background:var(--husk); color:var(--white); border-radius:10px;
+    padding:34px 32px; display:grid; grid-template-columns:1.2fr 1fr; gap:32px; align-items:center;
+  }
+  .registry-panel h2{color:var(--white); font-size:24px;}
+  .registry-panel p{color:rgba(255,253,246,0.8); font-size:15px; margin:14px 0 0; max-width:44ch;}
+  .registry-code{
+    background:var(--husk-deep); border-radius:8px; padding:18px 20px;
+    font-family:'IBM Plex Mono', monospace; font-size:13.5px; color:rgba(255,253,246,0.9); line-height:1.8;
+  }
+  .registry-code .c1{color:rgba(255,253,246,0.4);}
+
+  .guidelines{max-width:64ch;}
+  .guidelines ul{padding-left:20px; margin:16px 0 0;}
+  .guidelines li{font-size:15px; color:rgba(28,26,15,0.75); margin-bottom:10px;}
+
+  @media (max-width: 880px){
+    .cgrid{grid-template-columns:1fr;}
+    .registry-panel{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="nav">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">C</span>
+      <span class="brand-word">Cob</span>
+    </a>
+    <nav class="links">
+      <a href="about.html">About</a>
+      <a href="download.html">Downloads</a>
+      <a href="https://docs.cob.pixel-pulse.work.gd/">Docs</a>
+      <a href="community.html" aria-current="page">Community</a>
+      <a class="nav-cta" href="download.html">Get Cob</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="page-head">
+    <div class="wrap">
+      <div class="eyebrow-plain">Community</div>
+      <h1>Built in the open, on GitHub.</h1>
+      <p class="lede">Report a bug, publish a library, or send a fix — everything happens in the same two repositories.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="cgrid">
+      <div class="ccard">
+        <div class="cicon">⚑</div>
+        <h3>Report an issue</h3>
+        <p>Found a bug in cob_interp, popcorn_comp, or farmer? File it with a minimal repro — a short .cob file and the exact command reproduces most issues fastest.</p>
+        <a class="go" href="https://github.com/pixel-pulse-labs/Cob/issues">Open an issue →</a>
+      </div>
+      <div class="ccard">
+        <div class="cicon">⌥</div>
+        <h3>Contribute a fix</h3>
+        <p>The toolchain is plain C99, built with a standard Makefile. Fork the repo, branch, and open a pull request — CI runs the full 9-target build matrix on every PR.</p>
+        <a class="go" href="https://github.com/pixel-pulse-labs/Cob">View the repository →</a>
+      </div>
+      <div class="ccard">
+        <div class="cicon">⚙</div>
+        <h3>Read the docs</h3>
+        <p>Full language reference — every keyword, every flag on all three tools — lives on its own subdomain, kept separate from the marketing site.</p>
+        <a class="go" href="https://docs.cob.pixel-pulse.work.gd/">docs.cob.pixel-pulse.work.gd →</a>
+      </div>
+      <div class="ccard">
+        <div class="cicon">⛨</div>
+        <h3>Report a security issue</h3>
+        <p>Cob handles untrusted zip archives in farmer and generates shell commands in popcorn_comp — if you find a way to break either safely, please report it privately first.</p>
+        <a class="go" href="https://github.com/pixel-pulse-labs/Cob/blob/main/.github/SECURITY.md">Security policy →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="registry-panel">
+      <div>
+        <h2>Publish a library</h2>
+        <p>The package registry lives in its own repository, <span class="mono">pixel-pulse-labs/cpi</span>, served for free via GitHub Pages — static JSON files, no server to run. Add your package's metadata there and it's installable with a single command.</p>
+      </div>
+      <div class="registry-code">
+<span class="c1"># anyone can install what you publish</span><br>
+$ farmer harvest your-library<br>
+<br>
+<span class="c1"># then, in a .cob file</span><br>
+shuck your-library
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="section-head">
+      <h2>Before you open a PR</h2>
+    </div>
+    <div class="guidelines">
+      <p>A few things that make review faster, based on how the codebase is actually structured today:</p>
+      <ul>
+        <li>Keep changes scoped to one tool where possible — cob_interp, popcorn_comp, and farmer are deliberately independent, and a PR touching all three is harder to review than three small ones.</li>
+        <li>Compile clean with <code class="mono">gcc -std=c99 -Wall -Wextra</code> before opening the PR — this is the bar the maintainers hold their own changes to.</li>
+        <li>If you're touching anything that builds a shell command string (popcorn_comp's compiler spawning is the current example), test it on Windows specifically — that's where quoting bugs actually surface.</li>
+        <li>State plainly what you did and didn't verify, the way the project's own release notes do. "Compiles clean" and "tested end-to-end on a real machine" are different claims — say which one is true.</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">Cob</div>
+        <p class="foot-brand-sub">A corn-threshed language: an interpreter, a native compiler, and a package manager, built by Pixel Pulse Labs.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="download.html">Downloads</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.work.gd/">Documentation</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <ul>
+          <li><a href="community.html">Get involved</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob">GitHub</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/cpi">Package registry</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Pixel Pulse Labs.</span>
+      <span>cob.pixel-pulse.work.gd</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
