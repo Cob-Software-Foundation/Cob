@@ -302,13 +302,13 @@ jobs:
         fi
         ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_FILE}"
         echo "Fetching $ZIG_URL"
-        curl -fsSL -o "zig_download.${{ matrix.zig_ext }}" "$ZIG_URL"
+        curl -fsSL -o "$ZIG_FILE" "$ZIG_URL"
 
         mkdir -p zig_extracted
         if [ "${{ matrix.zig_ext }}" = "zip" ]; then
-          unzip -q "zig_download.zip" -d zig_extracted
+          unzip -q "$ZIG_FILE" -d zig_extracted
         else
-          tar xf "zig_download.tar.xz" -C zig_extracted
+          tar xf "$ZIG_FILE" -C zig_extracted
         fi
 
         mkdir -p "staging/${{ matrix.archive_name }}/zig"
@@ -316,7 +316,7 @@ jobs:
         # directory -- move its contents (the zig binary plus the lib/
         # folder it needs at runtime) into the release's zig/ folder.
         mv "zig_extracted/${ZIG_BASENAME}"/* "staging/${{ matrix.archive_name }}/zig/"
-        rm -rf zig_download.${{ matrix.zig_ext }} zig_extracted
+        rm -rf "$ZIG_FILE" zig_extracted
 
     - name: Package binary and licenses into zip
       shell: bash
