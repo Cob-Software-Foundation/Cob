@@ -701,7 +701,31 @@ static int cob_spawn_compile(const char *compiler, const char *in_path, const ch
     free(q_in); free(q_out);
 
     fprintf(stderr, "[popcorn_comp] spawning: %s\n", cmd);
+#if defined(_WIN32)
+    /* cmd.exe strips only the first and last '"' of a command line that
+     * starts with a quote, not matching pairs -- if there's more than one
+     * quoted token (e.g. a quoted compiler path plus quoted -o/in args),
+     * that corrupts the line. Wrapping the whole thing in one more pair
+     * of quotes is the standard workaround. Only triggers when the
+     * compiler string itself is pre-quoted, i.e. the bundled-Zig
+     * auto-resolve path (find_bundled_zig_cc); --cc/CobCC strings are
+     * untouched. */
+    if (cmd[0] == '"') {
+        size_t wrapped_len = strlen(cmd) + 3;
+        char *wrapped = (char *)malloc(wrapped_len);
+        if (wrapped) {
+            snprintf(wrapped, wrapped_len, "\"%s\"", cmd);
+            rc = system(wrapped);
+            free(wrapped);
+        } else {
+            rc = system(cmd);
+        }
+    } else {
+        rc = system(cmd);
+    }
+#else
     rc = system(cmd);
+#endif
     if (rc != 0) return -1;
     if (!cob_file_exists(out_path)) return -1;
     return 0;

@@ -1,3 +1,35 @@
+# Cob Language v0.0.3-bug-fix-1
+
+## Fixed
+
+### `popcorn_comp`: Windows `system()` quoting bug in bundled-Zig auto-resolve
+
+`find_bundled_zig_cc()` returns a pre-quoted compiler string (`"path" cc`).
+`cob_spawn_compile()` then appends further quoted arguments (`-o "out" "in"`),
+producing a command line with multiple separate quoted tokens that starts
+with a quote.
+
+On Windows, `system()` hands this to `cmd.exe /c <string>`. `cmd.exe` strips
+only the first and last `"` of a command line that starts with a quote —
+not matching pairs — which corrupts multi-token quoted strings like this
+one. This meant auto-resolving a bundled `zig/` folder next to the binary
+failed with `'...' is not recognized as an internal or external command`,
+even though the equivalent compiler invocation worked fine when passed
+explicitly via `--cc` (which isn't pre-quoted).
+
+Fix: on Windows, if the built command starts with a quote, wrap the whole
+command in one more pair of quotes before calling `system()` — the standard
+workaround for this `cmd.exe` behavior. `--cc`/`$CobCC` paths are untouched.
+
+Only `popcorn_comp` (`src/popcorn_comp.c`) changed in this release; `cob_interp`
+and `farmer` are unchanged from v0.0.3.
+
+**Not yet verified:** on a real Windows machine with a genuine bundled Zig
+folder. Verified so far: compiles clean, no regression to the `--cc`/`$CobCC`
+explicit-compiler path, which was already unaffected by the bug.
+
+---
+
 # Cob Language v0.0.3 — Project Obsidian Falcon
 
 A corn-themed hybrid language with Python-style indentation, an interpreter, a native compiler, and a package manager.
