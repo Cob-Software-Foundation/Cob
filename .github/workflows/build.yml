@@ -100,13 +100,10 @@ jobs:
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-arm64
-          # windows/arm (32-bit ARM) intentionally not supported -- cut
-          # per project decision.
-
-          # ---------------- Linux ----------------
             zig_target: aarch64-windows
             zig_ext: zip
 
+          # ---------------- Linux ----------------
           - goos: linux
             goarch: amd64
             runner: ubuntu-latest
@@ -156,11 +153,10 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm32
-
-          # ---------------- macOS ----------------
             zig_target: arm-linux
             zig_ext: tarxz
 
+          # ---------------- macOS ----------------
           - goos: darwin
             goarch: arm64
             runner: macos-latest
@@ -243,16 +239,6 @@ jobs:
 
         ls -la dist/
 
-    # popcorn_comp itself has zero build-time dependency on any C
-    # toolchain beyond the one compiling it -- it transpiles .strawberry
-    # to C and spawns a real compiler AT RUNTIME (see its file-header
-    # comment for the full design and honesty notes on cross-compiler
-    # bundling). We can only actually *run* the smoke test where the
-    # resulting popcorn_comp binary can execute, i.e. natively.
-    # popcorn_comp defaults to spawning `zig cc` when no --cc/CobOS/CobArch
-    # override is given (see src/popcorn_comp.c's header comment) -- the
-    # smoke test below exercises exactly that default path, so Zig needs
-    # to actually be installed here for it to mean anything.
     - name: Install Zig (for popcorn_comp's default compiler backend)
       if: matrix.toolchain == 'native'
       uses: mlugg/setup-zig@v2
@@ -278,18 +264,6 @@ jobs:
         diff interp_out.txt compiled_out.txt && echo "popcorn_comp output matches cob_interp: OK"
         rm -f smoke.cob smoke.strawberry smoke_native interp_out.txt compiled_out.txt
 
-    # -----------------------------------------------------------------
-    # Download and bundle the real, official, host-runnable Zig
-    # release for THIS target platform. This is not the toolchain used
-    # to cross-build the Cob tools above (those run on the ubuntu-latest
-    # runner) -- it's a copy of Zig that will actually RUN on the end
-    # user's machine once they unzip this release, since popcorn_comp
-    # defaults to spawning a bundled zig/zig(.exe) next to itself
-    # before falling back to a system-wide Zig install (see
-    # find_bundled_zig_cc() in src/popcorn_comp.c). Verified real
-    # filenames against https://ziglang.org/download/ -- if this ever
-    # 404s, that naming scheme has changed upstream and needs rechecking.
-    # -----------------------------------------------------------------
     - name: Download and bundle Zig for popcorn_comp
       shell: bash
       run: |
@@ -312,9 +286,6 @@ jobs:
         fi
 
         mkdir -p "staging/${{ matrix.archive_name }}/zig"
-        # The archive extracts to a single top-level "zig-<target>-<ver>/"
-        # directory -- move its contents (the zig binary plus the lib/
-        # folder it needs at runtime) into the release's zig/ folder.
         mv "zig_extracted/${ZIG_BASENAME}"/* "staging/${{ matrix.archive_name }}/zig/"
         rm -rf "$ZIG_FILE" zig_extracted
 
@@ -329,9 +300,12 @@ jobs:
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
 
-        cd staging
-        zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
-        cd ..
+    - name: Adjust file permissions for Linux and macOS
+      if: matrix.goos == 'linux' || matrix.goos == 'darwin'
+      shell: bash
+      run: |
+        cd staging/${{ matrix.archive_name }}
+        chmod -x *
 
     - name: Attest Build Provenance
       uses: actions/attest-build-provenance@v4.2.2
