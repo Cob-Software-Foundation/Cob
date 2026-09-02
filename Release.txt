@@ -1,3 +1,97 @@
+# Cob Language v0.0.3-bug-fix-3
+
+## Changed
+
+### Project moved from `pixel-pulse-labs` to `Cob-Software-Foundation` on GitHub
+
+All three repositories (`Cob`, `cpi`, and the new `Cob-Docs`) now live
+under the `Cob-Software-Foundation` GitHub org instead of
+`pixel-pulse-labs`. This release updates every reference that was
+hardcoded to the old org:
+
+- **`include/common.h`**: `COB_REPO_URL` and the file header comment
+  now point to `https://github.com/Cob-Software-Foundation/Cob`.
+- **`docs/index.html`** and **`Release.txt`**: GitHub/license links
+  updated to the new org. (Historical mentions of the old
+  `pixel-pulse-labs.github.io/cpi` URL inside the bug-fix-2 changelog
+  entry above were left as-is deliberately — that's a factual record
+  of what the URL used to be, not a live link.)
+
+`COB_FARMER_DEFAULT_BASE_URL` itself (`cpi.cob.pixel-pulse.work.gd`)
+was already unaffected by the org rename, since it's a custom domain,
+not a `github.io` URL — no change needed there, still correct from
+bug-fix-2.
+
+### Also fixed while in there: `cpi` registry's `zip_url` fields were still on the old `github.io` URL
+
+Separately from the org rename, `cpi`'s own package metadata
+(`docs/api/v1/packages/*.json`) had `zip_url` values pointing at
+`https://pixel-pulse-labs.github.io/cpi/packages/...` — the raw
+GitHub Pages URL from *before* the custom domain was set up in
+bug-fix-2. `farmer`'s own default base URL got updated to the custom
+domain then, but the registry's self-referencing zip URLs were missed.
+Updated both `greeter.json` and `math.json` to
+`https://cpi.cob.pixel-pulse.work.gd/packages/...`, matching the
+domain `farmer` actually resolves against by default.
+
+**Verified this release:**
+- Rebuilt `farmer` from the patched source — compiles clean.
+- Re-ran the full local harvest test (local HTTP server standing in
+  for the registry, real `farmer` binary, real miniz extraction): metadata
+  fetch, sha256 verification, and extraction into `cob_modules/math/`
+  all passed against the corrected `zip_url`.
+- Grepped the full source tree, both doc sites, and both published
+  Cob packages (`math`, `seed`) for any remaining `pixel-pulse-labs`
+  reference — none left outside the deliberate historical changelog
+  mentions noted above.
+
+**Not verified:** an actual `farmer harvest` against the live
+`cpi.cob.pixel-pulse.work.gd` domain with the corrected `zip_url` from
+a real machine — this environment's network doesn't reach that domain.
+The local-server test above exercises the identical code path, but a
+real end-to-end run on the live domain is still worth doing before
+calling this fully verified.
+
+---
+
+# Cob Language v0.0.3-bug-fix-2
+
+## Changed
+
+### `farmer`: default package registry URL updated to the custom domain
+
+`COB_FARMER_DEFAULT_BASE_URL` (`include/common.h`) now points at
+`https://cpi.cob.pixel-pulse.work.gd` instead of the previous
+`https://pixel-pulse-labs.github.io/cpi`.
+
+The `cpi` registry itself hasn't moved — it's still served from the
+same GitHub Pages site (`Cob-Software-Foundation/cpi`, `docs/` on `main`).
+Only the domain in front of it changed, via a `CNAME` record on that
+repo. This release just updates `farmer`'s compiled-in default so a
+plain `farmer harvest <package>` resolves against the new domain
+without needing `$COB_FARMER_BASE_URL` set manually.
+
+If you were already overriding the URL with
+`$COB_FARMER_BASE_URL=https://pixel-pulse-labs.github.io/cpi`, that
+still works — GitHub Pages doesn't stop serving the old
+`github.io` URL just because a custom domain was added, it's just no
+longer the default `farmer` uses.
+
+No other change. `cob_interp` and `popcorn_comp` are unchanged from
+v0.0.3-bug-fix-1.
+
+**Verified this release:** grepped the full source tree for any other
+reference to the old `github.io` URL — none found; `common.h` was the
+only place it was hardcoded.
+
+**Not verified:** an actual `farmer harvest` run against the live
+`cpi.cob.pixel-pulse.work.gd` domain from a real machine outside this
+environment (this environment's network egress doesn't reach that
+domain to test directly). The URL was confirmed correct by inspection
+of the compiled-in default, not by an end-to-end network fetch.
+
+---
+
 # Cob Language v0.0.3-bug-fix-1
 
 ## Fixed
@@ -57,7 +151,7 @@ CobOS=windows CobArch=amd64 popcorn_comp prog.strawberry -o prog.exe
 
 - Every extracted archive entry's path is checked against **zip-slip path traversal** before anything is written to disk. A malicious `../../../../etc/whatever` entry is rejected outright, with nothing written outside the destination directory.
 - Nested directories inside a package zip are now handled correctly regardless of whether the archive includes explicit directory entries.
-- The package registry now lives in its own dedicated repo, [`pixel-pulse-labs/cpi`](https://github.com/pixel-pulse-labs/cpi) — `farmer`'s default base URL was updated to match. Override anytime with `$COB_FARMER_BASE_URL`.
+- The package registry now lives in its own dedicated repo, [`Cob-Software-Foundation/cpi`](https://github.com/Cob-Software-Foundation/cpi) — `farmer`'s default base URL was updated to match. Override anytime with `$COB_FARMER_BASE_URL`.
 
 ### Documentation site
 

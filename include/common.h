@@ -4,7 +4,7 @@
  * Project:      Cob Language Toolchain            (file ext: .cob)
  * Codename:     Project Obsidian Falcon
  * Author:       Pixel-Pulse
- * Repository:   https://github.com/pixel-pulse-labs/Cob
+ * Repository:   https://github.com/Cob-Software-Foundation/Cob
  *
  * This header is included by every Cob tool (cob_interp, popcorn_comp,
  * farmer). It centralizes:
@@ -42,7 +42,7 @@ extern "C" {
 #define COB_VERSION_PATCH       2
 #define COB_VERSION_STRING      "0.0.2"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
-#define COB_REPO_URL            "https://github.com/pixel-pulse-labs/Cob"
+#define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
 /* Hidden --version banner. Every Cob CLI tool (cob_interp, popcorn_comp,
  * farmer) should call cob_check_hidden_version_flag(argc, argv) very
@@ -176,7 +176,7 @@ static inline void cob_print_license(void) {
  * runtime via the COB_FARMER_BASE_URL environment variable (handy for
  * local testing against a dev server, or pointing at a private mirror
  * without rebuilding). */
-#define COB_FARMER_DEFAULT_BASE_URL "https://pixel-pulse-labs.github.io/cpi"
+#define COB_FARMER_DEFAULT_BASE_URL "https://cpi.cob.pixel-pulse.work.gd"
 #define COB_FARMER_BASE_URL_ENV     "COB_FARMER_BASE_URL"
 
 /* Local workspace folder farmer installs packages into, and shuck
