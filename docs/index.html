@@ -34,11 +34,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.3-bug-fix-1 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.3-bug-fix-2 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.3-bug-fix-1</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.3-bug-fix-2</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.work.gd/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -131,17 +131,22 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.3-bug-fix-1</div>
+        <div class="rv">0.0.3-bug-fix-2</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li>Fixed a Windows quoting bug in popcorn_comp's bundled-Zig auto-resolve</li>
-          <li>No changes to cob_interp or farmer</li>
+          <li>Project moved from pixel-pulse-labs to Cob-Software-Foundation on GitHub</li>
+          <li>farmer's default package registry now cpi.cob.pixel-pulse.work.gd</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.3-bug-fix-2</span>
+          <strong>Project moved to the Cob-Software-Foundation GitHub org</strong>
+          <p>All three repos (Cob, cpi, and the new Cob-Docs) now live under Cob-Software-Foundation instead of pixel-pulse-labs. Every hardcoded repo/registry URL was updated, including farmer's default package registry (COB_FARMER_DEFAULT_BASE_URL), so a plain `farmer harvest &lt;package&gt;` resolves correctly without setting $COB_FARMER_BASE_URL by hand.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.3-bug-fix-1</span>
           <strong>popcorn_comp: fixed a Windows-only cmd.exe quoting bug</strong>
@@ -177,15 +182,15 @@
         <h4>Community</h4>
         <ul>
           <li><a href="community.html">Get involved</a></li>
-          <li><a href="https://github.com/pixel-pulse-labs/Cob">GitHub</a></li>
-          <li><a href="https://github.com/pixel-pulse-labs/cpi">Package registry</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob">GitHub</a></li>
+          <li><a href="https://cpi.cob.pixel-pulse.work.gd/download.html">Package registry</a></li>
         </ul>
       </div>
       <div>
         <h4>Legal</h4>
         <ul>
-          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/LICENSE.md">License</a></li>
-          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/.github/SECURITY.md">Security</a></li>
         </ul>
       </div>
     </div>
