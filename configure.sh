@@ -33,7 +33,12 @@ MISSING_DEPENDENCY=0
 for REQUIRED in sqlite tcl tk miniz; do
     # Check if the lowercase requirement exists in our lowercase list
     if ! echo "$EXISTING_FOLDERS" | grep -qx "$REQUIRED"; then
-        echo "[ERROR] Missing required vendor dependency: ${REQUIRED^^} (checked case-insensitively in $VENDOR_DIR)"
+        if [ "$REQUIRED" = "sqlite" ]; then
+            DISPLAY_NAME="SQLite"
+        else
+            DISPLAY_NAME="${REQUIRED^^}"
+        fi
+        echo "[ERROR] Missing required vendor dependency: $DISPLAY_NAME (checked case-insensitively in $VENDOR_DIR)"
         MISSING_DEPENDENCY=1
     fi
 done
@@ -42,10 +47,12 @@ if [ "$MISSING_DEPENDENCY" -eq 1 ]; then
     echo "[ERROR] Configuration failed due to missing vendor dependencies."
     exit 1
 else
-    echo "[OK] All required vendor dependencies (SQLITE, TCL, TK, MINIZ) are present."
+    echo "[OK] All required vendor dependencies (SQLite, TCL, TK, MINIZ) are present."
 fi
 
+echo "-----------------------------------"
 echo "=== Configuration Complete! Running Make... ==="
+echo "-----------------------------------"
 echo ""
 
 # 4. Execute Make
