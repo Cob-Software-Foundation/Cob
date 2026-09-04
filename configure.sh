@@ -19,8 +19,34 @@ else
     echo "[OK] Found Make: $(make --version | head -n 1)"
 fi
 
+# 3. Case-Insensitive Vendor Directory Verification
+VENDOR_DIR="vendor"
+if [ ! -d "$VENDOR_DIR" ]; then
+    echo "[ERROR] The vendor directory '$VENDOR_DIR' does not exist in the root."
+    exit 1
+fi
+
+# Convert all existing folder names inside vendor/ to lowercase for robust matching
+EXISTING_FOLDERS=$(find "$VENDOR_DIR" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | tr '[:upper:]' '[:lower:]')
+
+MISSING_DEPENDENCY=0
+for REQUIRED in sqlite tcl tk miniz; do
+    # Check if the lowercase requirement exists in our lowercase list
+    if ! echo "$EXISTING_FOLDERS" | grep -qx "$REQUIRED"; then
+        echo "[ERROR] Missing required vendor dependency: ${REQUIRED^^} (checked case-insensitively in $VENDOR_DIR)"
+        MISSING_DEPENDENCY=1
+    fi
+done
+
+if [ "$MISSING_DEPENDENCY" -eq 1 ]; then
+    echo "[ERROR] Configuration failed due to missing vendor dependencies."
+    exit 1
+else
+    echo "[OK] All required vendor dependencies (SQLITE, TCL, TK, MINIZ) are present."
+fi
+
 echo "=== Configuration Complete! Running Make... ==="
 echo ""
 
-# 3. Execute Make
+# 4. Execute Make
 exec make
