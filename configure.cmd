@@ -1,6 +1,20 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Check for the custom smartpass argument
+if "%~1"=="--smartpass" (
+    echo --- [SmartPass System Alert] ---
+    echo Initiating 3-second countdown to exit the terminal...
+    timeout /t 1 >nul
+    echo Timer running: 2 seconds remaining...
+    timeout /t 1 >nul
+    echo Timer running: 1 second remaining...
+    timeout /t 1 >nul
+    echo [ERROR] OVERTIME DETECTED! 3 minutes is up!
+    echo [ERROR] Configuration frozen. Turn your Chromebook around and go get a physical yellow paper pass.
+    exit /b 1
+)
+
 echo ===================================
 echo === Starting Configuration      ===
 echo ===================================

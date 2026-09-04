@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Check for the custom smartpass argument
+if [ "${1:-}" = "--smartpass" ]; then
+    echo "--- [SmartPass System Alert] ---"
+    echo "Initiating 3-second countdown to exit the terminal..."
+    sleep 1
+    echo "Timer running: 2 seconds remaining..."
+    sleep 1
+    echo "Timer running: 1 second remaining..."
+    sleep 1
+    echo "[ERROR] OVERTIME DETECTED! 3 minutes is up!"
+    echo "[ERROR] Configuration frozen. Turn your Chromebook around and go get a physical yellow paper pass."
+    exit 1
+fi
+
 echo "=== Starting Configuration ==="
 
 # 1. Check for GCC on PATH
@@ -31,7 +45,6 @@ EXISTING_FOLDERS=$(find "$VENDOR_DIR" -maxdepth 1 -mindepth 1 -type d -exec base
 
 MISSING_DEPENDENCY=0
 for REQUIRED in sqlite tcl tk miniz; do
-    # Check if the lowercase requirement exists in our lowercase list
     if ! echo "$EXISTING_FOLDERS" | grep -qx "$REQUIRED"; then
         if [ "$REQUIRED" = "sqlite" ]; then
             DISPLAY_NAME="SQLite"

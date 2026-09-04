@@ -25,16 +25,34 @@ BIN_DIR  = bin
 
 ifeq ($(OS),Windows_NT)
     EXE_SUF = .exe
+    SLEEP_CMD = timeout /t 1 >nul
 else
     EXE_SUF =
+    SLEEP_CMD = sleep 1
 endif
 
-.PHONY: all clean cob_interp popcorn_comp farmer
+.PHONY: all clean cob_interp popcorn_comp farmer smartpass
 
 all: cob_interp popcorn_comp farmer
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
+
+# -------------------------------------------------------------------------
+# FUNNY EASTER EGG TARGET: smartpass
+# Run 'make smartpass' to see the countdown action.
+# -------------------------------------------------------------------------
+smartpass:
+	@echo "--- [SmartPass System Alert] ---"
+	@echo "Initiating 3-second countdown to exit the terminal..."
+	@$(SLEEP_CMD)
+	@echo "Timer running: 2 seconds remaining..."
+	@$(SLEEP_CMD)
+	@echo "Timer running: 1 second remaining..."
+	@$(SLEEP_CMD)
+	@echo "[ERROR] OVERTIME DETECTED! 3 minutes is up!"
+	@echo "[ERROR] Compilation frozen. Turn your Chromebook around and go get a physical yellow paper pass."
+	@exit 1
 
 cob_interp: $(BIN_DIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp$(EXE_SUF) \
