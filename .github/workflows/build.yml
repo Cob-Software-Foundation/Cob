@@ -329,6 +329,10 @@ jobs:
           cp -r legal/* staging/${{ matrix.archive_name }}/
         fi
 
+        # Download docs index.html into a docs folder next to cob.exe
+        mkdir -p staging/${{ matrix.archive_name }}/docs
+        curl -fsSL -o "staging/${{ matrix.archive_name }}/docs/index.html" "https://github.com/Cob-Software-Foundation/Cob-Docs/raw/refs/heads/main/index.html"
+
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;
 
