@@ -1,0 +1,3 @@
+name: "Cob CodeQL Config"
+paths-ignore:
+  - 'vendor/**'

@@ -1,5 +1,5 @@
 # created by tools/tclZIC.tcl - do not edit
-if {![info exists TZData(Etc/UTC)]} {
-    LoadTimeZoneFile Etc/UTC
+
+set TZData(:Etc/UTC) {
+    {-9223372036854775808 0 0 UTC}
 }
-set TZData(:UTC) $TZData(:Etc/UTC)

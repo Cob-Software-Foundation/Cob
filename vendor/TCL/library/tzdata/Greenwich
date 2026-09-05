@@ -2,4 +2,4 @@
 if {![info exists TZData(Etc/GMT)]} {
     LoadTimeZoneFile Etc/GMT
 }
-set TZData(:Greenwich) $TZData(:Etc/GMT)
+set TZData(:Etc/Greenwich) $TZData(:Etc/GMT)

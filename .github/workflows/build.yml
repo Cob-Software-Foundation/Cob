@@ -100,13 +100,12 @@ jobs:
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-arm64
+            zig_target: aarch64-windows
+            zig_ext: zip
           # windows/arm (32-bit ARM) intentionally not supported -- cut
           # per project decision.
 
           # ---------------- Linux ----------------
-            zig_target: aarch64-windows
-            zig_ext: zip
-
           - goos: linux
             goarch: amd64
             runner: ubuntu-latest
@@ -156,11 +155,10 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm32
-
-          # ---------------- macOS ----------------
             zig_target: arm-linux
             zig_ext: tarxz
 
+          # ---------------- macOS ----------------
           - goos: darwin
             goarch: arm64
             runner: macos-latest
@@ -325,6 +323,11 @@ jobs:
         cp dist/${{ matrix.output_name }} staging/${{ matrix.archive_name }}/
         cp dist/${{ matrix.farmer_output_name }} staging/${{ matrix.archive_name }}/
         cp dist/${{ matrix.popcorn_output_name }} staging/${{ matrix.archive_name }}/
+
+        # Copy legal folder contents next to the binaries if it exists
+        if [ -d "legal" ]; then
+          cp -r legal/* staging/${{ matrix.archive_name }}/
+        fi
 
         # Copy main repository license(s)
         find . -maxdepth 1 -iname "license*" -exec cp {} staging/${{ matrix.archive_name }}/ \;

@@ -2,4 +2,4 @@
 if {![info exists TZData(Etc/UTC)]} {
     LoadTimeZoneFile Etc/UTC
 }
-set TZData(:Zulu) $TZData(:Etc/UTC)
+set TZData(:Etc/Zulu) $TZData(:Etc/UTC)
