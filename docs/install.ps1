@@ -12,22 +12,22 @@ Write-Host "⚙️ Parsing environment architecture tokens..." -ForegroundColor 
 if ($RawArch -eq "AMD64" -or $FallbackArch -eq "AMD64") {
     Write-Host "✅ Detected System: 64-bit Intel/AMD (AMD64)" -ForegroundColor Green
     $ZipName = "cob-windows-amd64.zip"
-    $DownloadUrl = "https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-windows-amd64.zip"
+    $DownloadUrl = "https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-amd64.zip"
 } 
 elseif ($RawArch -eq "ARM64" -or $FallbackArch -eq "ARM64") {
     Write-Host "✅ Detected System: 64-bit ARM (ARM64)" -ForegroundColor Green
     $ZipName = "cob-windows-arm64.zip"
-    $DownloadUrl = "https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-windows-arm64.zip"
+    $DownloadUrl = "https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-arm64.zip"
 } 
 elseif ($RawArch -eq "x86") {
     Write-Host "✅ Detected System: 32-bit Intel/AMD (386)" -ForegroundColor Green
     $ZipName = "cob-windows-386.zip"
-    $DownloadUrl = "https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-windows-386.zip"
+    $DownloadUrl = "https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-386.zip"
 } 
 else {
     Write-Warning "⚠️ Unknown architecture variable '$RawArch'. Defaulting to amd64 target."
     $ZipName = "cob-windows-amd64.zip"
-    $DownloadUrl = "https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-windows-amd64.zip"
+    $DownloadUrl = "https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-amd64.zip"
 }
 
 # 2. Configure Local Target Paths

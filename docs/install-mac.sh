@@ -9,15 +9,15 @@ echo -e "\033[0;36m⚙️ Parsing system architecture tokens...\033[0m"
 if [ "$RAW_ARCH" = "arm64" ]; then
     echo -e "\033[0;32m✅ Detected System: Apple Silicon (arm64)\033[0m"
     ZIP_NAME="cob-macos-arm64.zip"
-    DOWNLOAD_URL="https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-darwin-arm64.zip"
+    DOWNLOAD_URL="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-darwin-arm64.zip"
 elif [ "$RAW_ARCH" = "x86_64" ]; then
     echo -e "\033[0;32m✅ Detected System: Intel Mac (amd64)\033[0m"
     ZIP_NAME="cob-macos-amd64.zip"
-    DOWNLOAD_URL="https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-darwin-amd64.zip"
+    DOWNLOAD_URL="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-darwin-amd64.zip"
 else
     echo -e "\033[0;33m⚠️ Unknown architecture variable '$RAW_ARCH'. Defaulting to arm64 target.\033[0m"
     ZIP_NAME="cob-macos-arm64.zip"
-    DOWNLOAD_URL="https://github.com/pixel-pulse-labs/Cob/releases/latest/download/cob-darwin-arm64.zip"
+    DOWNLOAD_URL="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-darwin-arm64.zip"
 fi
 
 # 2. Configure Local Target Paths
