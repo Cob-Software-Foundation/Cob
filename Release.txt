@@ -1,3 +1,182 @@
+# Cob Language v0.0.4
+
+## Added
+
+### Strings — a real second value type
+
+Cob variables were integers only, full stop, since the language's
+first release. This adds a second kind of value: strings. This is a
+new capability, not a bug fix, which is why it's versioned 0.0.4
+rather than another 0.0.3-bug-fix-N.
+
+What's new, concretely:
+
+- **`pop(<expr>)` now accepts any expression**, not just a string
+  literal. `pop(x)` prints an int variable's decimal value or a
+  string variable's contents. This was the single most-requested gap
+  in the language up to this point — there was previously no way to
+  print a computed value at all.
+- **`set` accepts string literals**: `set name = "world"`. A
+  variable's "type" is just whatever it was last `set` to; Cob still
+  has no type declarations.
+- **String concatenation via `+`**: `"hello, " + name`. If either
+  side of `+` is a string, the other side is stringified (an int
+  becomes its decimal digits) and the two are joined. `-`, `*`, `/`
+  still require two numbers, same as before, and now report a clear
+  warning (result treated as 0) rather than silently doing something
+  undefined if given a string.
+- **String comparison in `while`/conditions**: `==`, `!=`, `<`, `>`,
+  `<=`, `>=` all work on two strings (strcmp-based ordering) exactly
+  as they already did on two numbers. Comparing a string to a number
+  is a warning, evaluating to false, rather than an implicit,
+  surprising conversion either direction.
+- Truthiness for a bare condition now applies to strings too: a
+  non-empty string is truthy, matching non-zero for numbers.
+
+### What did NOT change
+
+`harvest()`/`trash()`, `shuck`, `while` loop semantics and the
+10,000,000-iteration safety cap, and the `--no-gc`/`--no-cache` flags
+are all unchanged and re-verified below.
+
+### popcorn_comp also compiles string-using programs now
+
+Originally shipped as cob_interp-only in this same release, with
+popcorn_comp support called out as follow-up work. That follow-up is
+done: popcorn_comp now compiles `.cob` programs that use strings into
+real, standalone native binaries too.
+
+popcorn_comp has its own separate copy of the expression AST and its
+own C code generator (it doesn't share code with cob_interp), so this
+needed a real second implementation, not a shared fix. Every Cob
+variable is now emitted as `CobValue` — a small tagged struct (int or
+string) — instead of a plain `long`, and every operator becomes a
+call into a small hand-written C runtime embedded at the top of the
+generated file (`cob_add`, `cob_eq`, `cob_pop`, etc.) instead of a raw
+C operator. That runtime deliberately mirrors cob_interp's
+eval_expr/eval_cond logic, including the exact warning wording, so a
+compiled program's behavior matches its interpreted behavior — same
+results, same warnings, same fallback-to-0 on a type mismatch. The
+one intentional difference: compiled-code warnings are tagged `[cob]`
+rather than `[cob_interp]`, since a compiled binary is its own
+standalone program, not the interpreter.
+
+popcorn_comp's own `.strawberry` reader was updated to the same v3
+format (`EXPR_STR`, `STMT_POP` holding a general expression) so it
+can read caches cob_interp now writes.
+
+**A real bug found and fixed before shipping this:** the first
+version of the string runtime used the platform's `strdup()`, which
+isn't part of strict C99 — under `-std=c99` it has no declaration, so
+GCC implicitly assumed it returned `int`, truncating the returned
+pointer and segfaulting on the very first string literal. Fixed by
+hand-writing a small portable duplicate (`cob_strdup_`, malloc +
+memcpy) instead of depending on a POSIX extension — the same pattern
+cob_interp's own `cob_strdup` already used for exactly this reason.
+
+**A real leak found and fixed before shipping this:** the first
+version of the code generator never freed a variable's final string
+value when the compiled program exited — cob_interp does this via
+`vars_free()` at shutdown, but the generated C had no equivalent.
+Fixed by emitting a `cob_free()` call for every declared variable
+right before `return 0` in generated `main()`.
+
+**Also fixed in the same pass:** `pop(x)` — printing a variable —
+wasn't being scanned for variable names to declare in the generated
+C, since the old codegen assumed `pop()` could only ever take a fixed
+literal with no variables in it. A compiled program using `pop(x)`
+would have referenced an undeclared C variable and failed to compile.
+
+**Verified this release, for popcorn_comp specifically:**
+- Every test used to verify cob_interp's string support was re-run
+  through the full pipeline — `cob_interp` produces a `.strawberry`
+  cache, `popcorn_comp` compiles it, the resulting binary is run, and
+  its output is diffed against `cob_interp`'s own interpreted output
+  for the identical source. All matched exactly: the original
+  all-integer countdown example, string literals, concatenation
+  (string+string and string+int), `pop()` of both an int and a string
+  variable, string equality and ordering comparisons, both
+  type-mismatch warning paths, `harvest()`/`trash()` including a
+  dynamic (variable) byte count and a negative-size warning, the full
+  `math` package (which exercises `shuck`, six PASS assertions, and
+  the tally display), and the 2,000-iteration string-reassignment
+  stress test.
+- Every one of those, compiled and run, was also checked with
+  `valgrind --leak-check=full` — 0 leaks, 0 errors, including after
+  fixing the shutdown-cleanup leak above.
+- `gcc -std=c99 -Wall -Wextra` on `popcorn_comp.c` itself: zero
+  warnings.
+
+**Known gap, pre-existing and not addressed in this pass:** compiled
+`trash()` has no double-free or invalid-handle detection at all — it
+was already a direct, untracked `free()` call before strings existed,
+and still is. `cob_interp` catches this and warns; a compiled binary
+silently allows it, same as before this release. Worth its own
+follow-up, unrelated to strings.
+
+### Known scope limit: cross-target string support is unverified
+
+Everything verified above was compiled natively (Linux amd64 host,
+Linux amd64 target, via plain `gcc`). The string runtime embedded in
+generated C is written in portable C99 with no platform-specific
+calls — it should cross-compile via Zig the same as any other
+generated Cob program — but that hasn't actually been run and tested
+on a genuine Windows or macOS target, or through the Zig backend
+specifically, the way the native-gcc path in this release was. Treat
+cross-compiled string support as "should work, not yet proven,"
+consistent with how earlier releases have flagged untested
+cross-platform paths.
+
+### The `.strawberry` cache format changed (v2 → v3)
+
+The on-disk AST format changed shape to represent the new string
+expression kind, so the cache's magic bytes were bumped from
+`COBSTRW2` to `COBSTRW3`. A cache written by this version is
+correctly and safely rejected by anything still expecting v2 (falls
+back to reparsing from source, the same as if no cache existed at
+all) rather than being misread. This was verified directly: a
+hand-corrupted file with the old magic and new-format bytes behind it
+was confirmed to be rejected cleanly, with a fallback to reparsing,
+not a crash or garbage output.
+
+## Verified this release
+
+- Full rewrite of the value representation (`Var`/`VarTable`,
+  `eval_expr`, `eval_cond`, `execute()`) from raw `long` to a tagged
+  `Value` (int or string) — compiles clean with
+  `gcc -std=c99 -Wall -Wextra`, zero warnings.
+- **Regression**: the original all-integer countdown example and the
+  full `math` package test suite (factorial/gcd/power/abs/min/max/
+  tally, 6 assertions) both produce byte-identical output to before
+  this change.
+- **New features**, each actually run against the real interpreter:
+  string literals, `pop()` of an int variable, `pop()` of a string
+  variable, string+string concatenation, string+int concatenation,
+  string equality in a self-terminating `while`, string ordering
+  comparison, and the type-mismatch warnings for `-`/`*`/`/` on a
+  string and for comparing a string to a number.
+- **`harvest()`/`trash()` regression**: allocate, free, double-free
+  warning, and the `--no-gc` gate all still behave identically now
+  that handles flow through `Value` instead of a bare `long`.
+- **Memory correctness**: every test above, plus a 2,000-iteration
+  loop reassigning a string each pass, run clean under
+  `valgrind --leak-check=full` — 0 leaks, 0 errors, allocations and
+  frees exactly balanced in every run.
+- **Cache round-trip**: a string-using program produces identical
+  output whether freshly parsed or loaded from its own `.strawberry`
+  v3 cache.
+
+## Not verified
+
+- popcorn_comp's string support on a real Windows/macOS target, or
+  through a cross-compile (Zig) build rather than native gcc — see
+  above.
+- No testing on Windows or macOS for this change; verified on Linux
+  only, same as the source-level verification pattern in earlier
+  releases.
+
+---
+
 # Cob Language v0.0.3-bug-fix-2
 
 ## Changed

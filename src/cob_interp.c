@@ -5,11 +5,26 @@
  * The Cob interpreter binary: `cob_interp <file.cob> [--no-cache] [--no-gc]`
  *
  * ---------------------------------------------------------------------
- * v0.0.2 SCOPE -- fully working:
+ * v0.0.3-bug-fix-3 SCOPE -- fully working:
  * ---------------------------------------------------------------------
- *   pop("text")               string output, with \\ \" \n \t escapes
- *   set <name> = <expr>       integer variables
- *   while <condition>:        real looping, real nested block bodies
+ *   pop(<expr>)               writes text to stdout + newline. Accepts
+ *                             any expression, not just a literal --
+ *                             pop(x) prints an int variable's decimal
+ *                             value or a string variable's contents.
+ *                             String literals use \\ \" \n \t escapes.
+ *   set <name> = <expr>       integer OR string variables -- a
+ *                             variable's "type" is just whatever it
+ *                             was last set to; there's no declaration.
+ *   "text" + "text"           string concatenation via '+'. If either
+ *                             side of '+' is a string, the other side
+ *                             is stringified (an int becomes its
+ *                             decimal digits) and both are joined.
+ *                             '-' '*' '/' still require two numbers.
+ *   while <condition>:        real looping, real nested block bodies.
+ *                             ==/!= /</></<=/>= work on two strings
+ *                             (strcmp-based) or two numbers; comparing
+ *                             a string to a number is a warning and
+ *                             evaluates to false rather than guessing.
  *   shuck <library_name>      loads <library_name>.cob (or
  *                             cob_modules/<library_name>/<library_name>.cob,
  *                             matching farmer's install layout) and
@@ -30,6 +45,17 @@
  *                             disables the .strawberry cache for that
  *                             file entirely (neither read nor written).
  *
+ * NOTE ON popcorn_comp: string support above is cob_interp-only so far.
+ * popcorn_comp has its own separate copy of this AST and its own C
+ * code generator, which still assumes every Cob variable is a `long`.
+ * A .cob program using strings runs correctly under cob_interp but is
+ * not yet compilable to a native binary -- that needs popcorn_comp's
+ * codegen to grow a tagged value representation too, which hasn't
+ * been done yet. The .strawberry cache format bumped to v3 alongside
+ * this change specifically so an old-format reader (like today's
+ * popcorn_comp) fails cleanly on a new-format cache instead of
+ * misreading it.
+ *
  * If a program uses harvest()/trash() but --no-gc was not passed on the
  * command line, cob_interp refuses to run it with a clear error instead
  * of silently ignoring the memory keywords -- "unlock" is a real gate,
@@ -37,9 +63,11 @@
  *
  * expr grammar:  expr := term (('+'|'-') term)*
  *                term := primary (('*'|'/') primary)*
- *                primary := NUMBER | IDENT | 'harvest' '(' expr ')'
+ *                primary := NUMBER | STRING | IDENT
+ *                           | 'harvest' '(' expr ')'
  * cond grammar:  expr (('=='|'!='|'<'|'>'|'<='|'>=') expr)?  (bare expr
- *                is a truthiness/nonzero test)
+ *                is a truthiness/nonzero test; for a string, truthy
+ *                means non-empty, matching non-zero for numbers)
  *
  * SAFETY: a `while` loop is capped at COB_MAX_LOOP_ITERATIONS so a
  * buggy/infinite .cob program can't hang the interpreter forever.
@@ -60,13 +88,28 @@
 #define COB_MAX_SHUCK_DEPTH 16
 
 /* ---------------------------------------------------------------------
+ * VALUES -- a Cob value is either an integer or a string. Strings were
+ * added after v0.0.3; anywhere a `long` used to flow through the
+ * evaluator, a Value flows through it instead. A VAL_STR Value owns
+ * its `s` pointer; value_free() must be called on any Value nobody
+ * else is taking ownership of, to avoid leaking it.
+ * ------------------------------------------------------------------- */
+typedef enum { VAL_INT, VAL_STR } ValueKind;
+typedef struct { ValueKind kind; long i; char *s; } Value;
+
+static Value value_int(long n) { Value v; v.kind = VAL_INT; v.i = n; v.s = NULL; return v; }
+static Value value_str_take(char *owned) { Value v; v.kind = VAL_STR; v.i = 0; v.s = owned; return v; }
+static void value_free(Value *v) { if (v->kind == VAL_STR) { free(v->s); v->s = NULL; } }
+
+/* ---------------------------------------------------------------------
  * AST: EXPRESSIONS
  * ------------------------------------------------------------------- */
-typedef enum { EXPR_NUM, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
+typedef enum { EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
 
 typedef struct Expr {
     ExprKind kind;
     long num;             /* EXPR_NUM */
+    char *str_lit; size_t str_lit_len; /* EXPR_STR, owned */
     char *var;            /* EXPR_VAR, owned */
     char op;              /* EXPR_BINOP: '+' '-' '*' '/' */
     struct Expr *left;    /* EXPR_BINOP left; EXPR_HARVEST byte-count child */
@@ -77,6 +120,12 @@ static Expr *expr_new_num(long n) {
     Expr *e = (Expr *)calloc(1, sizeof(Expr));
     if (!e) return NULL;
     e->kind = EXPR_NUM; e->num = n;
+    return e;
+}
+static Expr *expr_new_str(char *owned_text, size_t len) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_STR; e->str_lit = owned_text; e->str_lit_len = len;
     return e;
 }
 static Expr *expr_new_var(char *owned_name) {
@@ -99,6 +148,7 @@ static Expr *expr_new_harvest(Expr *bytes_expr) {
 }
 static void expr_free(Expr *e) {
     if (!e) return;
+    if (e->kind == EXPR_STR) free(e->str_lit);
     if (e->kind == EXPR_VAR) free(e->var);
     if (e->kind == EXPR_BINOP) { expr_free(e->left); expr_free(e->right); }
     if (e->kind == EXPR_HARVEST) { expr_free(e->left); }
@@ -141,7 +191,7 @@ typedef struct Program {
 
 typedef struct Stmt {
     StmtKind kind;
-    char *pop_text; size_t pop_text_len;      /* STMT_POP */
+    Expr *pop_expr;                            /* STMT_POP */
     char *set_name; Expr *set_expr;           /* STMT_SET */
     Cond *while_cond; Program while_body;     /* STMT_WHILE */
     char *trash_name;                         /* STMT_TRASH */
@@ -167,7 +217,7 @@ static int program_uses_harvest_or_trash(const Program *p) {
 
 static void stmt_free_contents(Stmt *s) {
     switch (s->kind) {
-        case STMT_POP: free(s->pop_text); break;
+        case STMT_POP: expr_free(s->pop_expr); break;
         case STMT_SET: free(s->set_name); expr_free(s->set_expr); break;
         case STMT_TRASH: free(s->trash_name); break;
         case STMT_WHILE: {
@@ -222,7 +272,7 @@ static int program_append_move(Program *dst, Program *src) {
 /* ---------------------------------------------------------------------
  * VARIABLES (linear-scan symbol table -- Cob programs are small)
  * ------------------------------------------------------------------- */
-typedef struct { char *name; long value; } Var;
+typedef struct { char *name; Value value; } Var;
 typedef struct { Var *items; size_t count, capacity; } VarTable;
 
 static char *cob_strdup(const char *s) {
@@ -232,23 +282,38 @@ static char *cob_strdup(const char *s) {
     return copy;
 }
 
+/* Returns a fresh, independently-owned copy -- callers of vars_get are
+ * always free to value_free() what they get back without touching the
+ * table's own copy. */
+static Value value_copy(const Value *v) {
+    if (v->kind == VAL_STR) return value_str_take(cob_strdup(v->s ? v->s : ""));
+    return value_int(v->i);
+}
+
 static void vars_init(VarTable *t) { t->items = NULL; t->count = 0; t->capacity = 0; }
 static void vars_free(VarTable *t) {
     size_t i;
-    for (i = 0; i < t->count; i++) free(t->items[i].name);
+    for (i = 0; i < t->count; i++) { free(t->items[i].name); value_free(&t->items[i].value); }
     free(t->items);
     t->items = NULL; t->count = 0; t->capacity = 0;
 }
-static int vars_get(VarTable *t, const char *name, long *out) {
+static int vars_get(VarTable *t, const char *name, Value *out) {
     size_t i;
     for (i = 0; i < t->count; i++)
-        if (strcmp(t->items[i].name, name) == 0) { *out = t->items[i].value; return 1; }
+        if (strcmp(t->items[i].name, name) == 0) { *out = value_copy(&t->items[i].value); return 1; }
     return 0;
 }
-static int vars_set(VarTable *t, const char *name, long value) {
+/* Takes ownership of `value` on success (stored directly, no copy) --
+ * on failure (OOM growing the table), `value` is NOT consumed and the
+ * caller still owns it and must free it. */
+static int vars_set(VarTable *t, const char *name, Value value) {
     size_t i;
     for (i = 0; i < t->count; i++)
-        if (strcmp(t->items[i].name, name) == 0) { t->items[i].value = value; return 0; }
+        if (strcmp(t->items[i].name, name) == 0) {
+            value_free(&t->items[i].value);
+            t->items[i].value = value;
+            return 0;
+        }
     if (t->count == t->capacity) {
         size_t new_cap = (t->capacity == 0) ? 8 : t->capacity * 2;
         Var *grown = (Var *)realloc(t->items, new_cap * sizeof(Var));
@@ -392,6 +457,19 @@ static const char *parse_expr(const char *p, Expr **out); /* fwd decl */
 static const char *parse_primary(const char *p, Expr **out) {
     p = skip_blank(p);
 
+    /* string literal -- reuses the same escape-decoding logic pop()
+     * has always used for its argument. Making this a primary means
+     * pop() (which now parses a general expr, not just a literal),
+     * set, and comparisons can all use string literals the same way. */
+    if (*p == '"') {
+        char *text; size_t len;
+        const char *after = parse_string_literal(p, &text, &len);
+        if (!after) return NULL;
+        *out = expr_new_str(text, len);
+        if (!*out) { free(text); return NULL; }
+        return after;
+    }
+
     /* harvest(<bytes>) -- only special-cased when directly followed by
      * '(' after optional blanks; "harvest" with no parens would just be
      * an ordinary (if oddly named) variable reference. */
@@ -501,30 +579,70 @@ static const char *parse_condition(const char *p, Cond **out) {
 /* ---------------------------------------------------------------------
  * EVALUATION
  * ------------------------------------------------------------------- */
-static long eval_expr(const Expr *e, EvalCtx *ctx) {
+/* Renders an int as decimal text for string concatenation (e.g.
+ * "score: " + 7). Buffer is comfortably large for any long. */
+static void long_to_str(long n, char *buf, size_t bufsize) {
+    snprintf(buf, bufsize, "%ld", n);
+}
+
+static Value eval_expr(const Expr *e, EvalCtx *ctx) {
     switch (e->kind) {
-        case EXPR_NUM: return e->num;
+        case EXPR_NUM: return value_int(e->num);
+        case EXPR_STR: return value_str_take(cob_strdup(e->str_lit));
         case EXPR_VAR: {
-            long v;
+            Value v;
             if (vars_get(ctx->vars, e->var, &v)) return v;
             fprintf(stderr, "[cob_interp] warning: undefined variable '%s', treated as 0\n", e->var);
-            return 0;
+            return value_int(0);
         }
         case EXPR_BINOP: {
-            long l = eval_expr(e->left, ctx);
-            long r = eval_expr(e->right, ctx);
-            switch (e->op) {
-                case '+': return l + r;
-                case '-': return l - r;
-                case '*': return l * r;
-                case '/':
-                    if (r == 0) { fprintf(stderr, "[cob_interp] warning: division by zero, result treated as 0\n"); return 0; }
-                    return l / r;
+            Value l = eval_expr(e->left, ctx);
+            Value r = eval_expr(e->right, ctx);
+
+            if (e->op == '+' && (l.kind == VAL_STR || r.kind == VAL_STR)) {
+                char lbuf[32], rbuf[32];
+                const char *ls = l.kind == VAL_STR ? l.s : (long_to_str(l.i, lbuf, sizeof(lbuf)), lbuf);
+                const char *rs = r.kind == VAL_STR ? r.s : (long_to_str(r.i, rbuf, sizeof(rbuf)), rbuf);
+                size_t ln = strlen(ls), rn = strlen(rs);
+                char *cat = (char *)malloc(ln + rn + 1);
+                Value result;
+                if (cat) {
+                    memcpy(cat, ls, ln); memcpy(cat + ln, rs, rn); cat[ln + rn] = '\0';
+                    result = value_str_take(cat);
+                } else {
+                    result = value_int(0);
+                }
+                value_free(&l); value_free(&r);
+                return result;
             }
-            return 0;
+            if (l.kind == VAL_STR || r.kind == VAL_STR) {
+                fprintf(stderr,
+                    "[cob_interp] warning: operator '%c' requires two numbers, got a string; result treated as 0\n",
+                    e->op);
+                value_free(&l); value_free(&r);
+                return value_int(0);
+            }
+            /* both plain integers -- original arithmetic, unchanged */
+            switch (e->op) {
+                case '+': return value_int(l.i + r.i);
+                case '-': return value_int(l.i - r.i);
+                case '*': return value_int(l.i * r.i);
+                case '/':
+                    if (r.i == 0) { fprintf(stderr, "[cob_interp] warning: division by zero, result treated as 0\n"); return value_int(0); }
+                    return value_int(l.i / r.i);
+            }
+            return value_int(0);
         }
         case EXPR_HARVEST: {
-            long bytes = eval_expr(e->left, ctx);
+            Value bytesV = eval_expr(e->left, ctx);
+            long bytes;
+            if (bytesV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: harvest() needs a number, got a string; treated as 0\n");
+                value_free(&bytesV);
+                bytes = 0;
+            } else {
+                bytes = bytesV.i;
+            }
             if (bytes < 0) {
                 fprintf(stderr, "[cob_interp] warning: harvest() with negative size, treated as 0\n");
                 bytes = 0;
@@ -533,25 +651,48 @@ static long eval_expr(const Expr *e, EvalCtx *ctx) {
             if (id == 0) {
                 fprintf(stderr, "[cob_interp] warning: harvest(%ld) failed (out of memory)\n", bytes);
             }
-            return id;
+            return value_int(id);
         }
     }
-    return 0;
+    return value_int(0);
 }
 
 static int eval_cond(const Cond *c, EvalCtx *ctx) {
-    long l = eval_expr(c->left, ctx);
-    if (c->op == COND_TRUTHY) return l != 0;
-    long r = eval_expr(c->right, ctx);
-    switch (c->op) {
-        case COND_EQ: return l == r;
-        case COND_NE: return l != r;
-        case COND_LT: return l < r;
-        case COND_GT: return l > r;
-        case COND_LE: return l <= r;
-        case COND_GE: return l >= r;
-        default: return 0;
+    Value l = eval_expr(c->left, ctx);
+    if (c->op == COND_TRUTHY) {
+        int truthy = (l.kind == VAL_STR) ? (l.s != NULL && l.s[0] != '\0') : (l.i != 0);
+        value_free(&l);
+        return truthy;
     }
+    Value r = eval_expr(c->right, ctx);
+    int result;
+    if (l.kind != r.kind) {
+        fprintf(stderr, "[cob_interp] warning: comparing a number to a string; result is false\n");
+        result = 0;
+    } else if (l.kind == VAL_STR) {
+        int cmp = strcmp(l.s, r.s);
+        switch (c->op) {
+            case COND_EQ: result = (cmp == 0); break;
+            case COND_NE: result = (cmp != 0); break;
+            case COND_LT: result = (cmp < 0); break;
+            case COND_GT: result = (cmp > 0); break;
+            case COND_LE: result = (cmp <= 0); break;
+            case COND_GE: result = (cmp >= 0); break;
+            default: result = 0;
+        }
+    } else {
+        switch (c->op) {
+            case COND_EQ: result = (l.i == r.i); break;
+            case COND_NE: result = (l.i != r.i); break;
+            case COND_LT: result = (l.i < r.i); break;
+            case COND_GT: result = (l.i > r.i); break;
+            case COND_LE: result = (l.i <= r.i); break;
+            case COND_GE: result = (l.i >= r.i); break;
+            default: result = 0;
+        }
+    }
+    value_free(&l); value_free(&r);
+    return result;
 }
 
 static void execute(const Program *prog, EvalCtx *ctx) {
@@ -559,26 +700,42 @@ static void execute(const Program *prog, EvalCtx *ctx) {
     for (i = 0; i < prog->count; i++) {
         const Stmt *s = &prog->items[i];
         switch (s->kind) {
-            case STMT_POP:
-                fwrite(s->pop_text, 1, s->pop_text_len, stdout);
+            case STMT_POP: {
+                Value v = eval_expr(s->pop_expr, ctx);
+                if (v.kind == VAL_STR) {
+                    fwrite(v.s, 1, strlen(v.s), stdout);
+                } else {
+                    char buf[32];
+                    int n = snprintf(buf, sizeof(buf), "%ld", v.i);
+                    if (n > 0) fwrite(buf, 1, (size_t)n, stdout);
+                }
                 fputc('\n', stdout);
+                value_free(&v);
                 break;
+            }
             case STMT_SET: {
-                long v = eval_expr(s->set_expr, ctx);
-                if (vars_set(ctx->vars, s->set_name, v) != 0)
+                Value v = eval_expr(s->set_expr, ctx);
+                if (vars_set(ctx->vars, s->set_name, v) != 0) {
                     fprintf(stderr, "[cob_interp] out of memory setting variable '%s'\n", s->set_name);
+                    value_free(&v); /* vars_set didn't take ownership on this failure path */
+                }
                 break;
             }
             case STMT_TRASH: {
-                long id;
-                if (!vars_get(ctx->vars, s->trash_name, &id)) {
+                Value v;
+                if (!vars_get(ctx->vars, s->trash_name, &v)) {
                     fprintf(stderr, "[cob_interp] warning: trash() on undefined variable '%s'\n", s->trash_name);
                     break;
                 }
-                if (handle_free(ctx->handles, id) != 0) {
+                if (v.kind == VAL_STR) {
+                    fprintf(stderr, "[cob_interp] warning: trash(%s) -- variable holds a string, not a handle\n", s->trash_name);
+                    value_free(&v);
+                    break;
+                }
+                if (handle_free(ctx->handles, v.i) != 0) {
                     fprintf(stderr,
                         "[cob_interp] warning: trash(%s) -- handle %ld is invalid or already freed\n",
-                        s->trash_name, id);
+                        s->trash_name, v.i);
                 }
                 break;
             }
@@ -603,7 +760,7 @@ static void execute(const Program *prog, EvalCtx *ctx) {
 /* ---------------------------------------------------------------------
  * STATEMENT PARSERS (each consumes exactly one physical line's content)
  * ------------------------------------------------------------------- */
-static int parse_pop_statement(const char *trimmed_line, int line_no, char **out_text, size_t *out_len) {
+static int parse_pop_statement(const char *trimmed_line, int line_no, Expr **out_expr) {
     const char *p = trimmed_line + strlen(COB_KW_POP);
     p = skip_blank(p);
     if (*p != '(') {
@@ -611,17 +768,19 @@ static int parse_pop_statement(const char *trimmed_line, int line_no, char **out
         return -1;
     }
     p++; p = skip_blank(p);
-    p = parse_string_literal(p, out_text, out_len);
+    Expr *expr;
+    p = parse_expr(p, &expr);
     if (!p) {
-        fprintf(stderr, "[cob_interp] syntax error at line %d: malformed string literal in pop()\n", line_no);
+        fprintf(stderr, "[cob_interp] syntax error at line %d: malformed expression in pop()\n", line_no);
         return -1;
     }
     p = skip_blank(p);
     if (*p != ')') {
         fprintf(stderr, "[cob_interp] syntax error at line %d: expected ')' to close pop(\n", line_no);
-        free(*out_text);
+        expr_free(expr);
         return -1;
     }
+    *out_expr = expr;
     return 0;
 }
 
@@ -858,11 +1017,11 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
         kw_len = strlen(COB_KW_POP);
         if (strncmp(trimmed, COB_KW_POP, kw_len) == 0 &&
             (trimmed[kw_len] == '(' || trimmed[kw_len] == ' ')) {
-            char *text; size_t text_len;
-            if (parse_pop_statement(trimmed, line_no, &text, &text_len) != 0) { program_free(out_prog); return -1; }
+            Expr *pop_expr;
+            if (parse_pop_statement(trimmed, line_no, &pop_expr) != 0) { program_free(out_prog); return -1; }
             Stmt s; memset(&s, 0, sizeof(s));
-            s.kind = STMT_POP; s.pop_text = text; s.pop_text_len = text_len;
-            if (program_push(out_prog, s) != 0) { free(text); program_free(out_prog); return -1; }
+            s.kind = STMT_POP; s.pop_expr = pop_expr;
+            if (program_push(out_prog, s) != 0) { expr_free(pop_expr); program_free(out_prog); return -1; }
             (*pos)++;
             continue;
         }
@@ -957,7 +1116,7 @@ static int cob_parse_source(const char *source, Program *out_prog, int *out_disa
 /* ---------------------------------------------------------------------
  * .strawberry CACHE (binary AST dump, format v2)
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW2"
+#define STRAWBERRY_MAGIC      "COBSTRW3"
 #define STRAWBERRY_MAGIC_LEN  8
 
 typedef struct { unsigned char *data; size_t len, cap; } ByteBuf;
@@ -1003,6 +1162,7 @@ static int write_expr(ByteBuf *b, const Expr *e) {
     if (bytebuf_u8(b, (uint8_t)e->kind) != 0) return -1;
     switch (e->kind) {
         case EXPR_NUM: return bytebuf_i64(b, (int64_t)e->num);
+        case EXPR_STR: return bytebuf_bytes(b, e->str_lit, e->str_lit_len);
         case EXPR_VAR: return bytebuf_bytes(b, e->var, strlen(e->var));
         case EXPR_BINOP:
             if (bytebuf_u8(b, (uint8_t)e->op) != 0) return -1;
@@ -1023,7 +1183,7 @@ static int write_program(ByteBuf *b, const Program *p);
 static int write_stmt(ByteBuf *b, const Stmt *s) {
     if (bytebuf_u8(b, (uint8_t)s->kind) != 0) return -1;
     switch (s->kind) {
-        case STMT_POP: return bytebuf_bytes(b, s->pop_text, s->pop_text_len);
+        case STMT_POP: return write_expr(b, s->pop_expr);
         case STMT_SET:
             if (bytebuf_bytes(b, s->set_name, strlen(s->set_name)) != 0) return -1;
             return write_expr(b, s->set_expr);
@@ -1103,6 +1263,13 @@ static int read_expr(ByteReader *r, Expr **out) {
             *out = expr_new_num((long)v);
             return *out ? 0 : -1;
         }
+        case EXPR_STR: {
+            char *text; size_t len;
+            if (reader_bytes_alloc(r, &text, &len) != 0) return -1;
+            *out = expr_new_str(text, len);
+            if (!*out) { free(text); return -1; }
+            return 0;
+        }
         case EXPR_VAR: {
             char *name;
             if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
@@ -1150,7 +1317,7 @@ static int read_stmt(ByteReader *r, Stmt *out) {
     memset(out, 0, sizeof(*out));
     out->kind = (StmtKind)kind;
     switch (out->kind) {
-        case STMT_POP: return reader_bytes_alloc(r, &out->pop_text, &out->pop_text_len);
+        case STMT_POP: return read_expr(r, &out->pop_expr);
         case STMT_SET:
             if (reader_bytes_alloc(r, &out->set_name, NULL) != 0) return -1;
             return read_expr(r, &out->set_expr);

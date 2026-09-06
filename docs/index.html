@@ -34,11 +34,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.3-bug-fix-2 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.4 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.3-bug-fix-2</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.4</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.work.gd/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -131,17 +131,22 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.3-bug-fix-2</div>
+        <div class="rv">0.0.4</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li>Project moved from pixel-pulse-labs to Cob-Software-Foundation on GitHub</li>
-          <li>farmer's default package registry now cpi.cob.pixel-pulse.work.gd</li>
+          <li>Strings — a real second value type, in both cob_interp and popcorn_comp</li>
+          <li>pop(x) now prints a variable's value; previously only a fixed literal</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.4</span>
+          <strong>Strings, and pop() that can finally print a variable</strong>
+          <p>Cob variables were integers only since the language's first release. This adds strings: pop(&lt;expr&gt;) accepts any expression instead of only a literal, "+" concatenates, and ==/!=/&lt;/&gt;/&lt;=/&gt;= work on two strings the same way they already did on two numbers. Shipped in both cob_interp and popcorn_comp — a compiled binary behaves identically to the interpreted program, including matching type-mismatch warnings.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.3-bug-fix-2</span>
           <strong>Project moved to the Cob-Software-Foundation GitHub org</strong>

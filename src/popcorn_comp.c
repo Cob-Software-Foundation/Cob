@@ -55,6 +55,19 @@
  * already has these cross-gcc packages installed, which is exactly
  * what build.yml's CI runner has.
  *
+ * ---------------------------------------------------------------------
+ * STRINGS (v0.0.4) -- every Cob variable is emitted as a CobValue, a
+ * small tagged struct (int or string) instead of a plain `long`, with
+ * every operator becoming a call into a small hand-written runtime
+ * (cob_add/cob_sub/cob_eq/etc.) embedded at the top of the generated
+ * C file. This exists specifically to keep compiled behavior matching
+ * interpreted behavior -- same results, same type-mismatch warnings,
+ * same fallback-to-0 semantics -- rather than a faster but
+ * lower-fidelity approach like per-variable static type inference.
+ * The one deliberate difference: runtime warnings from compiled code
+ * are tagged "[cob]" rather than "[cob_interp]", since a compiled
+ * binary is its own standalone program, not the interpreter.
+ *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
 
@@ -90,10 +103,11 @@
  * top-of-file comment for the full language semantics). Only what's
  * needed to walk and transpile the tree lives here.
  * ------------------------------------------------------------------- */
-typedef enum { EXPR_NUM, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
+typedef enum { EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
 typedef struct Expr {
     ExprKind kind;
     long num;
+    char *str_lit; size_t str_lit_len;
     char *var;
     char op;
     struct Expr *left;
@@ -107,7 +121,7 @@ typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH } StmtKind;
 typedef struct Program { struct Stmt *items; size_t count, capacity; } Program;
 typedef struct Stmt {
     StmtKind kind;
-    char *pop_text; size_t pop_text_len;
+    Expr *pop_expr;
     char *set_name; Expr *set_expr;
     Cond *while_cond; Program while_body;
     char *trash_name;
@@ -126,11 +140,13 @@ static int program_push(Program *p, Stmt s) {
 }
 
 /* ---------------------------------------------------------------------
- * .strawberry READER (format v2 -- must stay byte-for-byte compatible
+ * .strawberry READER (format v3 -- must stay byte-for-byte compatible
  * with cob_interp.c's writer). See cob_interp.c for the authoritative
  * format documentation; duplicated in miniature here deliberately.
+ * v3 added EXPR_STR (string literals) and changed STMT_POP to hold a
+ * general Expr instead of a bare literal -- both mirrored below.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW2"
+#define STRAWBERRY_MAGIC      "COBSTRW3"
 #define STRAWBERRY_MAGIC_LEN  8
 
 typedef struct { const unsigned char *data; size_t len, pos; } ByteReader;
@@ -183,6 +199,14 @@ static int read_expr(ByteReader *r, Expr **out) {
             (*out)->num = (long)v;
             return 0;
         }
+        case EXPR_STR: {
+            char *text; size_t len;
+            if (reader_bytes_alloc(r, &text, &len) != 0) return -1;
+            *out = expr_new(EXPR_STR);
+            if (!*out) { free(text); return -1; }
+            (*out)->str_lit = text; (*out)->str_lit_len = len;
+            return 0;
+        }
         case EXPR_VAR: {
             char *name;
             if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
@@ -232,7 +256,7 @@ static int read_stmt(ByteReader *r, Stmt *out) {
     memset(out, 0, sizeof(*out));
     out->kind = (StmtKind)kind;
     switch (out->kind) {
-        case STMT_POP: return reader_bytes_alloc(r, &out->pop_text, &out->pop_text_len);
+        case STMT_POP: return read_expr(r, &out->pop_expr);
         case STMT_SET:
             if (reader_bytes_alloc(r, &out->set_name, NULL) != 0) return -1;
             return read_expr(r, &out->set_expr);
@@ -263,7 +287,7 @@ static int cob_load_strawberry(const char *path, Program *out_prog) {
     }
     ByteReader r; r.data = (const unsigned char *)file.data; r.len = file.size; r.pos = 0;
     if (r.len < STRAWBERRY_MAGIC_LEN || memcmp(r.data, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN) != 0) {
-        fprintf(stderr, "[popcorn_comp] error: '%s' is not a valid .strawberry v2 file\n", path);
+        fprintf(stderr, "[popcorn_comp] error: '%s' is not a valid .strawberry v3 file\n", path);
         cob_file_free(&file);
         return -1;
     }
@@ -334,6 +358,7 @@ static void collect_program(const Program *p, NameSet *ns) {
     for (i = 0; i < p->count; i++) {
         const Stmt *s = &p->items[i];
         switch (s->kind) {
+            case STMT_POP: collect_expr(s->pop_expr, ns); break;
             case STMT_SET: nameset_add(ns, s->set_name); collect_expr(s->set_expr, ns); break;
             case STMT_TRASH: nameset_add(ns, s->trash_name); break;
             case STMT_WHILE: collect_cond(s->while_cond, ns); collect_program(&s->while_body, ns); break;
@@ -365,34 +390,51 @@ static int emit_c_string_literal(StrBuf *b, const char *text, size_t len) {
 }
 static int emit_expr(StrBuf *b, const Expr *e) {
     switch (e->kind) {
-        case EXPR_NUM: return sb_appendf(b, "%ldL", e->num);
-        case EXPR_VAR: return sb_appendf(b, "cob_var_%s", e->var);
-        case EXPR_BINOP:
-            if (sb_append(b, "(") != 0) return -1;
+        case EXPR_NUM: return sb_appendf(b, "cob_int(%ldL)", e->num);
+        case EXPR_STR:
+            if (sb_append(b, "cob_str(") != 0) return -1;
+            if (emit_c_string_literal(b, e->str_lit, e->str_lit_len) != 0) return -1;
+            return sb_append(b, ")");
+        case EXPR_VAR: return sb_appendf(b, "cob_copy(&cob_var_%s)", e->var);
+        case EXPR_BINOP: {
+            const char *fn;
+            switch (e->op) {
+                case '+': fn = "cob_add"; break;
+                case '-': fn = "cob_sub"; break;
+                case '*': fn = "cob_mul"; break;
+                case '/': fn = "cob_divop"; break;
+                default: return -1;
+            }
+            if (sb_appendf(b, "%s(", fn) != 0) return -1;
             if (emit_expr(b, e->left) != 0) return -1;
-            if (sb_appendf(b, " %c ", e->op) != 0) return -1;
+            if (sb_append(b, ", ") != 0) return -1;
             if (emit_expr(b, e->right) != 0) return -1;
             return sb_append(b, ")");
+        }
         case EXPR_HARVEST:
-            if (sb_append(b, "((long)(intptr_t)malloc((size_t)(") != 0) return -1;
+            if (sb_append(b, "cob_int((long)(intptr_t)malloc((size_t)cob_harvest_bytes(") != 0) return -1;
             if (emit_expr(b, e->left) != 0) return -1;
             return sb_append(b, ")))");
     }
     return -1;
 }
-static const char *cond_op_str(CondOp op) {
+static const char *cond_op_fn(CondOp op) {
     switch (op) {
-        case COND_EQ: return "=="; case COND_NE: return "!=";
-        case COND_LT: return "<";  case COND_GT: return ">";
-        case COND_LE: return "<="; case COND_GE: return ">=";
+        case COND_EQ: return "cob_eq"; case COND_NE: return "cob_ne";
+        case COND_LT: return "cob_lt"; case COND_GT: return "cob_gt";
+        case COND_LE: return "cob_le"; case COND_GE: return "cob_ge";
         default: return NULL;
     }
 }
 static int emit_cond(StrBuf *b, const Cond *c) {
-    if (c->op == COND_TRUTHY) return emit_expr(b, c->left);
-    if (sb_append(b, "(") != 0) return -1;
+    if (c->op == COND_TRUTHY) {
+        if (sb_append(b, "cob_truthy(") != 0) return -1;
+        if (emit_expr(b, c->left) != 0) return -1;
+        return sb_append(b, ")");
+    }
+    if (sb_appendf(b, "%s(", cond_op_fn(c->op)) != 0) return -1;
     if (emit_expr(b, c->left) != 0) return -1;
-    if (sb_appendf(b, " %s ", cond_op_str(c->op)) != 0) return -1;
+    if (sb_append(b, ", ") != 0) return -1;
     if (emit_expr(b, c->right) != 0) return -1;
     return sb_append(b, ")");
 }
@@ -402,18 +444,23 @@ static int emit_program(StrBuf *b, const Program *p) {
         const Stmt *s = &p->items[i];
         switch (s->kind) {
             case STMT_POP:
-                if (sb_append(b, "printf(") != 0) return -1;
-                if (emit_c_string_literal(b, s->pop_text, s->pop_text_len) != 0) return -1;
-                if (sb_append(b, ");\nprintf(\"\\n\");\n") != 0) return -1;
+                if (sb_append(b, "cob_pop(") != 0) return -1;
+                if (emit_expr(b, s->pop_expr) != 0) return -1;
+                if (sb_append(b, ");\n") != 0) return -1;
                 break;
             case STMT_SET:
-                if (sb_appendf(b, "cob_var_%s = ", s->set_name) != 0) return -1;
+                /* free the old value first -- e.g. reassigning a string
+                 * variable in a loop must not leak the previous string,
+                 * same discipline as cob_interp's vars_set(). */
+                if (sb_appendf(b, "cob_free(&cob_var_%s);\ncob_var_%s = ", s->set_name, s->set_name) != 0) return -1;
                 if (emit_expr(b, s->set_expr) != 0) return -1;
                 if (sb_append(b, ";\n") != 0) return -1;
                 break;
             case STMT_TRASH:
-                if (sb_appendf(b, "free((void*)(intptr_t)cob_var_%s); cob_var_%s = 0;\n",
-                                s->trash_name, s->trash_name) != 0) return -1;
+                if (sb_appendf(b,
+                        "if (cob_var_%s.is_str) fprintf(stderr, \"[cob] warning: trash(%s) -- variable holds a string, not a handle\\n\");\n"
+                        "else { free((void*)(intptr_t)cob_var_%s.i); cob_var_%s.i = 0; }\n",
+                        s->trash_name, s->trash_name, s->trash_name, s->trash_name) != 0) return -1;
                 break;
             case STMT_WHILE:
                 if (sb_append(b, "while (") != 0) return -1;
@@ -444,6 +491,90 @@ static int program_uses_harvest_or_trash(const Program *p) {
     return 0;
 }
 
+/* ---------------------------------------------------------------------
+ * COBVALUE RUNTIME -- emitted verbatim at the top of every generated
+ * program. Cob variables can hold an int or a string (as of v0.0.4),
+ * but generated C needs one concrete type per variable, so every Cob
+ * variable becomes a CobValue (a small tagged union) instead of a
+ * plain `long`, and every operator becomes a call into one of these
+ * helpers instead of a raw C operator. This mirrors cob_interp.c's
+ * eval_expr/eval_cond semantics deliberately, including the exact
+ * warning wording, so a program's compiled behavior matches its
+ * interpreted behavior -- same results, same warnings, same fallback
+ * values on a type mismatch.
+ * ------------------------------------------------------------------- */
+static const char *COB_RUNTIME_PREAMBLE =
+"typedef struct { int is_str; long i; char *s; } CobValue;\n"
+"static char *cob_strdup_(const char *s) { size_t n = strlen(s) + 1; char *p = (char *)malloc(n); if (p) memcpy(p, s, n); return p; }\n"
+"static CobValue cob_int(long n) { CobValue v; v.is_str = 0; v.i = n; v.s = NULL; return v; }\n"
+"static CobValue cob_str(const char *s) { CobValue v; v.is_str = 1; v.i = 0; v.s = cob_strdup_(s); return v; }\n"
+"static CobValue cob_str_take(char *s) { CobValue v; v.is_str = 1; v.i = 0; v.s = s; return v; }\n"
+"static void cob_free(CobValue *v) { if (v->is_str) { free(v->s); v->s = NULL; } }\n"
+"static CobValue cob_copy(const CobValue *v) { return v->is_str ? cob_str(v->s ? v->s : \"\") : cob_int(v->i); }\n"
+"static void cob_long_to_str(long n, char *buf, size_t bufsize) { snprintf(buf, bufsize, \"%ld\", n); }\n"
+"static CobValue cob_add(CobValue l, CobValue r) {\n"
+"    if (l.is_str || r.is_str) {\n"
+"        char lbuf[32], rbuf[32];\n"
+"        const char *ls = l.is_str ? l.s : (cob_long_to_str(l.i, lbuf, sizeof(lbuf)), lbuf);\n"
+"        const char *rs = r.is_str ? r.s : (cob_long_to_str(r.i, rbuf, sizeof(rbuf)), rbuf);\n"
+"        size_t ln = strlen(ls), rn = strlen(rs);\n"
+"        char *cat = (char *)malloc(ln + rn + 1);\n"
+"        CobValue result;\n"
+"        if (cat) { memcpy(cat, ls, ln); memcpy(cat + ln, rs, rn); cat[ln + rn] = '\\0'; result = cob_str_take(cat); }\n"
+"        else result = cob_int(0);\n"
+"        cob_free(&l); cob_free(&r);\n"
+"        return result;\n"
+"    }\n"
+"    return cob_int(l.i + r.i);\n"
+"}\n"
+"static CobValue cob_sub(CobValue l, CobValue r) {\n"
+"    if (l.is_str || r.is_str) { fprintf(stderr, \"[cob] warning: operator '-' requires two numbers, got a string; result treated as 0\\n\"); cob_free(&l); cob_free(&r); return cob_int(0); }\n"
+"    return cob_int(l.i - r.i);\n"
+"}\n"
+"static CobValue cob_mul(CobValue l, CobValue r) {\n"
+"    if (l.is_str || r.is_str) { fprintf(stderr, \"[cob] warning: operator '*' requires two numbers, got a string; result treated as 0\\n\"); cob_free(&l); cob_free(&r); return cob_int(0); }\n"
+"    return cob_int(l.i * r.i);\n"
+"}\n"
+"static CobValue cob_divop(CobValue l, CobValue r) {\n"
+"    if (l.is_str || r.is_str) { fprintf(stderr, \"[cob] warning: operator '/' requires two numbers, got a string; result treated as 0\\n\"); cob_free(&l); cob_free(&r); return cob_int(0); }\n"
+"    if (r.i == 0) { fprintf(stderr, \"[cob] warning: division by zero, result treated as 0\\n\"); return cob_int(0); }\n"
+"    return cob_int(l.i / r.i);\n"
+"}\n"
+"static long cob_to_long_for_harvest(CobValue v) {\n"
+"    long n;\n"
+"    if (v.is_str) { fprintf(stderr, \"[cob] warning: harvest() needs a number, got a string; treated as 0\\n\"); n = 0; cob_free(&v); }\n"
+"    else n = v.i;\n"
+"    return n;\n"
+"}\n"
+"static long cob_harvest_bytes(CobValue v) {\n"
+"    long bytes = cob_to_long_for_harvest(v);\n"
+"    if (bytes < 0) { fprintf(stderr, \"[cob] warning: harvest() with negative size, treated as 0\\n\"); bytes = 0; }\n"
+"    return bytes;\n"
+"}\n"
+"static int cob_cmp_raw(CobValue l, CobValue r, int *mismatch) {\n"
+"    int result;\n"
+"    *mismatch = 0;\n"
+"    if (l.is_str != r.is_str) { *mismatch = 1; result = 0; }\n"
+"    else if (l.is_str) result = strcmp(l.s, r.s);\n"
+"    else result = (l.i > r.i) - (l.i < r.i);\n"
+"    cob_free(&l); cob_free(&r);\n"
+"    return result;\n"
+"}\n"
+"static int cob_mismatch_warn(void) { fprintf(stderr, \"[cob] warning: comparing a number to a string; result is false\\n\"); return 0; }\n"
+"static int cob_eq(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c == 0); }\n"
+"static int cob_ne(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c != 0); }\n"
+"static int cob_lt(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c < 0); }\n"
+"static int cob_gt(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c > 0); }\n"
+"static int cob_le(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c <= 0); }\n"
+"static int cob_ge(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c >= 0); }\n"
+"static int cob_truthy(CobValue v) { return v.is_str ? (v.s != NULL && v.s[0] != '\\0') : (v.i != 0); }\n"
+"static void cob_pop(CobValue v) {\n"
+"    if (v.is_str) { fwrite(v.s, 1, strlen(v.s), stdout); }\n"
+"    else { char buf[32]; int n = snprintf(buf, sizeof(buf), \"%ld\", v.i); if (n > 0) fwrite(buf, 1, (size_t)n, stdout); }\n"
+"    fputc('\\n', stdout);\n"
+"    cob_free(&v);\n"
+"}\n";
+
 /* Builds the full, self-contained C translation unit for `prog`. */
 static char *transpile(const Program *prog) {
     StrBuf b; sb_init(&b);
@@ -455,13 +586,18 @@ static char *transpile(const Program *prog) {
         "#include <stdlib.h>\n"
         "#include <stddef.h>\n"
         "#include <stdint.h>\n"
-        "int main(void) {\n") != 0) goto fail;
+        "#include <string.h>\n") != 0) goto fail;
+    if (sb_append(&b, COB_RUNTIME_PREAMBLE) != 0) goto fail;
+    if (sb_append(&b, "int main(void) {\n") != 0) goto fail;
 
     size_t i;
     for (i = 0; i < ns.count; i++) {
-        if (sb_appendf(&b, "long cob_var_%s = 0;\n", ns.names[i]) != 0) goto fail;
+        if (sb_appendf(&b, "CobValue cob_var_%s = cob_int(0);\n", ns.names[i]) != 0) goto fail;
     }
     if (emit_program(&b, prog) != 0) goto fail;
+    for (i = 0; i < ns.count; i++) {
+        if (sb_appendf(&b, "cob_free(&cob_var_%s);\n", ns.names[i]) != 0) goto fail;
+    }
     if (sb_append(&b, "return 0;\n}\n") != 0) goto fail;
 
     free(ns.names);

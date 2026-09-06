@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Download Cob — Cob</title>
-<meta name="description" content="Download Cob 0.0.3-bug-fix-2 for Windows, macOS, or Linux, or build from source.">
+<meta name="description" content="Download Cob 0.0.4 for Windows, macOS, or Linux, or build from source.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -84,7 +84,7 @@
 
   <section class="page-head">
     <div class="wrap">
-      <div class="eyebrow-plain">Version 0.0.3-bug-fix-2</div>
+      <div class="eyebrow-plain">Version 0.0.4</div>
       <h1>Download Cob</h1>
       <p class="lede">Grab the interpreter, compiler, and package manager for your platform, or build from source. All three tools ship together in every release.</p>
     </div>
@@ -177,6 +177,11 @@ $ grep cob-linux-amd64 checksums.txt<br>
       <table class="rel">
         <thead><tr><th>Version</th><th>Notes</th><th></th></tr></thead>
         <tbody>
+          <tr>
+            <td class="ver">0.0.4</td>
+            <td class="note">Strings — a real second value type. pop(x) prints a variable's value, "+" concatenates, and comparisons work on two strings. Shipped in both cob_interp and popcorn_comp, verified to compile and interpret identically.</td>
+            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.4">Release page →</a></td>
+          </tr>
           <tr>
             <td class="ver">0.0.3-bug-fix-2</td>
             <td class="note">Project moved from pixel-pulse-labs to the Cob-Software-Foundation org on GitHub. Every hardcoded repo/registry URL updated, including farmer's default package registry (now cpi.cob.pixel-pulse.work.gd).</td>
