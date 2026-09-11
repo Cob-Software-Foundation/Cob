@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cob — a small, fast language for small, fast tools</title>
+<meta name="description" content="Cob: an interpreter, a native compiler, and a package manager for a corn-threshed little language.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="nav">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">C</span>
+      <span class="brand-word">Cob</span>
+    </a>
+    <nav class="links">
+      <a href="about.html">About</a>
+      <a href="download.html">Downloads</a>
+      <a href="https://docs.cob.pixel-pulse.work.gd/">Docs</a>
+      <a href="community.html">Community</a>
+      <a class="nav-cta" href="download.html">Get Cob</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero" style="padding-top:76px;">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="eyebrow-plain">v0.0.3-bug-fix-1 · Project Obsidian Falcon</div>
+        <h1>A little language,<br><em>threshed</em> down to size.</h1>
+        <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.3-bug-fix-1</a>
+          <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.work.gd/">Read the docs</a>
+        </div>
+        <div class="platform-row">
+          <span>Or grab it for:</span>
+          <a href="download.html#windows">Windows</a>
+          <a href="download.html#macos">macOS</a>
+          <a href="download.html#linux">Linux</a>
+        </div>
+      </div>
+
+      <div class="term" role="img" aria-label="Terminal showing a short Cob program that counts down from five and prints liftoff">
+        <div class="term-bar">
+          <span class="term-dot k"></span><span class="term-dot h"></span><span class="term-dot c"></span>
+          <span class="term-name">countdown.cob</span>
+        </div>
+        <div class="term-body">
+<div><span class="ln-num">1</span><span class="tk-fn">set</span> x = 5</div>
+<div><span class="ln-num">2</span><span class="tk-kw">while</span> x &gt; 0:</div>
+<div><span class="ln-num">3</span>    <span class="tk-fn">pop</span>(<span class="tk-str">"counting down"</span>)</div>
+<div><span class="ln-num">4</span>    <span class="tk-fn">set</span> x = x - 1</div>
+<div><span class="ln-num">5</span><span class="tk-fn">pop</span>(<span class="tk-str">"liftoff"</span>)</div>
+          <div class="term-out">$ cob_interp countdown.cob<br>counting down<br>counting down<br>counting down<br>counting down<br>counting down<br>liftoff</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- THREE TOOLS -->
+  <section class="wrap">
+    <div class="section-head">
+      <h2>One toolchain, three jobs</h2>
+      <p>Each tool does exactly one thing — run a file, build a binary, or fetch a library — and hands off cleanly to the next.</p>
+    </div>
+    <div class="tools">
+      <div class="tool">
+        <span class="tool-cmd">cob_interp file.cob</span>
+        <h3>Interpret</h3>
+        <p>Runs a .cob file directly, with a fast-boot .strawberry bytecode cache so repeat runs skip re-parsing.</p>
+      </div>
+      <div class="tool">
+        <span class="tool-cmd">popcorn_comp file.strawberry -o out</span>
+        <h3>Compile</h3>
+        <p>Transpiles to C and spawns a real compiler to produce a standalone native binary — cross-compile with CobOS/CobArch.</p>
+      </div>
+      <div class="tool">
+        <span class="tool-cmd">farmer harvest name</span>
+        <h3>Fetch</h3>
+        <p>Installs a .cob library from the package registry, zip-slip protected, ready to shuck straight into your program.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOWNLOADS TEASER -->
+  <section class="wrap" id="downloads">
+    <div class="section-head">
+      <h2>Downloads</h2>
+      <p>Every release ships all three tools for nine platform/architecture combinations.</p>
+    </div>
+
+    <div class="downloads">
+      <table class="dl">
+        <thead>
+          <tr><th>Platform</th><th>Architecture</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="plat"><span class="plat-icon">⊞</span> Windows</td>
+            <td class="arch">amd64, 386, arm64</td>
+            <td><a class="get" href="download.html#windows">Get the installer →</a></td>
+          </tr>
+          <tr>
+            <td class="plat"><span class="plat-icon">⌘</span> macOS</td>
+            <td class="arch">amd64, arm64</td>
+            <td><a class="get" href="download.html#macos">Get the installer →</a></td>
+          </tr>
+          <tr>
+            <td class="plat"><span class="plat-icon">🐧</span> Linux</td>
+            <td class="arch">amd64, 386, arm64, arm</td>
+            <td><a class="get" href="download.html#linux">Get the installer →</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="downloads-foot">
+        Need source, an older release, or a checksum? <a href="download.html">See the full downloads page →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- RELEASE NOTES -->
+  <section class="wrap">
+    <div class="release">
+      <div class="release-card">
+        <div class="rv">0.0.3-bug-fix-1</div>
+        <div class="rd">Latest release</div>
+        <ul>
+          <li>Fixed a Windows quoting bug in popcorn_comp's bundled-Zig auto-resolve</li>
+          <li>No changes to cob_interp or farmer</li>
+        </ul>
+        <a class="rlink" href="download.html">Full release notes →</a>
+      </div>
+
+      <div class="changelog">
+        <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.3-bug-fix-1</span>
+          <strong>popcorn_comp: fixed a Windows-only cmd.exe quoting bug</strong>
+          <p>Auto-resolving a bundled zig/ folder next to popcorn_comp could produce a compiler command cmd.exe corrupted before it reached the shell. Explicit --cc/$CobCC compiles were never affected.</p>
+        </div>
+        <div class="entry">
+          <span class="tag">0.0.3</span>
+          <strong>Project Obsidian Falcon</strong>
+          <p>popcorn_comp dropped its embedded TCC in favor of spawning a real compiler (Zig by default); farmer moved to in-process zip extraction with zip-slip protection; SQLite, Tcl, and Tk vendored (not yet wired into the language).</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">Cob</div>
+        <p class="foot-brand-sub">A corn-threshed language: an interpreter, a native compiler, and a package manager, built by Pixel Pulse Labs.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="download.html">Downloads</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.work.gd/">Documentation</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <ul>
+          <li><a href="community.html">Get involved</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob">GitHub</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/cpi">Package registry</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Pixel Pulse Labs.</span>
+      <span>cob.pixel-pulse.work.gd</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

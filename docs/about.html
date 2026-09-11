@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About Cob — Cob</title>
+<meta name="description" content="What Cob is, why it's shaped this way, and where it's headed.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .story{max-width:64ch;}
+  .story p{font-size:16.5px; color:rgba(28,26,15,0.78); margin:0 0 20px;}
+  .story h2{font-size:23px; margin:44px 0 14px;}
+  .story h2:first-child{margin-top:0;}
+
+  .roadmap{display:grid; grid-template-columns:repeat(3, 1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  .rmap{background:var(--silk-hi); padding:26px 24px;}
+  .rmap .status{display:inline-block; font-size:12px; font-weight:600; padding:3px 9px; border-radius:5px; margin-bottom:12px;}
+  .rmap .status.shipped{background:rgba(53,64,31,0.12); color:var(--husk-deep);}
+  .rmap .status.progress{background:rgba(232,174,52,0.18); color:var(--kernel-deep);}
+  .rmap .status.planned{background:rgba(140,90,43,0.1); color:var(--clay);}
+  .rmap h3{font-size:16.5px; margin-bottom:8px;}
+  .rmap p{margin:0; font-size:14px; color:rgba(28,26,15,0.68);}
+
+  .org-card{
+    display:flex; align-items:center; gap:20px; background:var(--white);
+    border:1px solid var(--line); border-radius:10px; padding:26px 28px; margin-top:8px;
+  }
+  .org-mark{
+    width:52px; height:52px; border-radius:10px; flex:none;
+    background:linear-gradient(155deg, var(--husk) 0%, var(--husk-deep) 100%);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Fraunces', serif; color:var(--kernel); font-size:22px; font-weight:680;
+  }
+  .org-card h3{font-size:17px; margin-bottom:4px;}
+  .org-card p{margin:0; font-size:14.5px; color:rgba(28,26,15,0.68);}
+
+  @media (max-width: 880px){ .roadmap{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="nav">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">C</span>
+      <span class="brand-word">Cob</span>
+    </a>
+    <nav class="links">
+      <a href="about.html" aria-current="page">About</a>
+      <a href="download.html">Downloads</a>
+      <a href="https://docs.cob.pixel-pulse.work.gd/">Docs</a>
+      <a href="community.html">Community</a>
+      <a class="nav-cta" href="download.html">Get Cob</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="page-head">
+    <div class="wrap">
+      <div class="eyebrow-plain">About</div>
+      <h1>A language built for the last mile of a small program.</h1>
+      <p class="lede">Cob exists for the programs that don't need a framework — a script you want to run fast today and hand someone a real binary for tomorrow.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="story">
+      <h2>Why Cob</h2>
+      <p>Most small utility scripts end up stuck between two bad choices: an interpreted language that's fast to write but needs a runtime installed everywhere it runs, or a systems language that's fast to run but slow to write. Cob is built to close that gap for genuinely small programs — Python-style indentation for the part you write quickly, and a real path to a standalone native binary for the part you ship.</p>
+      <p>That's why the toolchain is split into three single-purpose tools instead of one do-everything binary. <code class="mono">cob_interp</code> runs a program directly while you're writing it, with a bytecode cache so re-runs boot fast. <code class="mono">popcorn_comp</code> takes that same bytecode and produces a real, standalone executable when you're done — no bundled runtime, no "install Cob to run this file." <code class="mono">farmer</code> fetches libraries other people have written, so you're not starting from nothing.</p>
+
+      <h2>Why it's compiler is a real compiler</h2>
+      <p>Earlier versions of popcorn_comp statically linked TCC's compiler source directly into the binary. That worked, but it meant Cob was carrying its own C compiler internals — a maintenance burden with no upside once a better option existed. As of v0.0.3, popcorn_comp transpiles to plain C and spawns <a href="https://ziglang.org/">Zig's</a> <code class="mono">zig cc</code> as a subprocess instead. Zig bundles libc and CRT files for essentially every target in one install, which is what turns cross-compiling into a single <code class="mono">-target</code> flag rather than a separately installed toolchain per platform.</p>
+
+      <h2>The corn theme, briefly</h2>
+      <p>The naming isn't just decoration — it's meant to make the mental model legible. <code class="mono">shuck</code> pulls in a library the way you'd shuck an ear of corn to get at what's inside. <code class="mono">harvest</code> and <code class="mono">trash</code> are manual memory allocation and freeing, gated behind <code class="mono">--no-gc</code> because they're a deliberate, opt-in escape hatch, not the default. The <code class="mono">.strawberry</code> cache and <code class="mono">farmer harvest &lt;package&gt;</code> keep the same vocabulary consistent through the whole toolchain instead of switching metaphors halfway through.</p>
+
+      <h2>Where it's headed</h2>
+      <p>SQLite, Tcl, and Tk are vendored into the source tree and build cleanly, but none of them have Cob-language keywords yet — proving they build and link was the scope of this cycle. Wiring them into the language itself, with real keywords rather than raw C linkage, is a separate design step that hasn't started.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="section-head">
+      <h2>Where things stand</h2>
+      <p>Stated plainly, the way the project's own release notes do.</p>
+    </div>
+    <div class="roadmap">
+      <div class="rmap">
+        <span class="status shipped">Shipped</span>
+        <h3>Real compiler backend</h3>
+        <p>popcorn_comp spawns Zig (or any --cc override) instead of embedding TCC. Verified end-to-end on native Linux.</p>
+      </div>
+      <div class="rmap">
+        <span class="status shipped">Shipped</span>
+        <h3>In-process package extraction</h3>
+        <p>farmer unzips via a statically linked miniz, with zip-slip protection tested against a real malicious archive.</p>
+      </div>
+      <div class="rmap">
+        <span class="status progress">In progress</span>
+        <h3>Cross-platform CI verification</h3>
+        <p>The 9-target build matrix runs, but only native Linux amd64 gets an executed smoke test today.</p>
+      </div>
+      <div class="rmap">
+        <span class="status planned">Planned</span>
+        <h3>SQLite/Tcl/Tk language bindings</h3>
+        <p>Vendored and buildable, with no Cob-facing keywords yet. Design work for the language surface hasn't started.</p>
+      </div>
+      <div class="rmap">
+        <span class="status planned">Planned</span>
+        <h3>Windows ARM32</h3>
+        <p>Cut from the current release — the target Cob's maintainers were least confident Zig fully supports.</p>
+      </div>
+      <div class="rmap">
+        <span class="status progress">In progress</span>
+        <h3>Automated test suite</h3>
+        <p>Verification today is manual/smoke-level. A real test suite is the next structural investment.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="section-head">
+      <h2>Who's behind it</h2>
+    </div>
+    <div class="org-card">
+      <div class="org-mark">PP</div>
+      <div>
+        <h3>Pixel Pulse Labs</h3>
+        <p>Cob and its package registry, <a href="https://github.com/pixel-pulse-labs/cpi" style="color:var(--husk-deep); text-decoration:underline;">cpi</a>, are built and maintained by Pixel Pulse Labs. The project is early — version 0.0.x — and developed in the open on GitHub.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">Cob</div>
+        <p class="foot-brand-sub">A corn-threshed language: an interpreter, a native compiler, and a package manager, built by Pixel Pulse Labs.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="download.html">Downloads</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.work.gd/">Documentation</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <ul>
+          <li><a href="community.html">Get involved</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob">GitHub</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/cpi">Package registry</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/pixel-pulse-labs/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Pixel Pulse Labs.</span>
+      <span>cob.pixel-pulse.work.gd</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
