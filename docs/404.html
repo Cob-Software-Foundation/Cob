@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page not found — Cob</title>
+<meta name="description" content="This page doesn't exist. Catch some kernels while you're here.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .notfound-head{ text-align:center; padding:64px 0 8px; }
+  .notfound-head .code{
+    font-family:'Fraunces', serif; font-weight:680; font-size:clamp(56px,10vw,96px);
+    color:var(--husk); line-height:1; letter-spacing:-0.02em;
+  }
+  .notfound-head h1{ font-size:clamp(22px,3vw,28px); margin-top:10px; }
+  .notfound-head p{ margin:12px auto 0; max-width:48ch; color:rgba(28,26,15,0.68); font-size:16px; }
+  .notfound-head .back-link{
+    display:inline-block; margin-top:18px; font-size:14.5px; font-weight:600;
+    color:var(--husk-deep); text-decoration:none; border-bottom:1px solid var(--clay);
+  }
+
+  .game-wrap{ display:flex; justify-content:center; padding:32px 28px 80px; }
+  .game-card{
+    background:var(--white); border:1px solid var(--line); border-radius:12px;
+    padding:20px; max-width:520px; width:100%;
+  }
+  .game-hud{
+    display:flex; justify-content:space-between; align-items:baseline;
+    margin-bottom:12px; font-size:14px; color:rgba(28,26,15,0.65);
+  }
+  .game-hud strong{ color:var(--ink); font-family:'IBM Plex Mono', monospace; font-size:15px; }
+  #gameCanvas{
+    display:block; width:100%; height:auto; border-radius:8px;
+    background:var(--silk-hi); border:1px solid var(--line); touch-action:none; cursor:pointer;
+  }
+  .game-hint{
+    margin-top:12px; font-size:13px; color:rgba(28,26,15,0.5); text-align:center;
+  }
+  .game-overlay-btn{
+    display:none; margin:14px auto 0; padding:10px 20px; border-radius:7px;
+    background:var(--kernel); color:var(--husk-deep); font-weight:600; font-size:14.5px;
+    border:none; cursor:pointer;
+  }
+  .game-overlay-btn:hover{ background:#f2bf4f; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="nav">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">C</span>
+      <span class="brand-word">Cob</span>
+    </a>
+    <nav class="links">
+      <a href="about.html">About</a>
+      <a href="download.html">Downloads</a>
+      <a href="https://docs.cob.pixel-pulse.work.gd/">Docs</a>
+      <a href="community.html">Community</a>
+      <a class="nav-cta" href="download.html">Get Cob</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="notfound-head">
+    <div class="code">404</div>
+    <h1>We shucked through every folder and couldn't find this page.</h1>
+    <p>It might've moved, or the link's just wrong. While you're here, there's a basket that needs filling.</p>
+    <a class="back-link" href="index.html">← Back to the homepage</a>
+  </div>
+
+  <div class="game-wrap">
+    <div class="game-card">
+      <div class="game-hud">
+        <span>Kernel Catch</span>
+        <span>Score: <strong id="score">0</strong> &nbsp; Missed: <strong id="missed">0</strong>/3</span>
+      </div>
+      <canvas id="gameCanvas" width="500" height="360"></canvas>
+      <button class="game-overlay-btn" id="restartBtn">Out of husks — play again</button>
+      <p class="game-hint">Arrow keys, drag, or move your mouse/finger over the basket.</p>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">Cob</div>
+        <p class="foot-brand-sub">A corn-threshed language: an interpreter, a native compiler, and a package manager, built by Pixel Pulse Labs.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="download.html">Downloads</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.work.gd/">Documentation</a></li>
+          <li><a href="about.html">About</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <ul>
+          <li><a href="community.html">Get involved</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob">GitHub</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/cpi">Package registry</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Pixel Pulse Labs.</span>
+      <span>cob.pixel-pulse.work.gd</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- pure logic (unit-tested standalone before shipping) ----
+  function clampBasketX(x, canvasWidth, basketWidth) {
+    if (x < 0) return 0;
+    if (x > canvasWidth - basketWidth) return canvasWidth - basketWidth;
+    return x;
+  }
+  function checkCatch(kernel, basket) {
+    const kernelBottom = kernel.y + kernel.r;
+    if (kernelBottom < basket.y) return false;
+    if (kernelBottom > basket.y + basket.height) return false;
+    return kernel.x + kernel.r > basket.x && kernel.x - kernel.r < basket.x + basket.width;
+  }
+  function checkMiss(kernel, canvasHeight) {
+    return kernel.y - kernel.r > canvasHeight;
+  }
+  function spawnKernel(canvasWidth, score) {
+    const r = 9;
+    const speed = 2 + Math.min(score * 0.15, 4);
+    return { x: r + Math.random() * (canvasWidth - r * 2), y: -r, r: r, speed: speed };
+  }
+
+  // ---- canvas wiring ----
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const missedEl = document.getElementById("missed");
+  const restartBtn = document.getElementById("restartBtn");
+
+  const W = canvas.width, H = canvas.height;
+  const BASKET_W = 74, BASKET_H = 16, BASKET_Y = H - 34;
+  const SPAWN_MS = 850;
+  const MAX_MISSES = 3;
+
+  const colors = { husk: "#35401F", kernel: "#E8AE34", kernelDeep: "#C6841A", ink: "#1C1A0F" };
+
+  let basketX = W / 2 - BASKET_W / 2;
+  let kernels = [];
+  let score = 0, missed = 0, running = true, lastSpawn = 0;
+
+  function resetGame() {
+    basketX = W / 2 - BASKET_W / 2;
+    kernels = [];
+    score = 0; missed = 0; running = true; lastSpawn = 0;
+    scoreEl.textContent = "0";
+    missedEl.textContent = "0";
+    restartBtn.style.display = "none";
+    requestAnimationFrame(loop);
+  }
+
+  // input: keyboard
+  const keys = {};
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { keys[e.key] = true; e.preventDefault(); }
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key] = false; });
+
+  // input: mouse / touch follows pointer x, relative to canvas, accounting for CSS scaling
+  function pointerToCanvasX(clientX) {
+    const rect = canvas.getBoundingClientRect();
+    const scale = W / rect.width;
+    return (clientX - rect.left) * scale;
+  }
+  canvas.addEventListener("mousemove", function (e) {
+    basketX = clampBasketX(pointerToCanvasX(e.clientX) - BASKET_W / 2, W, BASKET_W);
+  });
+  canvas.addEventListener("touchmove", function (e) {
+    if (e.touches.length > 0) {
+      basketX = clampBasketX(pointerToCanvasX(e.touches[0].clientX) - BASKET_W / 2, W, BASKET_W);
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  restartBtn.addEventListener("click", resetGame);
+
+  function update(dt, now) {
+    if (keys.ArrowLeft) basketX = clampBasketX(basketX - 5, W, BASKET_W);
+    if (keys.ArrowRight) basketX = clampBasketX(basketX + 5, W, BASKET_W);
+
+    if (now - lastSpawn > SPAWN_MS) {
+      kernels.push(spawnKernel(W, score));
+      lastSpawn = now;
+    }
+
+    const basket = { x: basketX, y: BASKET_Y, width: BASKET_W, height: BASKET_H };
+    kernels = kernels.filter(function (k) {
+      k.y += k.speed;
+      if (checkCatch(k, basket)) { score++; scoreEl.textContent = String(score); return false; }
+      if (checkMiss(k, H)) {
+        missed++; missedEl.textContent = String(missed);
+        if (missed >= MAX_MISSES) { running = false; restartBtn.style.display = "block"; }
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function drawKernel(k) {
+    ctx.beginPath();
+    ctx.fillStyle = colors.kernel;
+    ctx.ellipse(k.x, k.y, k.r * 0.8, k.r, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = colors.kernelDeep;
+    ctx.lineWidth = 1;
+    ctx.moveTo(k.x, k.y - k.r * 0.6);
+    ctx.lineTo(k.x, k.y + k.r * 0.6);
+    ctx.stroke();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    for (let i = 0; i < kernels.length; i++) drawKernel(kernels[i]);
+
+    ctx.fillStyle = colors.husk;
+    ctx.beginPath();
+    ctx.roundRect(basketX, BASKET_Y, BASKET_W, BASKET_H, 6);
+    ctx.fill();
+
+    if (!running) {
+      ctx.fillStyle = "rgba(28,26,15,0.55)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#FFFDF6";
+      ctx.font = "600 20px 'Fraunces', serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Out of husks!", W / 2, H / 2 - 6);
+      ctx.font = "14px 'IBM Plex Sans', sans-serif";
+      ctx.fillText("Final score: " + score, W / 2, H / 2 + 18);
+    }
+  }
+
+  let lastTime = 0;
+  function loop(now) {
+    const dt = now - lastTime;
+    lastTime = now;
+    if (running) {
+      update(dt, now);
+      draw();
+      requestAnimationFrame(loop);
+    } else {
+      draw();
+    }
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+
+</body>
+</html>
