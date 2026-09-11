@@ -1,0 +1,5 @@
+{
+  "packages": [
+    { "name": "greeter", "version": "1.0.0", "description": "A tiny example Cob package -- prints a greeting and exposes a greetings_given variable." }
+  ]
+}
