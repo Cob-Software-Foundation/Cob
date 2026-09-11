@@ -1,0 +1,365 @@
+# Cob Language v0.0.4
+
+## Added
+
+### Strings — a real second value type
+
+Cob variables were integers only, full stop, since the language's
+first release. This adds a second kind of value: strings. This is a
+new capability, not a bug fix, which is why it's versioned 0.0.4
+rather than another 0.0.3-bug-fix-N.
+
+What's new, concretely:
+
+- **`pop(<expr>)` now accepts any expression**, not just a string
+  literal. `pop(x)` prints an int variable's decimal value or a
+  string variable's contents. This was the single most-requested gap
+  in the language up to this point — there was previously no way to
+  print a computed value at all.
+- **`set` accepts string literals**: `set name = "world"`. A
+  variable's "type" is just whatever it was last `set` to; Cob still
+  has no type declarations.
+- **String concatenation via `+`**: `"hello, " + name`. If either
+  side of `+` is a string, the other side is stringified (an int
+  becomes its decimal digits) and the two are joined. `-`, `*`, `/`
+  still require two numbers, same as before, and now report a clear
+  warning (result treated as 0) rather than silently doing something
+  undefined if given a string.
+- **String comparison in `while`/conditions**: `==`, `!=`, `<`, `>`,
+  `<=`, `>=` all work on two strings (strcmp-based ordering) exactly
+  as they already did on two numbers. Comparing a string to a number
+  is a warning, evaluating to false, rather than an implicit,
+  surprising conversion either direction.
+- Truthiness for a bare condition now applies to strings too: a
+  non-empty string is truthy, matching non-zero for numbers.
+
+### What did NOT change
+
+`harvest()`/`trash()`, `shuck`, `while` loop semantics and the
+10,000,000-iteration safety cap, and the `--no-gc`/`--no-cache` flags
+are all unchanged and re-verified below.
+
+### popcorn_comp also compiles string-using programs now
+
+Originally shipped as cob_interp-only in this same release, with
+popcorn_comp support called out as follow-up work. That follow-up is
+done: popcorn_comp now compiles `.cob` programs that use strings into
+real, standalone native binaries too.
+
+popcorn_comp has its own separate copy of the expression AST and its
+own C code generator (it doesn't share code with cob_interp), so this
+needed a real second implementation, not a shared fix. Every Cob
+variable is now emitted as `CobValue` — a small tagged struct (int or
+string) — instead of a plain `long`, and every operator becomes a
+call into a small hand-written C runtime embedded at the top of the
+generated file (`cob_add`, `cob_eq`, `cob_pop`, etc.) instead of a raw
+C operator. That runtime deliberately mirrors cob_interp's
+eval_expr/eval_cond logic, including the exact warning wording, so a
+compiled program's behavior matches its interpreted behavior — same
+results, same warnings, same fallback-to-0 on a type mismatch. The
+one intentional difference: compiled-code warnings are tagged `[cob]`
+rather than `[cob_interp]`, since a compiled binary is its own
+standalone program, not the interpreter.
+
+popcorn_comp's own `.strawberry` reader was updated to the same v3
+format (`EXPR_STR`, `STMT_POP` holding a general expression) so it
+can read caches cob_interp now writes.
+
+**A real bug found and fixed before shipping this:** the first
+version of the string runtime used the platform's `strdup()`, which
+isn't part of strict C99 — under `-std=c99` it has no declaration, so
+GCC implicitly assumed it returned `int`, truncating the returned
+pointer and segfaulting on the very first string literal. Fixed by
+hand-writing a small portable duplicate (`cob_strdup_`, malloc +
+memcpy) instead of depending on a POSIX extension — the same pattern
+cob_interp's own `cob_strdup` already used for exactly this reason.
+
+**A real leak found and fixed before shipping this:** the first
+version of the code generator never freed a variable's final string
+value when the compiled program exited — cob_interp does this via
+`vars_free()` at shutdown, but the generated C had no equivalent.
+Fixed by emitting a `cob_free()` call for every declared variable
+right before `return 0` in generated `main()`.
+
+**Also fixed in the same pass:** `pop(x)` — printing a variable —
+wasn't being scanned for variable names to declare in the generated
+C, since the old codegen assumed `pop()` could only ever take a fixed
+literal with no variables in it. A compiled program using `pop(x)`
+would have referenced an undeclared C variable and failed to compile.
+
+**Verified this release, for popcorn_comp specifically:**
+- Every test used to verify cob_interp's string support was re-run
+  through the full pipeline — `cob_interp` produces a `.strawberry`
+  cache, `popcorn_comp` compiles it, the resulting binary is run, and
+  its output is diffed against `cob_interp`'s own interpreted output
+  for the identical source. All matched exactly: the original
+  all-integer countdown example, string literals, concatenation
+  (string+string and string+int), `pop()` of both an int and a string
+  variable, string equality and ordering comparisons, both
+  type-mismatch warning paths, `harvest()`/`trash()` including a
+  dynamic (variable) byte count and a negative-size warning, the full
+  `math` package (which exercises `shuck`, six PASS assertions, and
+  the tally display), and the 2,000-iteration string-reassignment
+  stress test.
+- Every one of those, compiled and run, was also checked with
+  `valgrind --leak-check=full` — 0 leaks, 0 errors, including after
+  fixing the shutdown-cleanup leak above.
+- `gcc -std=c99 -Wall -Wextra` on `popcorn_comp.c` itself: zero
+  warnings.
+
+**Known gap, pre-existing and not addressed in this pass:** compiled
+`trash()` has no double-free or invalid-handle detection at all — it
+was already a direct, untracked `free()` call before strings existed,
+and still is. `cob_interp` catches this and warns; a compiled binary
+silently allows it, same as before this release. Worth its own
+follow-up, unrelated to strings.
+
+### Known scope limit: cross-target string support is unverified
+
+Everything verified above was compiled natively (Linux amd64 host,
+Linux amd64 target, via plain `gcc`). The string runtime embedded in
+generated C is written in portable C99 with no platform-specific
+calls — it should cross-compile via Zig the same as any other
+generated Cob program — but that hasn't actually been run and tested
+on a genuine Windows or macOS target, or through the Zig backend
+specifically, the way the native-gcc path in this release was. Treat
+cross-compiled string support as "should work, not yet proven,"
+consistent with how earlier releases have flagged untested
+cross-platform paths.
+
+### The `.strawberry` cache format changed (v2 → v3)
+
+The on-disk AST format changed shape to represent the new string
+expression kind, so the cache's magic bytes were bumped from
+`COBSTRW2` to `COBSTRW3`. A cache written by this version is
+correctly and safely rejected by anything still expecting v2 (falls
+back to reparsing from source, the same as if no cache existed at
+all) rather than being misread. This was verified directly: a
+hand-corrupted file with the old magic and new-format bytes behind it
+was confirmed to be rejected cleanly, with a fallback to reparsing,
+not a crash or garbage output.
+
+## Verified this release
+
+- Full rewrite of the value representation (`Var`/`VarTable`,
+  `eval_expr`, `eval_cond`, `execute()`) from raw `long` to a tagged
+  `Value` (int or string) — compiles clean with
+  `gcc -std=c99 -Wall -Wextra`, zero warnings.
+- **Regression**: the original all-integer countdown example and the
+  full `math` package test suite (factorial/gcd/power/abs/min/max/
+  tally, 6 assertions) both produce byte-identical output to before
+  this change.
+- **New features**, each actually run against the real interpreter:
+  string literals, `pop()` of an int variable, `pop()` of a string
+  variable, string+string concatenation, string+int concatenation,
+  string equality in a self-terminating `while`, string ordering
+  comparison, and the type-mismatch warnings for `-`/`*`/`/` on a
+  string and for comparing a string to a number.
+- **`harvest()`/`trash()` regression**: allocate, free, double-free
+  warning, and the `--no-gc` gate all still behave identically now
+  that handles flow through `Value` instead of a bare `long`.
+- **Memory correctness**: every test above, plus a 2,000-iteration
+  loop reassigning a string each pass, run clean under
+  `valgrind --leak-check=full` — 0 leaks, 0 errors, allocations and
+  frees exactly balanced in every run.
+- **Cache round-trip**: a string-using program produces identical
+  output whether freshly parsed or loaded from its own `.strawberry`
+  v3 cache.
+
+## Not verified
+
+- popcorn_comp's string support on a real Windows/macOS target, or
+  through a cross-compile (Zig) build rather than native gcc — see
+  above.
+- No testing on Windows or macOS for this change; verified on Linux
+  only, same as the source-level verification pattern in earlier
+  releases.
+
+---
+
+# Cob Language v0.0.3-bug-fix-2
+
+## Changed
+
+### Project moved from `pixel-pulse-labs` to `Cob-Software-Foundation` on GitHub
+
+All three repositories (`Cob`, `cpi`, and the new `Cob-Docs`) now live
+under the `Cob-Software-Foundation` GitHub org instead of
+`pixel-pulse-labs`. This release updates every reference that was
+hardcoded to the old org:
+
+- **`include/common.h`**: `COB_REPO_URL` and the file header comment
+  now point to `https://github.com/Cob-Software-Foundation/Cob`.
+- **`docs/index.html`** and **`Release.txt`**: GitHub/license links
+  updated to the new org. (Historical mentions of the old
+  `pixel-pulse-labs.github.io/cpi` URL inside the bug-fix-2 changelog
+  entry above were left as-is deliberately — that's a factual record
+  of what the URL used to be, not a live link.)
+
+`COB_FARMER_DEFAULT_BASE_URL` itself (`cpi.cob.pixel-pulse.work.gd`)
+was already unaffected by the org rename, since it's a custom domain,
+not a `github.io` URL — no change needed there, still correct from
+bug-fix-2.
+
+### Also fixed while in there: `cpi` registry's `zip_url` fields were still on the old `github.io` URL
+
+Separately from the org rename, `cpi`'s own package metadata
+(`docs/api/v1/packages/*.json`) had `zip_url` values pointing at
+`https://pixel-pulse-labs.github.io/cpi/packages/...` — the raw
+GitHub Pages URL from *before* the custom domain was set up in
+bug-fix-2. `farmer`'s own default base URL got updated to the custom
+domain then, but the registry's self-referencing zip URLs were missed.
+Updated both `greeter.json` and `math.json` to
+`https://cpi.cob.pixel-pulse.work.gd/packages/...`, matching the
+domain `farmer` actually resolves against by default.
+
+**Verified this release:**
+- Rebuilt `farmer` from the patched source — compiles clean.
+- Re-ran the full local harvest test (local HTTP server standing in
+  for the registry, real `farmer` binary, real miniz extraction): metadata
+  fetch, sha256 verification, and extraction into `cob_modules/math/`
+  all passed against the corrected `zip_url`.
+- Grepped the full source tree, both doc sites, and both published
+  Cob packages (`math`, `seed`) for any remaining `pixel-pulse-labs`
+  reference — none left outside the deliberate historical changelog
+  mentions noted above.
+
+**Not verified:** an actual `farmer harvest` against the live
+`cpi.cob.pixel-pulse.work.gd` domain with the corrected `zip_url` from
+a real machine — this environment's network doesn't reach that domain.
+The local-server test above exercises the identical code path, but a
+real end-to-end run on the live domain is still worth doing before
+calling this fully verified.
+
+---
+
+# Cob Language v0.0.3-bug-fix-2
+
+## Changed
+
+### `farmer`: default package registry URL updated to the custom domain
+
+`COB_FARMER_DEFAULT_BASE_URL` (`include/common.h`) now points at
+`https://cpi.cob.pixel-pulse.work.gd` instead of the previous
+`https://pixel-pulse-labs.github.io/cpi`.
+
+The `cpi` registry itself hasn't moved — it's still served from the
+same GitHub Pages site (`Cob-Software-Foundation/cpi`, `docs/` on `main`).
+Only the domain in front of it changed, via a `CNAME` record on that
+repo. This release just updates `farmer`'s compiled-in default so a
+plain `farmer harvest <package>` resolves against the new domain
+without needing `$COB_FARMER_BASE_URL` set manually.
+
+If you were already overriding the URL with
+`$COB_FARMER_BASE_URL=https://pixel-pulse-labs.github.io/cpi`, that
+still works — GitHub Pages doesn't stop serving the old
+`github.io` URL just because a custom domain was added, it's just no
+longer the default `farmer` uses.
+
+No other change. `cob_interp` and `popcorn_comp` are unchanged from
+v0.0.3-bug-fix-1.
+
+**Verified this release:** grepped the full source tree for any other
+reference to the old `github.io` URL — none found; `common.h` was the
+only place it was hardcoded.
+
+**Not verified:** an actual `farmer harvest` run against the live
+`cpi.cob.pixel-pulse.work.gd` domain from a real machine outside this
+environment (this environment's network egress doesn't reach that
+domain to test directly). The URL was confirmed correct by inspection
+of the compiled-in default, not by an end-to-end network fetch.
+
+---
+
+# Cob Language v0.0.3-bug-fix-1
+
+## Fixed
+
+### `popcorn_comp`: Windows `system()` quoting bug in bundled-Zig auto-resolve
+
+`find_bundled_zig_cc()` returns a pre-quoted compiler string (`"path" cc`).
+`cob_spawn_compile()` then appends further quoted arguments (`-o "out" "in"`),
+producing a command line with multiple separate quoted tokens that starts
+with a quote.
+
+On Windows, `system()` hands this to `cmd.exe /c <string>`. `cmd.exe` strips
+only the first and last `"` of a command line that starts with a quote —
+not matching pairs — which corrupts multi-token quoted strings like this
+one. This meant auto-resolving a bundled `zig/` folder next to the binary
+failed with `'...' is not recognized as an internal or external command`,
+even though the equivalent compiler invocation worked fine when passed
+explicitly via `--cc` (which isn't pre-quoted).
+
+Fix: on Windows, if the built command starts with a quote, wrap the whole
+command in one more pair of quotes before calling `system()` — the standard
+workaround for this `cmd.exe` behavior. `--cc`/`$CobCC` paths are untouched.
+
+Only `popcorn_comp` (`src/popcorn_comp.c`) changed in this release; `cob_interp`
+and `farmer` are unchanged from v0.0.3.
+
+**Not yet verified:** on a real Windows machine with a genuine bundled Zig
+folder. Verified so far: compiles clean, no regression to the `--cc`/`$CobCC`
+explicit-compiler path, which was already unaffected by the bug.
+
+---
+
+# Cob Language v0.0.3 — Project Obsidian Falcon
+
+A corn-themed hybrid language with Python-style indentation, an interpreter, a native compiler, and a package manager.
+
+## What's new in v0.0.3
+
+### `popcorn_comp`: dropped embedded TCC, now spawns a real compiler
+
+Earlier versions statically linked TCC's own compiler source (`libtcc.c`) directly into `popcorn_comp`. That's gone — `popcorn_comp` now transpiles a `.strawberry` file to plain C and spawns a real C compiler as a subprocess to produce the native executable.
+
+- **Default backend is [Zig](https://ziglang.org/)'s `zig cc`** — a Clang-based drop-in C compiler that bundles libc/CRT files for essentially every target in a single install. That's what makes `CobOS`/`CobArch` cross-compiling a plain `-target` flag instead of needing a separately installed cross-toolchain per platform.
+- Compiler resolution order: `--cc <path>` → `$CobCC` → `$CobOS`/`$CobArch` (looked up in a table of Zig target triples) → plain `zig cc` on `PATH` for native builds.
+- **Linux targets default to `musl` libc**, not `glibc` — produces fully static binaries with no runtime libc dependency.
+- **Windows ARM32 is not supported** (cut this cycle — it was also the target we were least confident Zig fully supports).
+- `--emit-c <path.c>` still works, for inspecting the generated C.
+
+```
+CobOS=windows CobArch=amd64 popcorn_comp prog.strawberry -o prog.exe
+# -> spawns: zig cc -target x86_64-windows-gnu ...
+```
+
+### `farmer`: real in-process zip extraction via miniz, plus zip-slip protection
+
+`farmer harvest` used to shell out to `unzip` (Unix) or `Expand-Archive` (Windows) to extract downloaded packages. It now extracts in-process using the statically-linked [miniz](https://github.com/richgel999/miniz) library instead — one less external tool required on the system.
+
+- Every extracted archive entry's path is checked against **zip-slip path traversal** before anything is written to disk. A malicious `../../../../etc/whatever` entry is rejected outright, with nothing written outside the destination directory.
+- Nested directories inside a package zip are now handled correctly regardless of whether the archive includes explicit directory entries.
+- The package registry now lives in its own dedicated repo, [`Cob-Software-Foundation/cpi`](https://github.com/Cob-Software-Foundation/cpi) — `farmer`'s default base URL was updated to match. Override anytime with `$COB_FARMER_BASE_URL`.
+
+### Documentation site
+
+`docs/index.html` in this repo is now real language and tool reference documentation — every keyword (`pop`, `set`, `while`, `shuck`, `harvest`/`trash`, the `_MakeCache` directive) and all three CLI tools, each with usage and flags. The package-registry landing page that used to live here moved to the `cpi` repo, where it belongs.
+
+### Vendored libraries (not yet wired into Cob's language)
+
+Added under `vendor/` as embeddable/linkable libraries, per project decision. None of these have Cob-facing keywords yet — that's a separate design step.
+
+- **SQLite 3.53.4** — the single-file amalgamation build (`sqlite3.c`/`sqlite3.h`).
+- **Tcl 9.0.4** and **Tk 9.0** — full source distributions, built via their own `configure`/`make` (`make tcl`, `make tk` targets added to the `Makefile`). Tk requires real X11 development headers on the build machine.
+- **miniz 3.1.1** — backs `farmer`'s zip extraction (see above).
+
+### CI
+
+- `cob_interp`, `farmer`, and `popcorn_comp` all build across the full **9-target matrix** (Windows/Linux/macOS × amd64/386/arm64/arm as applicable — down from 10 after cutting Windows ARM32).
+- A real end-to-end smoke test now runs for `popcorn_comp` on native Linux amd64: compile a `.cob` program, run it through `popcorn_comp`, diff the output against the interpreter.
+- Fixed a bug in the TCC upstream-sync workflow where a `conftest.c` file `./configure` genuinely needs was being silently dropped on every sync, because TCC's own vendored `.gitignore` has a `conftest*` pattern that collaterally matched the tracked source file. (Now moot for this repo specifically, since `popcorn_comp` no longer depends on TCC at all — but the underlying `.gitignore`-collision lesson is worth knowing if vendoring other C projects.)
+
+## Known gaps, stated plainly
+
+- **You need Zig installed** for `popcorn_comp`'s default backend to work. This wasn't testable end-to-end in the environment these notes were written in (no network access to `ziglang.org`) — the command-construction logic was verified against a stub, but real compiles need verification on an actual machine with Zig installed.
+- **SQLite/Tcl/Tk are buildable, not usable from Cob yet.** No `sqlopen`, no Tcl `shuck`-equivalent, no Tk widget keywords. Proving they build and link was this cycle's scope.
+- **`popcorn_comp` isn't smoke-tested on the other 8 targets in CI** — only native Linux amd64, since that's the only target whose output can actually execute on the CI runner without emulation.
+
+## Upgrading from v0.0.2
+
+If you have scripts calling `popcorn_comp` and relying on the old `CobOS`/`CobArch` → cross-gcc-binary-name behavior, note that resolution now targets Zig triples instead. Install Zig, or pass `--cc <path>`/`$CobCC` to keep using a specific compiler directly.
+
+---
+
+Binaries are provided per-platform in this release. Verify downloads against `checksums.txt`.
