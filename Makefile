@@ -1,16 +1,38 @@
 # =========================================================================
 # Makefile -- Project Obsidian Falcon / Cob Language Toolchain
 # =========================================================================
-# Builds:
-#   cob_interp    - the interpreter (src/cob_interp.c + src/file_io.c)
+# `make` (the default `all` target) builds:
+#   cob_interp_full - the interpreter, with SQLite (sql_open, sql_exec,
+#                   sql_query, sql_close) AND _cobwindow (window_open,
+#                   window_label, window_wait, window_close, backed by
+#                   raylib) built in. This builds SQLite and raylib
+#                   from vendor/ itself the first time (see the
+#                   cob_interp_full/sqlite/raylib target comments
+#                   below) -- no configure/autoconf step for either,
+#                   just plain Makefiles, so this is fast (well under a
+#                   minute on a clean tree). Needs real X11 + OpenGL
+#                   dev headers on Linux/macOS for the _cobwindow piece
+#                   (libx11-dev libgl1-mesa-dev libxrandr-dev
+#                   libxinerama-dev libxcursor-dev libxi-dev on
+#                   Debian/Ubuntu); Windows needs nothing extra beyond
+#                   a normal MinGW/w64devkit install.
+#
+#                   Tcl/Tk are NOT part of this binary -- see
+#                   `make cob_interp_db` below if you specifically want
+#                   tcl_eval()/tk_eval(), which do need a much heavier
+#                   from-source Tcl/Tk build.
 #   popcorn_comp  - the native compiler (transpiles to C, spawns a real
 #                   C compiler -- see src/popcorn_comp.c's header
 #                   comment for why this isn't a statically-linked TCC,
 #                   and how it picks which compiler to spawn)
 #   farmer        - the package manager
 #
-# None of the three have any TCC/src-tcc build dependency -- all three
-# are plain, dependency-free C99 that build standalone.
+# popcorn_comp and farmer have no TCC/src-tcc build dependency -- both
+# are plain, dependency-free C99 that build standalone. If you want
+# the interpreter without SQLite/_cobwindow at all -- no vendor build,
+# no X11/OpenGL dependency, builds in under a second -- use
+# `make cob_interp` instead of plain `make`; see its target comment
+# below.
 #
 # Platform detection follows the same $(OS)/uname pattern used in
 # .github/workflows/build.yml, so this Makefile works unmodified under
@@ -54,12 +76,26 @@ ifeq ($(OS),Windows_NT)
     DB_LIBS        = $(TK_LIB) $(TK_STUB_LIB) $(TCL_LIB) $(TCL_STUB_LIB) \
                       -lnetapi32 -lkernel32 -luser32 -ladvapi32 -luserenv -lws2_32 \
                       -lgdi32 -lcomdlg32 -limm32 -lcomctl32 -lshell32 -luuid -lole32 -loleaut32 -lwinspool
-    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared --enable-64bit
-    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared --enable-64bit \
+    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --enable-64bit
+    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --enable-64bit \
                       --with-tcl=$(abspath $(TCL_BUILD_DIR))
-    # _cobwindow (v0.0.5): no vendor tree, just user32/gdi32 -- part of
-    # every Windows install, nothing to build or configure.
-    WINDOW_LIBS    = -luser32 -lgdi32
+    # _cobwindow (v0.0.5): backed by raylib (vendor/raylib), built via
+    # its own plain Makefile -- no configure/autoconf, unlike Tcl/Tk.
+    # Link flags match raylib's own Makefile's Windows/GLFW-static case.
+    WINDOW_LIBS    = -lopengl32 -lgdi32 -lwinmm -lshell32
+    RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
+    RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
+    # SQLite's amalgamation is a single portable sqlite3.c, but the
+    # compiled .a is NOT portable across toolchains/architectures --
+    # give it an OS-specific name so switching between Windows and
+    # Linux/macOS builds (e.g. `make sqlite` then later cross-compiling
+    # with a different CC) can't silently link the wrong-architecture
+    # object against the wrong-platform Tcl/Tk. Without this, `sqlite`
+    # being a real file target (see below) means Make sees the old
+    # library already exists and skips rebuilding it, even though it
+    # was built for a different platform.
+    SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-win.a
+    SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-win.o
 else
     EXE_SUF =
     SLEEP_CMD = sleep 1
@@ -76,18 +112,27 @@ else
     TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
     DB_DEFINES     =
     DB_LIBS        = $(TK_LIB) $(TCL_LIB) -lX11 -ldl -lz -lpthread -lm
-    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared --prefix=/tmp/tclinstall
-    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared \
+    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --prefix=/tmp/tclinstall
+    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared \
                       --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
-    # _cobwindow (v0.0.5): no vendor tree, just Xlib -- needs the same
-    # libx11-dev / X11 dev headers the `tk` target's comment covers,
-    # but no configure/make step of its own.
-    WINDOW_LIBS    = -lX11
+    # _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of
+    # raw Xlib -- needs the same libx11-dev / X11 dev headers the `tk`
+    # target's comment covers (plus GL dev headers -- libgl1-mesa-dev
+    # on Debian/Ubuntu), but raylib itself builds via a plain Makefile,
+    # no configure/autoconf. Link flags match raylib's own Makefile's
+    # Linux/GLFW case (LDLIBS with X11 appended).
+    WINDOW_LIBS    = -lGL -lm -lpthread -ldl -lrt -lX11
+    RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
+    RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
+    # See the Windows branch's comment above for why this is
+    # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
+    SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
+    SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
 endif
 
-.PHONY: all clean cob_interp cob_interp_db cob_interp_window popcorn_comp farmer smartpass
+.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass
 
-all: cob_interp popcorn_comp farmer
+all: cob_interp_full popcorn_comp farmer
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -111,6 +156,10 @@ smartpass:
 cob_interp: $(BIN_DIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp$(EXE_SUF) \
 		src/file_io.c src/cob_interp.c
+# ^ The lightweight, dependency-free interpreter: no SQLite/Tcl/Tk,
+# no _cobwindow, no vendor build, no X11 dependency, builds in under a
+# second. Plain `make` builds `cob_interp_full` instead (see below) --
+# use `make cob_interp` explicitly if that's what you want.
 
 # -------------------------------------------------------------------------
 # cob_interp_db -- same source file as cob_interp, built with the
@@ -122,7 +171,7 @@ cob_interp: $(BIN_DIR)
 # promise above -- this target is opt-in.
 # -------------------------------------------------------------------------
 .PHONY: cob_interp_db
-cob_interp_db: $(BIN_DIR)
+cob_interp_db: $(BIN_DIR) $(SQLITE_LIB) $(TCL_LIB) $(TK_LIB)
 	$(CC) $(CFLAGS) $(INCLUDE) \
 		-DCOB_WITH_SQLITE -DCOB_WITH_TCL -DCOB_WITH_TK $(DB_DEFINES) \
 		-I$(VENDOR_DIR)/SQLite \
@@ -130,7 +179,7 @@ cob_interp_db: $(BIN_DIR)
 		$(TK_DB_INCLUDE) \
 		-o $(BIN_DIR)/cob_interp_db$(EXE_SUF) \
 		src/file_io.c src/cob_interp.c \
-		$(VENDOR_DIR)/SQLite/libsqlite3.a \
+		$(SQLITE_LIB) \
 		$(DB_LIBS)
 	@echo ""
 	@echo "Built $(BIN_DIR)/cob_interp_db$(EXE_SUF)."
@@ -151,22 +200,53 @@ endif
 # -------------------------------------------------------------------------
 # cob_interp_window -- same source file as cob_interp, built with the
 # v0.0.5 _cobwindow keywords (window_open, window_label, window_wait,
-# window_close) compiled in. No vendor library, no configure/make step
-# needed -- just the OS's own windowing API (user32/gdi32 on Windows,
-# Xlib on Linux/macOS-with-X11). This exists as a much lighter-weight
-# alternative to `cob_interp_db`'s tk_eval() when all you want is a
-# plain window with a text label: no Tcl/Tk build to get through at
-# all, so none of the fragility documented above (busybox-ash PATH,
-# X11-vs-win32 vendor trees, static-vs-stub linking) applies here.
+# window_close) compiled in, backed by raylib (vendor/raylib). Needs
+# `make raylib` first -- or nothing at all, since this target lists
+# $(RAYLIB_LIB) as a real prerequisite and builds it itself if missing,
+# same as cob_interp_db does for sqlite/tcl/tk. raylib builds via a
+# plain Makefile (no configure/autoconf), so none of the busybox-ash/
+# vendor-tree fragility documented for Tcl/Tk applies here. Needs real
+# X11 + OpenGL dev headers on Linux/macOS (libx11-dev libgl1-mesa-dev
+# on Debian/Ubuntu, plus libxrandr-dev libxinerama-dev libxcursor-dev
+# libxi-dev for GLFW's X11 backend).
 # -------------------------------------------------------------------------
 .PHONY: cob_interp_window
-cob_interp_window: $(BIN_DIR)
+cob_interp_window: $(BIN_DIR) $(RAYLIB_LIB)
 	$(CC) $(CFLAGS) $(INCLUDE) -DCOB_WITH_COBWINDOW \
+		-I$(RAYLIB_BUILD_DIR) \
 		-o $(BIN_DIR)/cob_interp_window$(EXE_SUF) \
 		src/file_io.c src/cob_interp.c \
-		$(WINDOW_LIBS)
+		$(RAYLIB_LIB) $(WINDOW_LIBS)
 	@echo ""
 	@echo "Built $(BIN_DIR)/cob_interp_window$(EXE_SUF)."
+
+# -------------------------------------------------------------------------
+# cob_interp_full -- SQLite (sql_open/sql_exec/sql_query/sql_close) AND
+# _cobwindow (window_open/label/wait/close, backed by raylib) baked
+# into one binary. This is what plain `make` builds by default (see
+# the `all` target above) -- it lists $(SQLITE_LIB)/$(RAYLIB_LIB) as
+# real prerequisites, so it builds both itself the first time, no
+# separate build step needed.
+#
+# Tcl/Tk are deliberately NOT part of this binary. `cob_interp_db`
+# (SQLite + Tcl + Tk, including tk_eval()) still exists as a separate,
+# explicitly-opt-in target for anyone who wants it and is willing to
+# build Tcl/Tk from source -- see its own comment above for the
+# busybox-ash/autoconf fragility that comes with that. `cob_interp_full`
+# is the "just works, no configure step anywhere" default.
+# -------------------------------------------------------------------------
+.PHONY: cob_interp_full
+cob_interp_full: $(BIN_DIR) $(SQLITE_LIB) $(RAYLIB_LIB)
+	$(CC) $(CFLAGS) $(INCLUDE) \
+		-DCOB_WITH_SQLITE -DCOB_WITH_COBWINDOW \
+		-I$(VENDOR_DIR)/SQLite \
+		-I$(RAYLIB_BUILD_DIR) \
+		-o $(BIN_DIR)/cob_interp_full$(EXE_SUF) \
+		src/file_io.c src/cob_interp.c \
+		$(SQLITE_LIB) $(RAYLIB_LIB) $(WINDOW_LIBS)
+	@echo ""
+	@echo "Built $(BIN_DIR)/cob_interp_full$(EXE_SUF) -- SQLite + _cobwindow, all in one binary."
+	@echo "(Tcl/Tk not included -- see \`make cob_interp_db\` if you want tcl_eval()/tk_eval() too.)"
 
 popcorn_comp: $(BIN_DIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/popcorn_comp$(EXE_SUF) \
@@ -206,17 +286,19 @@ clean:
 # -------------------------------------------------------------------------
 # SQLite -- the "amalgamation" build: a single vendor/SQLite/sqlite3.c
 # that compiles directly into any project needing it, same pattern as
-# TCC's libtcc.c used to be. No configure step, and no OS-specific
-# handling needed -- plain portable C99, confirmed building identically
-# with both native gcc and a mingw-w64 cross compiler.
+# TCC's libtcc.c used to be. No configure step. The source itself is
+# portable C99 across native gcc and mingw-w64, but the *compiled*
+# output is architecture/toolchain-specific, hence the OS-specific
+# $(SQLITE_LIB)/$(SQLITE_OBJ) paths set above rather than one shared
+# vendor/SQLite/libsqlite3.a.
 # -------------------------------------------------------------------------
-$(VENDOR_DIR)/SQLite/libsqlite3.a:
-	$(CC) -std=c99 -O2 -c $(VENDOR_DIR)/SQLite/sqlite3.c -o $(VENDOR_DIR)/SQLite/sqlite3.o \
+$(SQLITE_LIB):
+	$(CC) -std=c99 -O2 -c $(VENDOR_DIR)/SQLite/sqlite3.c -o $(SQLITE_OBJ) \
 		-DSQLITE_THREADSAFE=1
-	ar rcs $(VENDOR_DIR)/SQLite/libsqlite3.a $(VENDOR_DIR)/SQLite/sqlite3.o
+	ar rcs $(SQLITE_LIB) $(SQLITE_OBJ)
 
 .PHONY: sqlite
-sqlite: $(VENDOR_DIR)/SQLite/libsqlite3.a
+sqlite: $(SQLITE_LIB)
 
 # -------------------------------------------------------------------------
 # Tcl -- real configure && make. Linux/macOS: vendor/TCL/unix, produces
@@ -268,8 +350,27 @@ $(TK_LIB): $(TCL_LIB)
 .PHONY: tk
 tk: $(TK_LIB)
 
+# -------------------------------------------------------------------------
+# raylib -- backs _cobwindow (window_open/label/wait/close). Plain
+# Makefile, no configure/autoconf at all, same PLATFORM_DESKTOP build
+# on every OS this Makefile supports (its GLFW backend picks Win32 vs
+# X11/Wayland vs Cocoa internally). Needs real X11 + OpenGL dev headers
+# on Linux (libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev
+# libxcursor-dev libxi-dev on Debian/Ubuntu); on Windows, opengl32 and
+# friends ship with any standard MinGW/w64devkit install, nothing extra
+# to install.
+# -------------------------------------------------------------------------
+$(RAYLIB_LIB):
+	$(MAKE) -C $(RAYLIB_BUILD_DIR) PLATFORM=PLATFORM_DESKTOP CC="$(CC)"
+
+.PHONY: raylib
+raylib: $(RAYLIB_LIB)
+
 .PHONY: vendor-clean
 vendor-clean:
 	$(MAKE) -C $(TCL_BUILD_DIR) distclean 2>/dev/null || true
 	$(MAKE) -C $(TK_BUILD_DIR) distclean 2>/dev/null || true
-	rm -f $(VENDOR_DIR)/SQLite/sqlite3.o $(VENDOR_DIR)/SQLite/libsqlite3.a
+	$(MAKE) -C $(RAYLIB_BUILD_DIR) PLATFORM=PLATFORM_DESKTOP clean 2>/dev/null || true
+	rm -f $(SQLITE_OBJ) $(SQLITE_LIB)
+	rm -f $(VENDOR_DIR)/SQLite/sqlite3-win.o $(VENDOR_DIR)/SQLite/libsqlite3-win.a
+	rm -f $(VENDOR_DIR)/SQLite/sqlite3-unix.o $(VENDOR_DIR)/SQLite/libsqlite3-unix.a

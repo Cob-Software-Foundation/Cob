@@ -1,31 +1,42 @@
 # Cob Language v0.0.5
 
+![Cob v0.0.5 -- Codename C!](docs/img/cob-v0.0.5-codename-c.png)
+
+## Overview
+
+Three new capabilities for `cob_interp`, all opt-in and none of them
+affecting the interpreter's original zero-dependency build:
+
+* **SQLite** (`sql_open`/`sql_exec`/`sql_query`/`sql_close`) and
+  **`_cobwindow`**, a native-window GUI backed by raylib
+  (`window_open`/`window_label`/`window_wait`/`window_close`), are now
+  baked into `cob_interp_full` -- **the binary plain `make` builds by
+  default.** Both build with a plain `Makefile`, no `configure`/autoconf
+  step for either, so a clean `make` from a fresh checkout builds
+  everything itself in well under a minute.
+* **Tcl/Tk** (`tcl_eval`/`tk_eval`) are still available, but no longer
+  part of the default build -- `make cob_interp_db` builds a separate
+  binary with them, for anyone who specifically wants that and is
+  willing to accept a much heavier, autoconf-based Tcl/Tk source build
+  (see "Fixed" below for what that build fights through on some
+  Windows toolchains).
+* `make cob_interp` remains the original lightweight interpreter --
+  no SQLite, no `_cobwindow`, no Tcl/Tk, no vendor build at all.
+
+Also new this release: a stress-test suite (`tools/stress/`), a
+`Dockerfile` to run it in a reproducible container, and a `ci.yml`
+GitHub Actions workflow that runs it both in Docker and natively.
+
 ## Added
 
-### SQLite3 / Tcl / Tk bindings — six new keywords in cob_interp
-
-The vendored `vendor/SQLite`, `vendor/TCL`, and `vendor/TK` trees have
-been sitting in the repo since v0.0.4, buildable but not reachable from
-Cob source at all (no keywords, nothing in the grammar). This release
-wires all three into the language:
+### SQLite bindings
 
 ```
-sql_open(<path>)          -> handle (int, 0 on failure)
-sql_exec(<handle>, <sql>) -> rc (int, 0 on success)
-sql_query(<handle>, <sql>)-> string (first column of first row, "" if none)
-sql_close(<handle>)       -> 0
-
-tcl_eval(<script>)        -> string (Tcl's string result)
-tk_eval(<script>)         -> string (same interpreter as tcl_eval, plus Tk)
+sql_open(<path>)           -> handle (int, 0 on failure)
+sql_exec(<handle>, <sql>)  -> rc (int, 0 on success)
+sql_query(<handle>, <sql>) -> string (first column of first row, "" if none)
+sql_close(<handle>)        -> 0
 ```
-
-All six are call-style builtins parsed the same way `harvest(<bytes>)`
-already was: a bare keyword directly followed by `(`. `sql_exec` and
-`sql_query` are the only two-argument builtins Cob has ever had; the
-parser change that makes that possible is generic (comma-separated
-arg list) but only wired up for these two keywords for now.
-
-Example:
 
 ```
 set h = sql_open("scores.db")
@@ -33,136 +44,19 @@ set rc = sql_exec(h, "CREATE TABLE IF NOT EXISTS t (name TEXT)")
 set rc = sql_exec(h, "INSERT INTO t VALUES ('cob')")
 set name = sql_query(h, "SELECT name FROM t LIMIT 1")
 pop("got: " + name)
-sql_close(h)
-
-pop("6*7 = " + tcl_eval("expr {6*7}"))
+set rc = sql_close(h)
 ```
 
-**Opt-in by design, not bundled into the default binary.** Plain
-`make cob_interp` still builds with zero extra dependencies, exactly
-like every prior release — calling any of the six keywords there
-prints a one-line warning (`sql_open() is a stub in this build...`)
-and evaluates to a harmless `0`/`""` instead of failing to compile or
-crashing. The real implementation only compiles in via a new target:
+Builds via a single-file amalgamation (`vendor/SQLite/sqlite3.c`) --
+no configure step, compiles the same way on every platform.
+
+### `_cobwindow` -- a native-window GUI backed by raylib
 
 ```
-make sqlite tcl tk       # build the vendored libraries first
-make cob_interp_db       # cob_interp.c + -DCOB_WITH_SQLITE -DCOB_WITH_TCL -DCOB_WITH_TK
-```
-
-`tcl_eval()`/`tk_eval()` share one lazily-created, process-wide Tcl
-interpreter, so state built up across several calls (variables,
-widgets) persists for the life of the program. `tk_eval()` needs a
-real X11 `$DISPLAY` at runtime for actual widget commands; without one
-it fails the same way `wish` would headless (a normal Tcl error
-string returned to the caller), it does not crash the interpreter —
-verified both ways, see below.
-
-`.strawberry` cache format bumped `COBSTRW3` -> `COBSTRW4` to add the
-six new expression kinds. A cache written by an older cob_interp is
-just treated as a miss and silently regenerated, same handling as any
-other magic mismatch.
-
-### Makefile fix: vendor directory casing
-
-`make sqlite`, `make tcl`, and `make tk` referenced `vendor/sqlite`,
-`vendor/tcl`, `vendor/tk` (lowercase), but the actual checked-in
-directories are `vendor/SQLite`, `vendor/TCL`, `vendor/TK`. On a
-case-sensitive filesystem (any Linux/macOS box) all three vendor build
-targets failed outright with "No such file or directory" before ever
-reaching a compiler. Found while building the libraries to verify the
-new keywords above; all three Makefile targets now point at the real
-paths and were confirmed to build clean end-to-end (see below).
-
-### Makefile fix: `cob_interp_db` didn't actually support Windows
-
-The first pass at `cob_interp_db` only worked on Linux/macOS — it
-unconditionally used `vendor/TCL/unix` and `vendor/TK/unix`, linked
-`-lX11`, and assumed Unix-style library names (`libtcl9.0.a`,
-`libtcl9tk9.0.a`). On Windows (MSYS2/MinGW) that fails immediately:
-Tk's Windows build doesn't use X11 at all, there is no `X11/Xlib.h` to
-find, and the whole `unix/` build tree is the wrong one to use.
-
-Tcl and Tk both ship a **separate** `win/` build tree for MSYS2/MinGW
-(`vendor/TCL/win`, `vendor/TK/win`), distinct from `unix/`. Confirmed
-by actually cross-building the entire chain with a Linux-hosted
-`x86_64-w64-mingw32` toolchain (`gcc-mingw-w64-x86-64`) — this is real
-cross-compilation, not guesswork about how the Windows build should
-look:
-
-* The Windows static libs are named differently than Unix's:
-  `libtcl90.a` / `libtcl9tk90.a` (no dot before "90"), vs.
-  `libtcl9.0.a` / `libtcl9tk9.0.a` on Unix.
-* Tk's Windows build resolves its internal `#include <X11/Xlib.h>`
-  through its own `vendor/TK/xlib/` shim header (found via include
-  search path, not a macro) rather than a real Xlib — no X11 dev
-  headers/libs needed or wanted on Windows.
-* Compiling against the static libs needs `-DSTATIC_BUILD=1` (Tcl/Tk's
-  Windows headers otherwise mark every function `dllimport`, which
-  fails to link against a static `.a`). Even with that defined, Tk
-  still resolves through Tcl's stub mechanism internally, so both the
-  real library *and* its matching `*stub.a` have to be linked for Tcl
-  and for Tk (`libtcl90.a` + `libtclstub.a`, `libtcl9tk90.a` +
-  `libtkstub.a`) — omitting the stub libs fails to link even though
-  the real symbols are present in the other archive.
-* Windows needs a different system library set entirely: `-lnetapi32
-  -lkernel32 -luser32 -ladvapi32 -luserenv -lws2_32 -lgdi32
-  -lcomdlg32 -limm32 -lcomctl32 -lshell32 -luuid -lole32 -loleaut32
-  -lwinspool` — no `-lX11 -ldl -lpthread -lz` (Windows Tcl bundles its
-  own zlib).
-
-The Makefile now branches on `$(OS)` the same way it already did for
-`EXE_SUF`: `tcl`, `tk`, and `cob_interp_db` all pick the right build
-tree, include paths, defines, and link flags per platform, so
-`make sqlite tcl tk && make cob_interp_db` produces a correct build
-whether run under a Linux/macOS shell or an MSYS2/MinGW shell on
-Windows — same commands either way, no platform-specific instructions
-needed at the command line.
-
-### Makefile fix: `configure` couldn't find a C compiler on w64devkit
-
-A real-world Windows build hit `configure: error: no acceptable C
-compiler found in $PATH` running `make tcl`, even though the exact
-same `cc` worked fine for every other target in this Makefile.
-Reproduced the root cause directly (not guessed): installed BusyBox
-and fed its `ash` a real Windows-style `PATH`
-(`C:\...;C:\...;C:\...`) — every `which`/PATH-based lookup fails,
-because BusyBox's shell splits `$PATH` on `:`, and a Windows `PATH`
-has neither `:`-separated entries nor unambiguous drive letters (`C:`
-itself contains a `:`). w64devkit's bundled `sh` (BusyBox ash) hits
-exactly this when `configure`'s own compiler-detection loop
-(`checking for gcc... / checking for cc... / ...`) tries to locate a
-compiler via the shell's normal command lookup — even though the
-*outer* `make` invocation, running as a native Windows program, sees
-`PATH` correctly.
-
-Fixed by passing `CC="$(CC)"` directly into the `configure`
-invocation for both Tcl and Tk, on both platforms: autoconf's
-`AC_PROG_CC` skips its entire detection loop when `$CC` is already
-set in the environment, sidestepping the broken lookup instead of
-trying to fix BusyBox's PATH parsing itself.
-
-### Makefile improvement: `make cob_interp_db` now builds its own dependencies
-
-`sqlite`, `tcl`, and `tk` were `.PHONY` targets that always re-ran in
-full, and `cob_interp_db` didn't depend on any of them — building it
-meant remembering to type `make sqlite tcl tk` first, every time, in
-the right order. They're now real file targets keyed on the actual
-library each one produces (`vendor/SQLite/libsqlite3.a`, `$(TCL_LIB)`,
-`$(TK_LIB)`), and `cob_interp_db` lists them as prerequisites. One
-command, `make cob_interp_db`, now builds everything it needs the
-first time and skips anything already built on later runs. `make
-sqlite`/`make tcl`/`make tk` still exist as convenience aliases for
-the same underlying file targets, for anyone who wants to build one
-piece at a time.
-
-### Added: `_cobwindow` — a second, dependency-free GUI option
-
-```
-window_open(<title>)            -> handle (int, 0 on failure)
-window_label(<handle>, <text>)  -> 0 (sets/replaces the in-window text)
-window_wait(<handle>, <seconds>)-> 0 (keeps the window responsive for ~<seconds>)
-window_close(<handle>)          -> 0
+window_open(<title>)             -> handle (int, 0 on failure)
+window_label(<handle>, <text>)   -> 0 (sets/replaces the in-window text)
+window_wait(<handle>, <seconds>) -> 0 (keeps the window responsive for ~<seconds>)
+window_close(<handle>)           -> 0
 ```
 
 ```
@@ -173,73 +67,115 @@ set rc = window_wait(h, 5)
 set rc = window_close(h)
 ```
 
-Added as a lighter-weight alternative to `tk_eval()` for the common
-case of "just show a window with some text" — no vendored source
-tree, no `configure`/`make`, no autoconf, no busybox-ash PATH
-gotchas. It links directly against the OS's own windowing API:
-`user32`/`gdi32` on Windows (part of every Windows install, nothing
-to build), Xlib on Linux/macOS-with-X11 (needs the same X11 dev
-headers `tk` already documents, but no build step of its own).
-Built via a new target, `make cob_interp_window` — no prerequisites
-needed first, unlike `cob_interp_db`.
+Backed by `vendor/raylib` (real 2D/3D graphics, proper anti-aliased
+text rendering) instead of raw Win32/Xlib calls -- one build recipe
+and one code path for every platform, rather than hand-maintained
+separate Win32 and Xlib implementations. raylib's own build is a
+plain `Makefile`: no configure, no autoconf, so none of the
+busybox-ash/vendor-tree fragility documented under "Fixed" below
+applies to it.
 
-`shuck cobwindow` is a deliberate no-op: there's no real
-`cobwindow.cob` file to read, but writing `shuck cobwindow` at the top
-of a script that uses these four keywords reads naturally, so
-`cob_load_library()` special-cases the name and just acknowledges it
-(printing a warning if the binary wasn't built with
-`COB_WITH_COBWINDOW`, so the gap is visible at parse time rather than
-only when a keyword silently no-ops later). Same opt-in-by-default
-philosophy as the SQLite/Tcl/Tk bindings: a plain `cob_interp` prints
-a one-line warning and returns a harmless default for each of the
-four keywords rather than failing to build or crashing.
+`vendor/raygui` (a header-only immediate-mode widget library that
+draws on top of raylib -- buttons, sliders, text boxes) is vendored
+alongside it but **not yet wired up to any Cob keywords** -- currently
+just `window_open`/`label`/`wait`/`close`, which only draw plain text.
+Widget keywords (`window_button`, etc.) are a natural next step but
+didn't make this release.
 
-The window's close button ([X]) is intentionally swallowed on both
-platforms — Cob has no callback mechanism to notify a running script
-that the user clicked it, so the window just keeps running until
-`window_wait()`'s timer runs out or `window_close()` is called
-explicitly, the same "explicit close only" model `harvest()`/`trash()`
-already use for memory.
+raylib only supports one native window per process (`InitWindow()`/
+`CloseWindow()` are process-global, not per-handle) -- `window_open()`
+called again before the first window is closed warns and returns `0`,
+same "0 means failure" convention every other handle-returning keyword
+here uses. The close button ([X]) is intentionally swallowed -- Cob
+has no callback mechanism to notify a running script that the user
+clicked it, so the window keeps running until `window_wait()`'s timer
+runs out or `window_close()` is called explicitly, the same
+"explicit close only" model `harvest()`/`trash()` already use for
+memory.
 
-`.strawberry` cache format bumped again, `COBSTRW4` -> `COBSTRW5`, to
-add the four new expression kinds.
+**Verified for real, not just built:** ran a `.cob` script against
+`cob_interp_window`/`cob_interp_full` on a live (headless, via Xvfb)
+X11 display and confirmed with an actual screenshot that a real
+window opened showing the exact label text the script set, rendered
+with proper anti-aliased text.
 
-### cpi.cob.pixel-pulse.work.gd: added the missing `download.html`
+### `cob_interp_full` -- SQLite + `_cobwindow`, the new default
+
+`make` (no target, i.e. `make all`) now builds `cob_interp_full`
+instead of the lightweight `cob_interp`. It lists `$(SQLITE_LIB)` and
+`$(RAYLIB_LIB)` as real Make prerequisites, so a single `make` builds
+SQLite and raylib from `vendor/` itself, with no separate build steps,
+no configure/autoconf anywhere in the chain, and (confirmed) well
+under a minute on a clean checkout.
+
+`make cob_interp` still builds the original lightweight binary --
+zero vendor dependency, builds in under a second -- for anyone who
+wants that explicitly instead of the new default.
+
+### Kept as opt-in: `cob_interp_db` (SQLite + Tcl + Tk)
+
+```
+tcl_eval(<script>) -> string (Tcl's string result)
+tk_eval(<script>)  -> string (same interpreter as tcl_eval, plus Tk)
+```
+
+Still available via `make cob_interp_db` for anyone who specifically
+wants `tcl_eval()`/`tk_eval()`. This needs a real Tcl/Tk source build
+(`make sqlite tcl tk`, or `cob_interp_db` triggers it automatically
+the same way `cob_interp_full` triggers SQLite/raylib) -- see "Fixed"
+below for the autoconf/busybox-ash issues that build can hit on some
+Windows toolchains, now resolved for the two specific failures
+reported so far. `_cobwindow` is not part of this binary; use
+`cob_interp_full` for that.
+
+### Stress-test suite, `Dockerfile`, and `ci.yml`
+
+`tools/stress/run_stress.sh` builds `cob_interp_full` and runs three
+`.cob` scripts designed to catch regressions that only show up under
+sustained load, not a single quick smoke test:
+
+* `stress_arithmetic.cob` -- 200,000-iteration loop (interpreter
+  overhead/stability)
+* `stress_sqlite.cob` -- 2,000 sequential `INSERT`s + a query (SQLite
+  under load)
+* `stress_window.cob` -- 20 open/label/wait/close cycles (resource
+  leaks in the raylib backend would show up as the loop slowing down
+  or crashing, not just "does it open one window")
+
+`Dockerfile` builds `cob_interp_full` in a clean Ubuntu 24.04
+container with exactly the dependencies it needs (X11 + OpenGL dev
+headers, Xvfb) and runs the stress suite as its entrypoint:
+
+```
+docker build -t cob-stress .
+docker run --rm cob-stress                    # one pass
+docker run --rm cob-stress --iterations 20    # repeat 20x
+```
+
+`.github/workflows/ci.yml` runs the same suite two ways -- once via
+the `Dockerfile` (`docker-stress` job), once directly on the runner
+(`native-stress` job) -- on push/PR to `main`, nightly on a schedule,
+and on manual dispatch with a configurable iteration count.
+
+### Legal: raylib/raygui licenses
+
+`legal/license_raylib.terms` and `legal/license_raygui.terms` added
+(both zlib License). `LICENSE.md`'s "THIRD-PARTY LICENSE NOTICE"
+section was also out of date -- it only mentioned TinyCC, which isn't
+even in this repo anymore -- rewritten to list every vendored
+component actually present (`miniz`, SQLite, Tcl, Tk, raylib, raygui)
+and where its license text lives.
+
+### cpi.cob.pixel-pulse.work.gd: fixed the "Package registry" 404 (separate repo)
 
 `docs/index.html`'s footer nav links "Package registry" to
-`https://cpi.cob.pixel-pulse.work.gd/download.html`, but that page
-never existed on the registry site (`Cob-Software-Foundation/cpi`,
-the separate repo GitHub Pages serves that domain from) — only
-`index.html` did. That link 404'd. Added `docs/download.html` to the
-`cpi` repo: it fetches `api/v1/packages/index.json` and each package's
-manifest client-side and renders them as cards (name, version,
-description, zip link, sha256), matching the existing site's styling.
-Verified locally by serving the `cpi` repo's `docs/` folder and
-running the same fetch logic against it — both packages currently
-published (`math`, `greeter`) resolve and render correctly. This is a
-change to the `cpi` repo, not this one; it isn't included in this
-zip and needs to be applied/pushed to `Cob-Software-Foundation/cpi`
-separately.
-
-### CI: new `test_extensions` / `test_extensions_windows` jobs
-
-`.github/workflows/build.yml` had no coverage at all for
-`cob_interp_db`/`cob_interp_window` — every bug fixed in this release
-(the `vendor/sqlite` casing mismatch, the `unix/`-vs-`win/` vendor
-tree mismatch, the busybox PATH issue) would have shipped silently
-without a human happening to try building them. Two new jobs:
-
-* `test_extensions` (Linux, real build): installs `libx11-dev` and
-  `xvfb`, builds `cob_interp` (plain) / `cob_interp_db` /
-  `cob_interp_window`, and smoke-tests all three: the plain binary's
-  stub-and-warn fallback, `cob_interp_db` against real SQLite +
-  real Tcl, and `cob_interp_window` actually opening a real (headless,
-  via Xvfb) X11 window and reading back its handle.
-* `test_extensions_windows` (Linux runner, mingw-w64 cross-compile):
-  builds both the `win/`-tree `cob_interp_db` and the dependency-free
-  `cob_interp_window` for Windows and asserts the output is a valid
-  PE32+ binary. Can't execute the result (no Windows runner, no
-  display) — this catches build regressions, not runtime ones.
+`.../download.html`, which never existed on the `cpi` registry site
+(`Cob-Software-Foundation/cpi`, a separate repo) -- only `index.html`
+did, so the link 404'd. Added `docs/download.html` there: fetches
+`api/v1/packages/index.json` and each manifest client-side, renders
+them as cards matching the site's styling. This is a change to the
+`cpi` repo, not this one -- shipped as its own small zip alongside
+this release, not included in the main source zip.
 
 ## Fixed
 
@@ -260,138 +196,134 @@ path, no `--cc` given) failed with:
 
 **Root cause:** `find_bundled_zig_cc()` (`src/popcorn_comp.c`) returns
 a pre-quoted compiler string (`"path" cc`). `cob_spawn_compile()` then
-appends further quoted arguments (`-o "out" "in"`), producing a
-command line with multiple separate quoted tokens that starts with a
-quote. `system()` on Windows hands this to `cmd.exe /c <string>`,
-which strips only the first and last `"` of a command line that
-starts with a quote — not matching pairs — corrupting the line. The
-explicit `--cc "zig\zig.exe cc"` path was never affected, since a
-user-supplied `--cc`/`$CobCC` string isn't pre-quoted and doesn't
-start with `"`.
+appends further quoted arguments, producing a command line with
+multiple separate quoted tokens that starts with a quote. `system()`
+on Windows hands this to `cmd.exe /c <string>`, which strips only the
+first and last `"` of a command line that starts with a quote -- not
+matching pairs -- corrupting the line. The explicit
+`--cc "zig\zig.exe cc"` path was never affected.
 
 **Fix:** in `cob_spawn_compile()`, on Windows, if the assembled
 command starts with `"`, wrap the whole command in one more pair of
-quotes before calling `system()` — the standard workaround for this
-`cmd.exe` behavior. `--cc`/`$CobCC` invocations are untouched (they
-don't hit the new branch). Only `src/popcorn_comp.c` changed for this
-fix; `cob_interp` and `farmer` are unaffected by it.
+quotes before calling `system()`. Only `src/popcorn_comp.c` changed;
+`cob_interp` and `farmer` are unaffected.
+
+### Makefile: vendor directory casing
+
+`make sqlite`/`tcl`/`tk` referenced `vendor/sqlite`/`tcl`/`tk`
+(lowercase); the real directories are `vendor/SQLite`/`TCL`/`TK`.
+Failed outright on any case-sensitive filesystem. Fixed.
+
+### Makefile: Windows Tcl/Tk build (for `cob_interp_db`)
+
+The Tcl/Tk build (used only by `cob_interp_db` now) needed real
+Windows-specific handling that the first pass got wrong: a separate
+`win/` build tree (not `unix/`), different static-lib names
+(`libtcl90.a`/`libtcl9tk90.a`, no dot before "90"), Tk's own
+`vendor/TK/xlib/` shim instead of real X11, `-DSTATIC_BUILD=1` plus
+stub libs for both Tcl and Tk, and Windows-specific system libraries
+instead of `-lX11`. Verified by cross-building the entire chain with a
+real `x86_64-w64-mingw32` toolchain through the actual Makefile
+targets.
+
+Two further real-world Windows build failures were reported and
+fixed the same way (reading the vendored `configure` script's exact
+logic to find the specific escape-hatch environment variable, since
+w64devkit's bundled `sh` -- BusyBox ash -- parses a Windows-style
+`PATH` incorrectly and breaks autoconf's own tool-detection loops):
+`configure: error: no acceptable C compiler found` (fixed via
+`CC="$(CC)"`) and `configure: error: no acceptable egrep could be
+found` (fixed via `EGREP_TRADITIONAL="grep -E"`). Both confirmed via
+BusyBox-based reproduction and/or direct script analysis; if a further
+"no acceptable X could be found" error turns up for some other tool,
+that's a different code path needing the same kind of targeted fix,
+not a sign these two didn't work.
+
+### Makefile: `cob_interp_db`/`cob_interp_full` now build their own dependencies
+
+`sqlite`/`tcl`/`tk`/`raylib` are real file targets (keyed on the
+actual library file each one produces) instead of always-rerun
+`.PHONY` targets, and `cob_interp_db`/`cob_interp_full` list them as
+real prerequisites. One command each -- `make cob_interp_db` or
+`make cob_interp_full` -- now builds everything needed the first time
+and skips anything already built on later runs.
+
+Two bugs were found and fixed while getting this right: SQLite's
+compiled `.a` initially had one shared path across platforms, so
+switching from a Linux build to a Windows cross-compile without
+`make vendor-clean` silently linked a stale Linux object into a
+Windows binary (fixed by giving it an OS-specific name); and the
+"builds its own dependencies" claim was initially true only by
+accident, since the prerequisite lists were missing entirely (fixed
+by actually adding them, then reverified from a genuinely clean tree).
 
 ## Verified this session
 
-* `make cob_interp` still builds with zero extra dependencies and zero
-  warnings under `-Wall -Wextra` — the SQLite/Tcl/Tk keywords compile
-  out to warning-and-stub behavior when `COB_WITH_SQLITE`/`COB_WITH_TCL`/
-  `COB_WITH_TK` aren't defined, confirmed by running a `.cob` script
-  that calls all six against the plain binary and observing the
-  warning + `0`/`""` fallback for each.
-* `make sqlite`, `make tcl`, and `make tk` all build clean after the
-  casing fix: SQLite via its amalgamation, Tcl 9.0 (`tclsh` runs and
-  evaluates `expr {2+2}` correctly), and Tk 9.0 against real X11
-  dev headers (`wish` links and starts, failing only with the expected
-  "no $DISPLAY" message when run headless).
-* `make cob_interp_db` builds clean, zero warnings under
-  `-Wall -Wextra`, linked against the real vendored libraries.
-* Ran a `.cob` program end-to-end against `cob_interp_db` exercising
-  all six new keywords against the *real* libraries: created a SQLite
-  table, inserted a row, queried it back correctly, closed the handle;
-  evaluated `expr {6*7}` via `tcl_eval()` (got `42`); evaluated
-  `expr {1+1}` via `tk_eval()` (got `2`) and separately confirmed a
-  real Tk widget command (`button .b -text hi`) fails with a normal,
-  non-crashing Tcl error (`invalid command name "button"`) when no
-  `$DISPLAY` is present — the intended headless behavior, not a bug.
-* `.strawberry` cache round-trips correctly with the new expression
-  kinds: parsed-and-cached run and cache-hit run produce identical
-  output; confirmed the on-disk magic is `COBSTRW4`.
-* The Windows build path for `sqlite`/`tcl`/`tk`/`cob_interp_db` was
-  verified by actually cross-building the entire chain with a
-  Linux-hosted `x86_64-w64-mingw32` toolchain, driven through the real
-  Makefile targets (not manual commands) with `OS=Windows_NT
-  CC=x86_64-w64-mingw32-gcc`: Tcl and Tk both configured and built
-  clean against their `win/` trees, and the resulting
-  `bin/cob_interp_db.exe` is a valid PE32+ Windows executable, built
-  with zero link errors against the real Windows-named static libs and
-  system libraries. This is the same code path a real MSYS2/MinGW
-  `make cob_interp_db` on Windows runs.
-* Confirmed the original bug-fix-1 repro (missing leading quote in the
-  OS error message) matches the documented `cmd.exe` first/last-quote-
-  stripping behavior, and that the patched `src/popcorn_comp.c`
-  compiles clean (`gcc -std=c99 -Wall -Wextra`) on Linux.
+* `make` (bare, from a completely clean tree -- `vendor/TCL`/`TK`
+  deleted and restored from git, `make vendor-clean` run first) builds
+  SQLite, raylib, and `cob_interp_full` with zero manual steps, on
+  both Linux and the Windows cross-build (mingw), producing a working
+  binary in both cases.
+* `make cob_interp` still builds the original lightweight binary
+  unchanged, zero warnings, zero vendor dependency.
+* Ran a `.cob` program end-to-end against `cob_interp_full` exercising
+  SQLite (create/insert/query/close) and `_cobwindow`
+  (open/label/wait/close) together in one process, on a live headless
+  X11 display (Xvfb) -- confirmed with an actual screenshot that a
+  real window opened with the correct label text, rendered with real
+  anti-aliased text via raylib.
+* raylib itself, and `cob_interp_full`/`cob_interp_window` built
+  against it, cross-compile clean for Windows via a real
+  `x86_64-w64-mingw32` toolchain -- zero warnings, valid PE32+
+  binaries, zero link errors, and dramatically simpler than the
+  equivalent Tcl/Tk build (no configure step, no busybox-ash PATH
+  issues, no stub-library linking).
+* Ran the full `tools/stress/run_stress.sh` suite for 10 consecutive
+  passes (200,000-iteration arithmetic loop, 2,000 sequential SQLite
+  inserts, 20 `_cobwindow` open/close cycles -- 20 windows opened and
+  closed per pass, 200 total) with stable timing and no crashes or
+  slowdowns across the run.
+* Manually simulated every `RUN`/`ENTRYPOINT` step of the `Dockerfile`
+  in an isolated copy of the repo (apt package list, `make
+  cob_interp_full`, the stress script) since a Docker daemon wasn't
+  available in this environment to run `docker build` directly --
+  every individual command it executes was verified this way.
+* Validated `.github/workflows/ci.yml`'s YAML syntax and ran the exact
+  shell commands from its `native-stress` job locally (10 iterations,
+  all passed).
+* `make cob_interp_db` (Tcl+Tk) and its Windows cross-build were
+  reverified unaffected by all of the above -- still builds the same
+  way it did before `_cobwindow` moved off Tcl/Tk.
+* Confirmed the original `popcorn_comp` bug-fix-1 repro matches the
+  documented `cmd.exe` quote-stripping behavior, and that the patched
+  `src/popcorn_comp.c` compiles clean on Linux.
 * Confirmed `docs/download.html`'s package-list rendering logic
-  against the real `cpi` repo's manifests (served locally), for both
-  currently published packages.
-* `_cobwindow` was tested for real, not just built: ran a `.cob`
-  program against `cob_interp_window` on a live (headless, via Xvfb)
-  X11 display, and confirmed with an actual screenshot that a real
-  window opened showing the exact label text the script set via
-  `window_label()`. The plain `cob_interp` stub-and-warn fallback for
-  all four `window_*` keywords was also confirmed, as was the
-  `.strawberry` cache round-trip (`COBSTRW5`) for the new expression
-  kinds.
-* `make cob_interp_window` cross-compiled clean for Windows via
-  `x86_64-w64-mingw32-gcc`, zero warnings, producing a valid PE32+
-  binary linked only against `user32`/`gdi32` — no vendor tree, no
-  `configure` step, confirming the whole point of this feature (avoid
-  the Tcl/Tk build entirely) actually holds on the Windows path too.
-* Reproduced the real w64devkit `configure: error: no acceptable C
-  compiler found` failure directly: installed BusyBox in this
-  environment and fed its `ash` a genuine Windows-style semicolon
-  `PATH`, confirming every PATH-based lookup (`which gcc`, `which cc`)
-  fails exactly as reported. Confirmed the `CC="$(CC)"` fix resolves
-  it by re-running the full Windows cross-compile
-  (`sqlite`/`tcl`/`tk`/`cob_interp_db`) end-to-end afterward with no
-  regression.
-* All three new/updated CI steps in `.github/workflows/build.yml`
-  (`test_extensions`'s three smoke tests, `test_extensions_windows`'s
-  two cross-builds) were run locally with the literal commands from
-  the YAML before committing it — one of them caught a real bug in
-  the CI script itself (a bare `sql_close(h)` statement, which Cob's
-  grammar doesn't allow as a standalone statement — fixed to
-  `set rc = sql_close(h)`), which is exactly the kind of thing this
-  new CI coverage exists to catch going forward.
+  against the real `cpi` repo's manifests (served locally).
 
-## Not verified (needs a real Windows machine / real X11 desktop)
+## Not verified
 
-* The patched Windows branch of `cob_spawn_compile()` has not actually
-  been exercised on Windows — no Windows box available in this
-  environment. Needs: rebuild `popcorn_comp.exe` on Windows, re-run
-  the exact repro with a real `zig\` folder next to the binary, no
-  `--cc`, confirm `temp.exe` is produced and runs correctly. No
-  regression pass on the `--cc`/`$CobCC` explicit-compiler paths on
-  Windows either (expected unaffected, since they don't hit the new
-  branch, but not re-run).
-* `tk_eval()` has only been exercised headless (no `$DISPLAY`) in this
-  environment — confirmed it fails gracefully rather than crashing,
-  but no real windows/widgets have actually been shown on a real X11
-  desktop, under Wayland/XWayland, or on native Windows.
-* The Windows `cob_interp_db`/`cob_interp_window` builds were
-  cross-compiled and confirmed to produce valid, correctly-linked
-  `.exe` files (see above), but neither has actually been *run* on
-  Windows — no Windows machine or working Wine install was available
-  in this environment (Wine's package dependencies weren't fetchable
-  here). It has not been confirmed that either binary actually
-  starts, evaluates a script, or shows a real window on a real
-  Windows desktop.
-* Only the specific `checking for gcc/cc/cl.exe/clang` compiler-search
-  failure was reproduced and fixed. If w64devkit's `sh` has the same
-  broken-PATH problem for *other* tool lookups inside `configure`
-  (`ar`, `ranlib`, `sed`, etc.), those would surface as different
-  errors further into `make tcl`/`make tk` and haven't been ruled out
-  — there was no way to fully exercise the real w64devkit environment
-  from this sandbox.
-* `tcl_eval()`/`tk_eval()` need `TCL_LIBRARY` pointed at
-  `vendor/TCL/library` for `Tcl_Init()` to succeed cleanly (otherwise
-  a harmless "Cannot find a usable init.tcl" warning is printed, and
-  `expr`-only scripts still work since they don't need the init
-  script library) — this isn't set automatically by
-  `make cob_interp_db`; `make` prints the `export`/`set` line to run.
+* Nothing in this release has been run on an actual Windows machine by
+  anyone other than the person who reported the two `configure`
+  failures above (both now fixed and cross-compile-verified, not yet
+  confirmed by them on the real hardware). `cob_interp_full.exe`,
+  `cob_interp_window.exe`, and `cob_interp_db.exe` are all confirmed
+  to *build* correctly cross-compiled; none has been confirmed to
+  *run* on real Windows.
+* `_cobwindow` (raylib) has only been exercised headless (Xvfb) on
+  Linux and via cross-compilation for Windows -- no real desktop, no
+  Wayland/XWayland, no native Windows execution.
+* `tcl_eval()`/`tk_eval()` (in `cob_interp_db`) need `TCL_LIBRARY`
+  pointed at `vendor/TCL/library` for `Tcl_Init()` to succeed cleanly
+  -- `make` prints the line to set it, but it isn't set automatically.
+* If w64devkit's `sh` has the same broken-PATH problem for some other
+  tool lookup inside Tcl/Tk's `configure` beyond the two already
+  fixed, that would need the same kind of targeted fix and hasn't been
+  ruled out.
 * GitHub Actions Zig download/bundle on genuine Windows/macOS runners:
-  still outstanding from prior releases, untouched by this one.
-* The `cpi` repo's `download.html` fix has been verified against a
-  local copy of its `docs/` folder, not against the live
-  `cpi.cob.pixel-pulse.work.gd` deployment — it needs to actually be
-  committed and pushed to `Cob-Software-Foundation/cpi` (a separate
-  repo from this zip) before the live 404 is resolved.
-* The two new CI jobs (`test_extensions`, `test_extensions_windows`)
-  were validated by running their exact commands locally, but have
-  not actually executed inside real GitHub Actions runners yet — that
-  only happens once this is pushed.
+  still outstanding from prior releases.
+* The `cpi` repo's `download.html` fix has been verified locally, not
+  against the live deployment -- needs to actually be pushed to
+  `Cob-Software-Foundation/cpi`.
+* `ci.yml`'s scheduled/Docker jobs haven't executed inside a real
+  GitHub Actions runner yet -- validated by running their exact
+  commands locally, not by an actual workflow run.

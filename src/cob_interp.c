@@ -133,19 +133,17 @@
 #endif
 #endif
 
-/* _cobwindow (v0.0.5): no vendor tree at all, just the OS's own
- * windowing API. See COB_KW_WINDOW_* in common.h. */
+/* _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of raw
+ * Win32/Xlib -- same OS-native windowing underneath (raylib's GLFW
+ * backend uses Win32 on Windows, X11 on Linux/BSD, Cocoa on macOS),
+ * but one build recipe and one code path for every platform instead
+ * of maintaining separate Win32 and Xlib implementations by hand.
+ * raygui (vendor/raygui, header-only) is vendored alongside it for
+ * future widget keywords (buttons, sliders, etc.) -- not yet exposed
+ * to Cob syntax, see Release.txt. */
 #ifdef COB_WITH_COBWINDOW
-#if defined(_WIN32)
-#include <windows.h>
-#define COB_COBWINDOW_WIN32 1
-#elif defined(__unix__) || defined(__APPLE__)
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <time.h>
-#include <unistd.h>
-#define COB_COBWINDOW_X11 1
-#endif
+#include "raylib.h"
+#define COB_COBWINDOW_RAYLIB 1
 #endif
 
 #define COB_MAX_LOOP_ITERATIONS 10000000UL
@@ -964,221 +962,86 @@ static char *cob_tk_eval(const char *script) {
  * Exists because building the full vendored Tcl/Tk from source needs a
  * real autoconf/sh environment, and on some Windows toolchains that
  * assumption doesn't hold (see Release.txt for the busybox-ash PATH
- * issue that broke it under w64devkit). This sidesteps that completely
- * -- no configure, no make, no vendor library, just the OS's own
- * windowing API linked directly: user32/gdi32 on Windows (always
- * present, part of the OS), Xlib on Linux/macOS-with-X11.
+ * issues that kept breaking it under w64devkit). Backed by raylib
+ * (vendor/raylib) instead: no configure, no autoconf, just a plain
+ * Makefile that builds cleanly with a bare C compiler on every
+ * platform raylib supports.
+ *
+ * raylib only supports one native window per process (InitWindow()/
+ * CloseWindow() are process-global, not per-handle), so unlike
+ * sql_open()'s multi-handle table, this backend really only ever
+ * hands out handle 1 -- window_open() called again before the first
+ * window is closed warns and returns 0, same "0 means failure"
+ * convention every other handle-returning keyword here uses.
  * ------------------------------------------------------------------- */
-#define COB_WINDOW_MAX_HANDLES 8
 #define COB_WINDOW_LABEL_MAX   512
 
 #ifdef COB_WITH_COBWINDOW
 
-#if defined(COB_COBWINDOW_WIN32)
+static int  cob_window_is_open = 0;
+static char cob_window_label_text[COB_WINDOW_LABEL_MAX];
 
-typedef struct { HWND hwnd; char label[COB_WINDOW_LABEL_MAX]; int used; } CobWindowSlot;
-static CobWindowSlot cob_window_slots[COB_WINDOW_MAX_HANDLES];
-static ATOM cob_window_class = 0;
-
-static LRESULT CALLBACK cob_window_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-        case WM_PAINT: {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
-            int i;
-            for (i = 0; i < COB_WINDOW_MAX_HANDLES; i++) {
-                if (cob_window_slots[i].used && cob_window_slots[i].hwnd == hwnd) {
-                    RECT rc; GetClientRect(hwnd, &rc);
-                    DrawTextA(hdc, cob_window_slots[i].label, -1, &rc,
-                              DT_LEFT | DT_TOP | DT_WORDBREAK);
-                    break;
-                }
-            }
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
-        case WM_CLOSE:
-            /* Swallowed on purpose -- see header comment above. */
-            return 0;
-        case WM_DESTROY:
-            return 0;
-        default:
-            return DefWindowProc(hwnd, msg, wp, lp);
-    }
+static void cob_window_redraw(void) {
+    BeginDrawing();
+    ClearBackground(RAYWHITE);
+    DrawText(cob_window_label_text, 20, 20, 20, BLACK);
+    EndDrawing();
 }
-
 static long cob_window_open(const char *title) {
-    int i;
-    HWND hwnd;
-    if (!cob_window_class) {
-        WNDCLASSA wc; memset(&wc, 0, sizeof(wc));
-        wc.lpfnWndProc = cob_window_wndproc;
-        wc.hInstance = GetModuleHandle(NULL);
-        wc.lpszClassName = "CobWindowClass";
-        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        cob_window_class = RegisterClassA(&wc);
-        if (!cob_window_class) {
-            fprintf(stderr, "[cob_interp] warning: window_open() failed: RegisterClass error\n");
-            return 0;
-        }
+    if (cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: a window is already open "
+                         "(the raylib backend only supports one window per process); "
+                         "call window_close() first\n", title);
+        return 0;
     }
-    for (i = 0; i < COB_WINDOW_MAX_HANDLES; i++) {
-        if (cob_window_slots[i].used) continue;
-        hwnd = CreateWindowExA(0, "CobWindowClass", title, WS_OVERLAPPEDWINDOW,
-                                CW_USEDEFAULT, CW_USEDEFAULT, 400, 200,
-                                NULL, NULL, GetModuleHandle(NULL), NULL);
-        if (!hwnd) {
-            fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: CreateWindow error\n", title);
-            return 0;
-        }
-        cob_window_slots[i].hwnd = hwnd;
-        cob_window_slots[i].label[0] = '\0';
-        cob_window_slots[i].used = 1;
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        UpdateWindow(hwnd);
-        return (long)(i + 1);
+    InitWindow(600, 400, title);
+    if (!IsWindowReady()) {
+        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: raylib's InitWindow() "
+                         "didn't produce a ready window (no display available?)\n", title);
+        return 0;
     }
-    fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: too many open windows (max %d)\n",
-            title, COB_WINDOW_MAX_HANDLES);
-    return 0;
+    SetTargetFPS(30);
+    cob_window_label_text[0] = '\0';
+    cob_window_is_open = 1;
+    cob_window_redraw();
+    return 1;
 }
 static long cob_window_label(long handle, const char *text) {
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) {
+    if (handle != 1 || !cob_window_is_open) {
         fprintf(stderr, "[cob_interp] warning: window_label() on invalid/closed handle %ld\n", handle);
         return 0;
     }
-    snprintf(cob_window_slots[handle - 1].label, COB_WINDOW_LABEL_MAX, "%s", text);
-    InvalidateRect(cob_window_slots[handle - 1].hwnd, NULL, TRUE);
+    snprintf(cob_window_label_text, COB_WINDOW_LABEL_MAX, "%s", text);
+    cob_window_redraw();
     return 0;
 }
 static long cob_window_wait(long handle, long seconds) {
-    DWORD start = GetTickCount();
-    DWORD ms = (DWORD)(seconds > 0 ? seconds * 1000 : 0);
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) {
+    double start;
+    if (handle != 1 || !cob_window_is_open) {
         fprintf(stderr, "[cob_interp] warning: window_wait() on invalid/closed handle %ld\n", handle);
         return 0;
     }
+    start = GetTime();
     do {
-        MSG msg;
-        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-        Sleep(10);
-    } while (GetTickCount() - start < ms);
+        /* WindowShouldClose() going true (user clicked the [X], or
+         * pressed ESC) is intentionally NOT acted on here -- same
+         * "swallow the close button, only an explicit window_close()
+         * really closes it" model documented above. raylib keeps the
+         * window fully usable after this returns true; it's just a
+         * flag, not an actual close. */
+        (void)WindowShouldClose();
+        cob_window_redraw();
+    } while (GetTime() - start < (double)seconds);
     return 0;
 }
 static void cob_window_close(long handle) {
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) return;
-    DestroyWindow(cob_window_slots[handle - 1].hwnd);
-    cob_window_slots[handle - 1].used = 0;
+    if (handle != 1 || !cob_window_is_open) return;
+    CloseWindow();
+    cob_window_is_open = 0;
 }
 static void cob_window_shutdown(void) {
-    int i;
-    for (i = 0; i < COB_WINDOW_MAX_HANDLES; i++) {
-        if (cob_window_slots[i].used) { DestroyWindow(cob_window_slots[i].hwnd); cob_window_slots[i].used = 0; }
-    }
+    if (cob_window_is_open) cob_window_close(1);
 }
-
-#elif defined(COB_COBWINDOW_X11)
-
-typedef struct { Display *dpy; Window win; GC gc; char label[COB_WINDOW_LABEL_MAX]; int used; } CobWindowSlot;
-static CobWindowSlot cob_window_slots[COB_WINDOW_MAX_HANDLES];
-
-static void cob_window_redraw(CobWindowSlot *slot) {
-    XClearWindow(slot->dpy, slot->win);
-    XDrawString(slot->dpy, slot->win, slot->gc, 10, 20, slot->label, (int)strlen(slot->label));
-    XFlush(slot->dpy);
-}
-static long cob_window_open(const char *title) {
-    int i;
-    for (i = 0; i < COB_WINDOW_MAX_HANDLES; i++) {
-        Display *dpy; Window win; GC gc; int screen;
-        if (cob_window_slots[i].used) continue;
-        dpy = XOpenDisplay(NULL);
-        if (!dpy) {
-            fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: cannot open X11 display "
-                             "(no $DISPLAY, or no X server running)\n", title);
-            return 0;
-        }
-        screen = DefaultScreen(dpy);
-        win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, 400, 200, 1,
-                                   BlackPixel(dpy, screen), WhitePixel(dpy, screen));
-        XStoreName(dpy, win, title);
-        XSelectInput(dpy, win, ExposureMask | StructureNotifyMask);
-        gc = XCreateGC(dpy, win, 0, NULL);
-        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
-        XMapWindow(dpy, win);
-        XFlush(dpy);
-        cob_window_slots[i].dpy = dpy;
-        cob_window_slots[i].win = win;
-        cob_window_slots[i].gc = gc;
-        cob_window_slots[i].label[0] = '\0';
-        cob_window_slots[i].used = 1;
-        return (long)(i + 1);
-    }
-    fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: too many open windows (max %d)\n",
-            title, COB_WINDOW_MAX_HANDLES);
-    return 0;
-}
-static long cob_window_label(long handle, const char *text) {
-    CobWindowSlot *slot;
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) {
-        fprintf(stderr, "[cob_interp] warning: window_label() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    slot = &cob_window_slots[handle - 1];
-    snprintf(slot->label, COB_WINDOW_LABEL_MAX, "%s", text);
-    cob_window_redraw(slot);
-    return 0;
-}
-static long cob_window_wait(long handle, long seconds) {
-    CobWindowSlot *slot;
-    struct timespec ts_start, ts_now;
-    long ms = seconds > 0 ? seconds * 1000 : 0;
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) {
-        fprintf(stderr, "[cob_interp] warning: window_wait() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    slot = &cob_window_slots[handle - 1];
-    clock_gettime(CLOCK_MONOTONIC, &ts_start);
-    do {
-        while (XPending(slot->dpy) > 0) {
-            XEvent ev;
-            XNextEvent(slot->dpy, &ev);
-            if (ev.type == Expose) cob_window_redraw(slot);
-            /* WM "close" clicks arrive as a ClientMessage for
-             * WM_DELETE_WINDOW only if we opted in via
-             * XSetWMProtocols(); we didn't, so most window managers
-             * just leave the window as-is on a close click here --
-             * same "swallowed" behavior as the Win32 WM_CLOSE case. */
-        }
-        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-        { struct timespec ns_req; ns_req.tv_sec = 0; ns_req.tv_nsec = 10000000L; nanosleep(&ns_req, NULL); }
-    } while ((ts_now.tv_sec - ts_start.tv_sec) * 1000L +
-             (ts_now.tv_nsec - ts_start.tv_nsec) / 1000000L < ms);
-    return 0;
-}
-static void cob_window_close(long handle) {
-    CobWindowSlot *slot;
-    if (handle < 1 || handle > COB_WINDOW_MAX_HANDLES || !cob_window_slots[handle - 1].used) return;
-    slot = &cob_window_slots[handle - 1];
-    XFreeGC(slot->dpy, slot->gc);
-    XDestroyWindow(slot->dpy, slot->win);
-    XCloseDisplay(slot->dpy);
-    slot->used = 0;
-}
-static void cob_window_shutdown(void) {
-    int i;
-    for (i = 0; i < COB_WINDOW_MAX_HANDLES; i++) {
-        if (cob_window_slots[i].used) cob_window_close((long)(i + 1));
-    }
-}
-
-#else
-#error "COB_WITH_COBWINDOW defined but neither COB_COBWINDOW_WIN32 nor COB_COBWINDOW_X11 -- unsupported OS"
-#endif
 
 #else /* !COB_WITH_COBWINDOW -- stub, matches the sql_ and tcl_eval() stub pattern */
 static long cob_window_open(const char *title) {
