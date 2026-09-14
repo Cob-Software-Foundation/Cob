@@ -1,0 +1,68 @@
+name: Stress Test
+
+# Separate from build.yml (which verifies the toolchain builds and the
+# smoke/unit tests pass) -- this workflow exists to catch regressions that
+# only show up under sustained load: interpreter loop overhead, SQLite under
+# many sequential statements, and repeated _cobwindow open/close cycles
+# (resource leaks in the raylib backend would show up here as the loop
+# slowing down or eventually crashing, not just "does it open one window").
+#
+# Two independent jobs exercise the same tools/stress/run_stress.sh suite
+# two different ways: once inside the repo's own Dockerfile (a clean,
+# reproducible environment, same one anyone can build and run locally), and
+# once directly on a GitHub-hosted runner (faster feedback, no Docker layer
+# caching involved, catches anything that's somehow specific to one
+# environment or the other).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Nightly at 03:17 UTC -- catches slow-burn regressions (e.g. a leak
+    # that only shows up after many more iterations than a PR-triggered
+    # run would do) without slowing down every single push.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Number of stress-test passes per job'
+        required: false
+        default: '10'
+
+jobs:
+  docker-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Build stress-test image
+        run: docker build -t cob-stress .
+
+      - name: Run stress test in container
+        run: |
+          ITER="${{ github.event.inputs.iterations || '10' }}"
+          docker run --rm cob-stress --iterations "$ITER"
+
+  native-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Install build + _cobwindow (raylib) dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxi-dev libgl1-mesa-dev xvfb
+
+      - name: Run stress test natively
+        run: |
+          ITER="${{ github.event.inputs.iterations || '10' }}"
+          chmod +x tools/stress/run_stress.sh
+          sh tools/stress/run_stress.sh --iterations "$ITER"

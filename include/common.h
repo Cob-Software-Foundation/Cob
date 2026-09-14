@@ -40,7 +40,7 @@ extern "C" {
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
 #define COB_VERSION_PATCH       2
-#define COB_VERSION_STRING      "0.0.2"
+#define COB_VERSION_STRING      "0.0.5"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
@@ -152,6 +152,53 @@ static inline void cob_print_license(void) {
 #define COB_KW_SHUCK          "shuck"    /* shuck <library_name>          */
 #define COB_KW_HARVEST        "harvest"  /* harvest(<bytes>) [--no-gc]     */
 #define COB_KW_TRASH          "trash"    /* trash(<variable>) [--no-gc]    */
+
+/* SQLite3 / Tcl / Tk bindings (v0.0.5). Each is a call-style builtin
+ * expression, same shape as harvest(<bytes>): a keyword directly
+ * followed by '(' and one or more comma-separated expressions. Only
+ * meaningful in a build compiled with COB_WITH_SQLITE / COB_WITH_TCL /
+ * COB_WITH_TK -- see `make cob_interp_db` in the Makefile. A plain
+ * `make cob_interp` still builds with none of these and stays
+ * dependency-free; calling one of these keywords in that build prints
+ * a warning and evaluates to a harmless default (0 / "") rather than
+ * failing to compile or crashing at runtime. */
+#define COB_KW_SQL_OPEN       "sql_open"   /* sql_open(<path>) -> handle        */
+#define COB_KW_SQL_EXEC       "sql_exec"   /* sql_exec(<handle>, <sql>) -> rc   */
+#define COB_KW_SQL_QUERY      "sql_query"  /* sql_query(<handle>, <sql>) -> str */
+#define COB_KW_SQL_CLOSE      "sql_close"  /* sql_close(<handle>) -> 0          */
+#define COB_KW_TCL_EVAL       "tcl_eval"   /* tcl_eval(<script>) -> str         */
+#define COB_KW_TK_EVAL        "tk_eval"    /* tk_eval(<script>) -> str          */
+
+/* _cobwindow (v0.0.5): a small, native, dependency-free GUI wrapper --
+ * no vendored source tree, no configure/autoconf, just the OS's own
+ * windowing API (Win32 user32/gdi32 on Windows, Xlib on Linux/macOS-
+ * with-X11). Exists because building the full vendored Tcl/Tk from
+ * source is heavy and fragile on some toolchains (e.g. minimal
+ * MSYS2/w64devkit-style setups without a full autoconf/sh environment
+ * behaving exactly like a normal Unix box). `shuck cobwindow` is a
+ * special-cased no-op acknowledgment (there's no cobwindow.cob file --
+ * see cob_shuck() in cob_interp.c) that reads naturally at the top of
+ * a script; the keywords below work the same with or without it,
+ * gated only by whether the binary was built with COB_WITH_COBWINDOW
+ * (see `make cob_interp_window`). */
+#define COB_KW_WINDOW_OPEN    "window_open"  /* window_open(<title>) -> handle       */
+#define COB_KW_WINDOW_LABEL   "window_label" /* window_label(<h>, <text>) -> 0       */
+#define COB_KW_WINDOW_WAIT    "window_wait"  /* window_wait(<h>, <seconds>) -> 0     */
+#define COB_KW_WINDOW_CLOSE   "window_close" /* window_close(<h>) -> 0               */
+
+/* raygui widget keywords (v0.0.6-in-progress): vendor/raygui was
+ * carried alongside raylib since v0.0.5 but not yet wired to any Cob
+ * syntax -- these three are that wiring. Each widget is identified by
+ * its own label text (first call creates it, auto-stacked below the
+ * window_label() text; later calls with the same label update/read
+ * the same widget) -- same "identity is the text you gave it" idea
+ * window_label() already uses for the single label, just extended to
+ * more than one thing on screen. Only meaningful in a build with
+ * COB_WITH_COBWINDOW; the stub build prints a warning and returns a
+ * harmless default, same as the other four window_* keywords. */
+#define COB_KW_WINDOW_BUTTON  "window_button"  /* window_button(<h>, <label>) -> 1 if clicked since the last read, else 0 */
+#define COB_KW_WINDOW_SLIDER  "window_slider"  /* window_slider(<h>, <label>, <max>) -> current value, 0..<max>, int   */
+#define COB_KW_WINDOW_TEXTBOX "window_textbox" /* window_textbox(<h>, <label>) -> current string contents of the box    */
 #define COB_BLOCK_COLON       ':'        /* block opener terminator        */
 
 /* CLI flag recognized by cob_interp.c / popcorn_comp.c that unlocks the

@@ -133,7 +133,20 @@ of your licenses.
 ----------------------------------------------------------------------
 THIRD-PARTY LICENSE NOTICE
 ----------------------------------------------------------------------
-TinyCC is licensed separately under the GNU Lesser General Public 
-License version 2.1 (LGPL v2.1). You can view its separate license text 
-directly inside the project directory at: [License](TinyCC%20src/COPYING)
+This project vendors the following third-party source under `vendor/`,
+each under its own license (not this project's PolyForm Noncommercial
+license above). Full license text for each is in `legal/`:
+
+  vendor/miniz   -- miniz (MIT License)
+                    legal/LICENSE_MINIZ
+  vendor/SQLite  -- SQLite (Public Domain -- the author disclaims
+                    copyright; no separate license file ships with it)
+  vendor/TCL     -- Tcl (Tcl/BSD-style license)
+                    legal/license_TCL.terms
+  vendor/TK      -- Tk (Tcl/BSD-style license)
+                    legal/license_TK.terms
+  vendor/raylib  -- raylib (zlib License)
+                    legal/license_raylib.terms
+  vendor/raygui  -- raygui (zlib License)
+                    legal/license_raygui.terms
 

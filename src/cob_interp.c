@@ -5,7 +5,7 @@
  * The Cob interpreter binary: `cob_interp <file.cob> [--no-cache] [--no-gc]`
  *
  * ---------------------------------------------------------------------
- * v0.0.3-bug-fix-3 SCOPE -- fully working:
+ * v0.0.5 SCOPE -- fully working:
  * ---------------------------------------------------------------------
  *   pop(<expr>)               writes text to stdout + newline. Accepts
  *                             any expression, not just a literal --
@@ -44,6 +44,48 @@
  *   _MakeCache = False        as the literal first line of a .cob file
  *                             disables the .strawberry cache for that
  *                             file entirely (neither read nor written).
+ *   sql_open(<path>)          SQLite3 binding (v0.0.5). Opens/creates
+ *                             the database file at <path>, returns an
+ *                             opaque int handle (0 on failure).
+ *   sql_exec(<h>, <sql>)      Runs a non-query statement (CREATE,
+ *                             INSERT, UPDATE, ...) against handle <h>.
+ *                             Returns 0 on success, non-zero on error.
+ *   sql_query(<h>, <sql>)     Runs a SELECT against handle <h>, returns
+ *                             the first column of the first row as a
+ *                             string ("" if no rows or on error).
+ *   sql_close(<h>)            Closes a handle opened by sql_open().
+ *   tcl_eval(<script>)        Tcl binding (v0.0.5). Evaluates <script>
+ *                             in a lazily-created, process-wide Tcl
+ *                             interpreter; returns Tcl's string result.
+ *   tk_eval(<script>)         Tk binding (v0.0.5). Same as tcl_eval(),
+ *                             but first loads Tk into that interpreter
+ *                             (needs a real X11 $DISPLAY at runtime;
+ *                             without one this evaluates to a normal
+ *                             Tcl error string, same as real Tk would
+ *                             report -- it doesn't crash the program).
+ *
+ * The six keywords above only do real work in a binary built with
+ * COB_WITH_SQLITE / COB_WITH_TCL / COB_WITH_TK defined (`make
+ * cob_interp_db`, after `make sqlite tcl tk`). A plain `make cob_interp`
+ * still builds with zero extra dependencies, same as always; calling
+ * one of these keywords there prints a one-line warning and evaluates
+ * to a harmless default (0 or "") instead of failing to build.
+ *
+ *   window_button(<h>,<label>)   raygui binding (this session). Draws/
+ *                             updates a button below the window_label()
+ *                             text; returns 1 if it was clicked since
+ *                             the last read of that same label, else 0.
+ *   window_slider(<h>,<label>,<max>)  Draws/updates a 0..<max> slider;
+ *                             returns its current value as an int.
+ *   window_textbox(<h>,<label>)  Draws/updates an always-editable text
+ *                             box; returns its current string contents.
+ *
+ * These three raygui-backed keywords only do real work in a binary
+ * built with COB_WITH_COBWINDOW defined (`make cob_interp_window` or
+ * `make cob_interp_full`) -- same "warns and returns a harmless
+ * default in a plain `make cob_interp`" rule as window_open() and
+ * friends, see the _cobwindow section further down for the full
+ * picture (raylib backend, one-window-per-process limit, etc).
  *
  * NOTE ON popcorn_comp: string support above is cob_interp-only so far.
  * popcorn_comp has its own separate copy of this AST and its own C
@@ -75,6 +117,13 @@
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
 
+/* clock_gettime()/CLOCK_MONOTONIC and usleep() (used by the X11
+ * _cobwindow backend's window_wait()) are POSIX.1-2008, not plain
+ * C99 -- glibc/musl hide them under -std=c99 unless a feature-test
+ * macro asks for them. Must come before any system header is
+ * included (including transitively via common.h below). */
+#define _POSIX_C_SOURCE 200809L
+
 #include "common.h"
 #include "file_io.h"
 
@@ -83,6 +132,43 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+
+/* v0.0.5 SQLite/Tcl/Tk bindings -- only pulled in by `make cob_interp_db`
+ * (see Makefile). A plain `make cob_interp` defines none of these and
+ * stays exactly as dependency-free as every prior release. */
+#ifdef COB_WITH_SQLITE
+#include <sqlite3.h>
+#endif
+#ifdef COB_WITH_TCL
+#include <tcl.h>
+#endif
+#ifdef COB_WITH_TK
+#include <tk.h>
+#ifndef COB_WITH_TCL
+#error "COB_WITH_TK requires COB_WITH_TCL (Tk is a Tcl extension) -- define both, see `make cob_interp_db`"
+#endif
+#endif
+
+/* _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of raw
+ * Win32/Xlib -- same OS-native windowing underneath (raylib's GLFW
+ * backend uses Win32 on Windows, X11 on Linux/BSD, Cocoa on macOS),
+ * but one build recipe and one code path for every platform instead
+ * of maintaining separate Win32 and Xlib implementations by hand.
+ * raygui (vendor/raygui, header-only) is vendored alongside it and,
+ * as of this session, wired up as window_button()/window_slider()/
+ * window_textbox() -- see their section further down. */
+#ifdef COB_WITH_COBWINDOW
+#include "raylib.h"
+#define COB_COBWINDOW_RAYLIB 1
+/* raygui (vendor/raygui, header-only): wired to Cob syntax this
+ * session as window_button()/window_slider()/window_textbox(). Must
+ * come after raylib.h so raygui reuses raylib's own Vector2/Rectangle/
+ * Color types instead of falling back to RAYGUI_STANDALONE's own
+ * copies. RAYGUI_IMPLEMENTATION belongs in exactly one translation
+ * unit -- this file is the only one that ever includes it. */
+#define RAYGUI_IMPLEMENTATION
+#include "raygui.h"
+#endif
 
 #define COB_MAX_LOOP_ITERATIONS 10000000UL
 #define COB_MAX_SHUCK_DEPTH 16
@@ -104,7 +190,25 @@ static void value_free(Value *v) { if (v->kind == VAL_STR) { free(v->s); v->s = 
 /* ---------------------------------------------------------------------
  * AST: EXPRESSIONS
  * ------------------------------------------------------------------- */
-typedef enum { EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST } ExprKind;
+typedef enum {
+    EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST,
+    /* v0.0.5 SQLite/Tcl/Tk call-style builtins -- see COB_KW_SQL_* /
+     * COB_KW_TCL_EVAL / COB_KW_TK_EVAL in common.h. One-arg builtins
+     * (SQL_OPEN, SQL_CLOSE, TCL_EVAL, TK_EVAL) use `left` only; two-arg
+     * builtins (SQL_EXEC, SQL_QUERY) use `left` for the handle and
+     * `right` for the SQL text, same slot reuse pattern EXPR_BINOP
+     * already uses. */
+    EXPR_SQL_OPEN, EXPR_SQL_EXEC, EXPR_SQL_QUERY, EXPR_SQL_CLOSE,
+    EXPR_TCL_EVAL, EXPR_TK_EVAL,
+    /* _cobwindow (v0.0.5). One-arg: WINDOW_OPEN, WINDOW_CLOSE (left
+     * only). Two-arg: WINDOW_LABEL, WINDOW_WAIT (left=handle,
+     * right=text-or-seconds). */
+    EXPR_WINDOW_OPEN, EXPR_WINDOW_LABEL, EXPR_WINDOW_WAIT, EXPR_WINDOW_CLOSE,
+    /* raygui widgets, wired to Cob syntax this session. Two-arg:
+     * WINDOW_BUTTON, WINDOW_TEXTBOX (left=handle, right=label). Three-
+     * arg: WINDOW_SLIDER (left=handle, right=label, arg3=max). */
+    EXPR_WINDOW_BUTTON, EXPR_WINDOW_SLIDER, EXPR_WINDOW_TEXTBOX
+} ExprKind;
 
 typedef struct Expr {
     ExprKind kind;
@@ -112,8 +216,13 @@ typedef struct Expr {
     char *str_lit; size_t str_lit_len; /* EXPR_STR, owned */
     char *var;            /* EXPR_VAR, owned */
     char op;              /* EXPR_BINOP: '+' '-' '*' '/' */
-    struct Expr *left;    /* EXPR_BINOP left; EXPR_HARVEST byte-count child */
-    struct Expr *right;   /* EXPR_BINOP right */
+    struct Expr *left;    /* EXPR_BINOP left; EXPR_HARVEST byte-count child;
+                            * one-arg builtin's sole arg; two/three-arg
+                            * builtin's first (handle) arg */
+    struct Expr *right;   /* EXPR_BINOP right; two/three-arg builtin's
+                            * second (SQL text / widget label) arg */
+    struct Expr *arg3;    /* three-arg builtin's third arg (currently only
+                            * window_slider's <max>) -- NULL otherwise */
 } Expr;
 
 static Expr *expr_new_num(long n) {
@@ -146,18 +255,65 @@ static Expr *expr_new_harvest(Expr *bytes_expr) {
     e->kind = EXPR_HARVEST; e->left = bytes_expr;
     return e;
 }
+/* One-arg v0.0.5 builtins: sql_open, sql_close, tcl_eval, tk_eval. */
+static Expr *expr_new_call1(ExprKind kind, Expr *arg) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = kind; e->left = arg;
+    return e;
+}
+/* Two-arg v0.0.5 builtins: sql_exec(handle, sql), sql_query(handle, sql). */
+static Expr *expr_new_call2(ExprKind kind, Expr *arg1, Expr *arg2) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = kind; e->left = arg1; e->right = arg2;
+    return e;
+}
+/* Three-arg builtins: window_slider(handle, label, max). */
+static Expr *expr_new_call3(ExprKind kind, Expr *arg1, Expr *arg2, Expr *arg3) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = kind; e->left = arg1; e->right = arg2; e->arg3 = arg3;
+    return e;
+}
 static void expr_free(Expr *e) {
     if (!e) return;
     if (e->kind == EXPR_STR) free(e->str_lit);
     if (e->kind == EXPR_VAR) free(e->var);
     if (e->kind == EXPR_BINOP) { expr_free(e->left); expr_free(e->right); }
     if (e->kind == EXPR_HARVEST) { expr_free(e->left); }
+    if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
+        e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
+        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE) {
+        expr_free(e->left);
+    }
+    if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
+        e->kind == EXPR_WINDOW_LABEL || e->kind == EXPR_WINDOW_WAIT ||
+        e->kind == EXPR_WINDOW_BUTTON || e->kind == EXPR_WINDOW_TEXTBOX) {
+        expr_free(e->left); expr_free(e->right);
+    }
+    if (e->kind == EXPR_WINDOW_SLIDER) {
+        expr_free(e->left); expr_free(e->right); expr_free(e->arg3);
+    }
     free(e);
 }
 static int expr_uses_harvest(const Expr *e) {
     if (!e) return 0;
     if (e->kind == EXPR_HARVEST) return 1;
     if (e->kind == EXPR_BINOP) return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
+    if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
+        e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
+        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE) {
+        return expr_uses_harvest(e->left);
+    }
+    if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
+        e->kind == EXPR_WINDOW_LABEL || e->kind == EXPR_WINDOW_WAIT ||
+        e->kind == EXPR_WINDOW_BUTTON || e->kind == EXPR_WINDOW_TEXTBOX) {
+        return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
+    }
+    if (e->kind == EXPR_WINDOW_SLIDER) {
+        return expr_uses_harvest(e->left) || expr_uses_harvest(e->right) || expr_uses_harvest(e->arg3);
+    }
     return 0;
 }
 
@@ -491,6 +647,74 @@ static const char *parse_primary(const char *p, Expr **out) {
         }
     }
 
+    /* v0.0.5 SQLite/Tcl/Tk/_cobwindow call-style builtins. Same shape as
+     * harvest() above: keyword directly followed by '(' (no blank
+     * skipped between them mattering, since we check after skip_blank
+     * on the keyword's tail) means a call; otherwise the identifier
+     * falls through to the plain variable-reference case below.
+     * argc-arg builtins parse argc comma-separated exprs (1, 2, or 3 --
+     * window_slider(<h>, <label>, <max>) is the one 3-arg case so far). */
+    {
+        struct { const char *kw; ExprKind kind; int argc; } calls[] = {
+            { COB_KW_SQL_OPEN,  EXPR_SQL_OPEN,  1 },
+            { COB_KW_SQL_EXEC,  EXPR_SQL_EXEC,  2 },
+            { COB_KW_SQL_QUERY, EXPR_SQL_QUERY, 2 },
+            { COB_KW_SQL_CLOSE, EXPR_SQL_CLOSE, 1 },
+            { COB_KW_TCL_EVAL,  EXPR_TCL_EVAL,  1 },
+            { COB_KW_TK_EVAL,   EXPR_TK_EVAL,   1 },
+            { COB_KW_WINDOW_OPEN,  EXPR_WINDOW_OPEN,  1 },
+            { COB_KW_WINDOW_LABEL, EXPR_WINDOW_LABEL, 2 },
+            { COB_KW_WINDOW_WAIT,  EXPR_WINDOW_WAIT,  2 },
+            { COB_KW_WINDOW_CLOSE, EXPR_WINDOW_CLOSE, 1 },
+            { COB_KW_WINDOW_BUTTON,  EXPR_WINDOW_BUTTON,  2 },
+            { COB_KW_WINDOW_SLIDER,  EXPR_WINDOW_SLIDER,  3 },
+            { COB_KW_WINDOW_TEXTBOX, EXPR_WINDOW_TEXTBOX, 2 },
+        };
+        size_t i;
+        for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
+            size_t kw_len = strlen(calls[i].kw);
+            if (strncmp(p, calls[i].kw, kw_len) != 0) continue;
+            /* don't match a longer identifier that merely starts with
+             * this keyword, e.g. a variable named "sql_open_result" */
+            if (is_ident_char((unsigned char)p[kw_len])) continue;
+            {
+                const char *after_kw = skip_blank(p + kw_len);
+                if (*after_kw != '(') continue;
+                {
+                    Expr *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
+                    const char *cur = skip_blank(after_kw + 1);
+                    cur = parse_expr(cur, &arg1);
+                    if (!cur) return NULL;
+                    cur = skip_blank(cur);
+                    if (calls[i].argc >= 2) {
+                        if (*cur != ',') { expr_free(arg1); return NULL; }
+                        cur = skip_blank(cur + 1);
+                        cur = parse_expr(cur, &arg2);
+                        if (!cur) { expr_free(arg1); return NULL; }
+                        cur = skip_blank(cur);
+                    }
+                    if (calls[i].argc >= 3) {
+                        if (*cur != ',') { expr_free(arg1); expr_free(arg2); return NULL; }
+                        cur = skip_blank(cur + 1);
+                        cur = parse_expr(cur, &arg3);
+                        if (!cur) { expr_free(arg1); expr_free(arg2); return NULL; }
+                        cur = skip_blank(cur);
+                    }
+                    if (*cur != ')') {
+                        expr_free(arg1); expr_free(arg2); expr_free(arg3); return NULL;
+                    }
+                    switch (calls[i].argc) {
+                        case 1: *out = expr_new_call1(calls[i].kind, arg1); break;
+                        case 2: *out = expr_new_call2(calls[i].kind, arg1, arg2); break;
+                        default: *out = expr_new_call3(calls[i].kind, arg1, arg2, arg3); break;
+                    }
+                    if (!*out) { expr_free(arg1); expr_free(arg2); expr_free(arg3); return NULL; }
+                    return cur + 1;
+                }
+            }
+        }
+    }
+
     if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)*(p + 1)))) {
         char *end;
         long v = strtol(p, &end, 10);
@@ -585,6 +809,499 @@ static void long_to_str(long n, char *buf, size_t bufsize) {
     snprintf(buf, bufsize, "%ld", n);
 }
 
+/* ---------------------------------------------------------------------
+ * V0.0.5 SQLITE / TCL / TK BINDINGS
+ *
+ * Deliberately minimal, matching the rest of Cob's stdlib: a handful
+ * of call-style builtins rather than a full driver API. State lives in
+ * process-wide statics because Cob programs are single-threaded and
+ * run one script per process -- same reasoning as ctx->handles for
+ * harvest(), just not threaded through EvalCtx since these binaries
+ * are opt-in (COB_WITH_*) and don't need to participate in the
+ * harvest/trash --no-gc bookkeeping.
+ * ------------------------------------------------------------------- */
+#ifdef COB_WITH_SQLITE
+#define COB_SQL_MAX_HANDLES 16
+static sqlite3 *cob_sql_handles[COB_SQL_MAX_HANDLES];
+
+/* Returns a 1-based handle id (0 means "failed"), matching harvest()'s
+ * own "0 is failure" convention. */
+static long cob_sql_open(const char *path) {
+    int i;
+    for (i = 0; i < COB_SQL_MAX_HANDLES; i++) {
+        if (cob_sql_handles[i] != NULL) continue;
+        if (sqlite3_open(path, &cob_sql_handles[i]) != SQLITE_OK) {
+            fprintf(stderr, "[cob_interp] warning: sql_open(\"%s\") failed: %s\n",
+                    path, cob_sql_handles[i] ? sqlite3_errmsg(cob_sql_handles[i]) : "unknown error");
+            if (cob_sql_handles[i]) { sqlite3_close(cob_sql_handles[i]); cob_sql_handles[i] = NULL; }
+            return 0;
+        }
+        return (long)(i + 1);
+    }
+    fprintf(stderr, "[cob_interp] warning: sql_open(\"%s\") failed: too many open handles (max %d)\n",
+            path, COB_SQL_MAX_HANDLES);
+    return 0;
+}
+static sqlite3 *cob_sql_get(long handle) {
+    if (handle < 1 || handle > COB_SQL_MAX_HANDLES) return NULL;
+    return cob_sql_handles[handle - 1];
+}
+static long cob_sql_exec(long handle, const char *sql) {
+    sqlite3 *db = cob_sql_get(handle);
+    char *errmsg = NULL;
+    if (!db) {
+        fprintf(stderr, "[cob_interp] warning: sql_exec() on invalid/closed handle %ld\n", handle);
+        return -1;
+    }
+    if (sqlite3_exec(db, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
+        fprintf(stderr, "[cob_interp] warning: sql_exec() failed: %s\n", errmsg ? errmsg : "unknown error");
+        sqlite3_free(errmsg);
+        return -1;
+    }
+    return 0;
+}
+/* sqlite3_exec() callback for sql_query(): stashes the first column of
+ * the first row into userdata, then aborts the walk -- Cob's query
+ * result is deliberately "one scalar", not a result set. */
+static int cob_sql_query_cb(void *userdata, int argc, char **argv, char **col_names) {
+    char **out = (char **)userdata;
+    (void)col_names;
+    if (argc > 0 && argv[0]) *out = cob_strdup(argv[0]);
+    return 1; /* non-zero makes sqlite3_exec() stop after this row */
+}
+/* Returns an owned string (caller/value_str_take takes it); "" on no
+ * rows, missing handle, or error. */
+static char *cob_sql_query(long handle, const char *sql) {
+    sqlite3 *db = cob_sql_get(handle);
+    char *result = NULL, *errmsg = NULL;
+    int rc;
+    if (!db) {
+        fprintf(stderr, "[cob_interp] warning: sql_query() on invalid/closed handle %ld\n", handle);
+        return cob_strdup("");
+    }
+    rc = sqlite3_exec(db, sql, cob_sql_query_cb, &result, &errmsg);
+    if (rc != SQLITE_OK && rc != SQLITE_ABORT) {
+        fprintf(stderr, "[cob_interp] warning: sql_query() failed: %s\n", errmsg ? errmsg : "unknown error");
+        sqlite3_free(errmsg);
+    }
+    return result ? result : cob_strdup("");
+}
+static void cob_sql_close(long handle) {
+    sqlite3 *db = cob_sql_get(handle);
+    if (!db) return;
+    sqlite3_close(db);
+    cob_sql_handles[handle - 1] = NULL;
+}
+static void cob_sql_shutdown(void) {
+    int i;
+    for (i = 0; i < COB_SQL_MAX_HANDLES; i++) {
+        if (cob_sql_handles[i]) { sqlite3_close(cob_sql_handles[i]); cob_sql_handles[i] = NULL; }
+    }
+}
+#else
+static long cob_sql_open(const char *path) {
+    (void)path;
+    fprintf(stderr, "[cob_interp] warning: sql_open() is a stub in this build "
+                     "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
+    return 0;
+}
+static long cob_sql_exec(long handle, const char *sql) {
+    (void)handle; (void)sql;
+    fprintf(stderr, "[cob_interp] warning: sql_exec() is a stub in this build "
+                     "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
+    return 0;
+}
+static char *cob_sql_query(long handle, const char *sql) {
+    (void)handle; (void)sql;
+    fprintf(stderr, "[cob_interp] warning: sql_query() is a stub in this build "
+                     "(compiled without SQLite support -- see `make cob_interp_db`); returned \"\"\n");
+    return cob_strdup("");
+}
+static void cob_sql_close(long handle) {
+    (void)handle;
+    fprintf(stderr, "[cob_interp] warning: sql_close() is a stub in this build "
+                     "(compiled without SQLite support -- see `make cob_interp_db`)\n");
+}
+static void cob_sql_shutdown(void) {}
+#endif /* COB_WITH_SQLITE */
+
+#ifdef COB_WITH_TCL
+static Tcl_Interp *cob_tcl_interp = NULL;
+#ifdef COB_WITH_TK
+static int cob_tk_ready = 0; /* 1 once Tk_Init() has been attempted */
+#endif
+static Tcl_Interp *cob_tcl_get(void) {
+    if (!cob_tcl_interp) {
+        cob_tcl_interp = Tcl_CreateInterp();
+        if (cob_tcl_interp && Tcl_Init(cob_tcl_interp) != TCL_OK) {
+            fprintf(stderr, "[cob_interp] warning: Tcl_Init() failed: %s\n",
+                    Tcl_GetStringResult(cob_tcl_interp));
+        }
+    }
+    return cob_tcl_interp;
+}
+static char *cob_tcl_eval(const char *script) {
+    Tcl_Interp *interp = cob_tcl_get();
+    if (!interp) {
+        fprintf(stderr, "[cob_interp] warning: tcl_eval() failed: could not create Tcl interpreter\n");
+        return cob_strdup("");
+    }
+    if (Tcl_Eval(interp, script) != TCL_OK) {
+        fprintf(stderr, "[cob_interp] warning: tcl_eval() error: %s\n", Tcl_GetStringResult(interp));
+    }
+    return cob_strdup(Tcl_GetStringResult(interp));
+}
+static void cob_tcl_shutdown(void) {
+    if (cob_tcl_interp) { Tcl_DeleteInterp(cob_tcl_interp); cob_tcl_interp = NULL; }
+}
+#else
+static char *cob_tcl_eval(const char *script) {
+    (void)script;
+    fprintf(stderr, "[cob_interp] warning: tcl_eval() is a stub in this build "
+                     "(compiled without Tcl support -- see `make cob_interp_db`); returned \"\"\n");
+    return cob_strdup("");
+}
+static void cob_tcl_shutdown(void) {}
+#endif /* COB_WITH_TCL */
+
+#ifdef COB_WITH_TK
+/* tk_eval() reuses the same Tcl interpreter tcl_eval() does, so a
+ * script can freely mix plain Tcl and Tk commands, and state (widgets,
+ * variables) built up over several tk_eval()/tcl_eval() calls persists
+ * for the life of the process. Tk_Init() needs a real X11 $DISPLAY at
+ * call time; without one it fails the same way `wish` would headless,
+ * and that failure is surfaced as an ordinary Tcl error string rather
+ * than crashing the interpreter. */
+static char *cob_tk_eval(const char *script) {
+    Tcl_Interp *interp = cob_tcl_get();
+    if (!interp) {
+        fprintf(stderr, "[cob_interp] warning: tk_eval() failed: could not create Tcl interpreter\n");
+        return cob_strdup("");
+    }
+    if (!cob_tk_ready) {
+        cob_tk_ready = 1;
+        if (Tk_Init(interp) != TCL_OK) {
+            fprintf(stderr, "[cob_interp] warning: tk_eval(): Tk_Init() failed: %s\n",
+                    Tcl_GetStringResult(interp));
+        }
+    }
+    if (Tcl_Eval(interp, script) != TCL_OK) {
+        fprintf(stderr, "[cob_interp] warning: tk_eval() error: %s\n", Tcl_GetStringResult(interp));
+    }
+    return cob_strdup(Tcl_GetStringResult(interp));
+}
+#else
+static char *cob_tk_eval(const char *script) {
+    (void)script;
+    fprintf(stderr, "[cob_interp] warning: tk_eval() is a stub in this build "
+                     "(compiled without Tk support -- see `make cob_interp_db`); returned \"\"\n");
+    return cob_strdup("");
+}
+#endif /* COB_WITH_TK */
+
+/* ---------------------------------------------------------------------
+ * _COBWINDOW -- native GUI, no vendor tree
+ *
+ * window_open(<title>)          -> handle (int, 0 on failure)
+ * window_label(<handle>, <text>)-> 0 (sets/replaces the in-window text)
+ * window_wait(<handle>, <secs>) -> 0 (pumps the OS message loop for
+ *                                  ~<secs> seconds so the window stays
+ *                                  responsive/repaints; the close [X]
+ *                                  button is intentionally swallowed --
+ *                                  Cob has no callback mechanism to
+ *                                  notify, so the window just keeps
+ *                                  running until window_close() or time
+ *                                  runs out, same "explicit close only"
+ *                                  model harvest()/trash() already use)
+ * window_close(<handle>)        -> 0
+ *
+ * Exists because building the full vendored Tcl/Tk from source needs a
+ * real autoconf/sh environment, and on some Windows toolchains that
+ * assumption doesn't hold (see Release.txt for the busybox-ash PATH
+ * issues that kept breaking it under w64devkit). Backed by raylib
+ * (vendor/raylib) instead: no configure, no autoconf, just a plain
+ * Makefile that builds cleanly with a bare C compiler on every
+ * platform raylib supports.
+ *
+ * raylib only supports one native window per process (InitWindow()/
+ * CloseWindow() are process-global, not per-handle), so unlike
+ * sql_open()'s multi-handle table, this backend really only ever
+ * hands out handle 1 -- window_open() called again before the first
+ * window is closed warns and returns 0, same "0 means failure"
+ * convention every other handle-returning keyword here uses.
+ * ------------------------------------------------------------------- */
+#define COB_WINDOW_LABEL_MAX   512
+
+/* raygui widgets (this session): each widget is identified by its own
+ * label text -- the first window_button()/window_slider()/
+ * window_textbox() call with a given label creates it and auto-stacks
+ * it below the window_label() text; every later call with that same
+ * label (and kind -- a button and a slider can share a label without
+ * colliding) reads/updates that same widget. This is deliberately the
+ * same shape as sql_open()'s handle table, just keyed by string
+ * instead of an int, because Cob has no arrays/structs to hold a
+ * widget handle in yet. Fixed-size, like the rest of this file's
+ * "small, bounded, no silent unbounded growth" style. */
+#define COB_WINDOW_MAX_WIDGETS   16
+#define COB_WINDOW_WIDGET_LABEL_MAX 128
+#define COB_WINDOW_WIDGET_TEXT_MAX  256
+
+#ifdef COB_WITH_COBWINDOW
+
+static int  cob_window_is_open = 0;
+static char cob_window_label_text[COB_WINDOW_LABEL_MAX];
+
+typedef enum { COB_WIDGET_BUTTON, COB_WIDGET_SLIDER, COB_WIDGET_TEXTBOX } CobWidgetKind;
+
+typedef struct {
+    CobWidgetKind kind;
+    char  label[COB_WINDOW_WIDGET_LABEL_MAX]; /* identity key + on-screen caption */
+    float y;                                  /* auto-stacked position, set once at creation */
+    int   clicked_since_read;                 /* COB_WIDGET_BUTTON */
+    int   slider_ready;                       /* COB_WIDGET_SLIDER: has min/max been set yet? */
+    float value, min_value, max_value;        /* COB_WIDGET_SLIDER */
+    char  text[COB_WINDOW_WIDGET_TEXT_MAX];   /* COB_WIDGET_TEXTBOX */
+} CobWidget;
+
+static CobWidget cob_widgets[COB_WINDOW_MAX_WIDGETS];
+static int   cob_widget_count = 0;
+static float cob_widget_next_y = 60.0f; /* window_label() text sits at y=20, 20px tall */
+
+static void cob_widgets_reset(void) {
+    cob_widget_count = 0;
+    cob_widget_next_y = 60.0f;
+}
+/* Finds the widget with this (kind, label) pair, or creates it (auto-
+ * stacked at the next free row) if this is the first time it's been
+ * mentioned. Returns NULL (with a warning already printed) once
+ * COB_WINDOW_MAX_WIDGETS is reached. */
+static CobWidget *cob_widget_find_or_create(CobWidgetKind kind, const char *label) {
+    int i;
+    for (i = 0; i < cob_widget_count; i++) {
+        if (cob_widgets[i].kind == kind && strcmp(cob_widgets[i].label, label) == 0)
+            return &cob_widgets[i];
+    }
+    if (cob_widget_count >= COB_WINDOW_MAX_WIDGETS) {
+        fprintf(stderr, "[cob_interp] warning: too many _cobwindow widgets (max %d); \"%s\" ignored\n",
+                COB_WINDOW_MAX_WIDGETS, label);
+        return NULL;
+    }
+    {
+        CobWidget *w = &cob_widgets[cob_widget_count++];
+        memset(w, 0, sizeof(*w));
+        w->kind = kind;
+        snprintf(w->label, sizeof(w->label), "%s", label);
+        w->y = cob_widget_next_y;
+        cob_widget_next_y += 40.0f;
+        return w;
+    }
+}
+
+static void cob_window_redraw(void) {
+    int i;
+    BeginDrawing();
+    ClearBackground(RAYWHITE);
+    DrawText(cob_window_label_text, 20, 20, 20, BLACK);
+    for (i = 0; i < cob_widget_count; i++) {
+        CobWidget *w = &cob_widgets[i];
+        Rectangle bounds = { 20, w->y, 240, 30 };
+        switch (w->kind) {
+            case COB_WIDGET_BUTTON:
+                if (GuiButton(bounds, w->label)) w->clicked_since_read = 1;
+                break;
+            case COB_WIDGET_SLIDER: {
+                /* raygui draws textLeft to the left of `bounds` and
+                 * textRight to the right -- textLeft would get clipped
+                 * off-window at our x=20 left margin, so the caption
+                 * goes on the right, where there's room. */
+                char caption[COB_WINDOW_WIDGET_LABEL_MAX + 32];
+                snprintf(caption, sizeof(caption), "%s: %d", w->label, (int)(w->value + 0.5f));
+                GuiSliderBar(bounds, NULL, caption, &w->value, w->min_value, w->max_value);
+                break;
+            }
+            case COB_WIDGET_TEXTBOX:
+                GuiTextBox(bounds, w->text, (int)sizeof(w->text), true);
+                break;
+        }
+    }
+    EndDrawing();
+}
+static long cob_window_open(const char *title) {
+    if (cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: a window is already open "
+                         "(the raylib backend only supports one window per process); "
+                         "call window_close() first\n", title);
+        return 0;
+    }
+    InitWindow(600, 400, title);
+    if (!IsWindowReady()) {
+        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: raylib's InitWindow() "
+                         "didn't produce a ready window (no display available?)\n", title);
+        return 0;
+    }
+    SetTargetFPS(30);
+    cob_window_label_text[0] = '\0';
+    cob_widgets_reset();
+    cob_window_is_open = 1;
+    cob_window_redraw();
+    return 1;
+}
+static long cob_window_label(long handle, const char *text) {
+    if (handle != 1 || !cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_label() on invalid/closed handle %ld\n", handle);
+        return 0;
+    }
+    snprintf(cob_window_label_text, COB_WINDOW_LABEL_MAX, "%s", text);
+    cob_window_redraw();
+    return 0;
+}
+static long cob_window_wait(long handle, long seconds) {
+    double start;
+    if (handle != 1 || !cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_wait() on invalid/closed handle %ld\n", handle);
+        return 0;
+    }
+    start = GetTime();
+    do {
+        /* WindowShouldClose() going true (user clicked the [X], or
+         * pressed ESC) is intentionally NOT acted on here -- same
+         * "swallow the close button, only an explicit window_close()
+         * really closes it" model documented above. raylib keeps the
+         * window fully usable after this returns true; it's just a
+         * flag, not an actual close. */
+        (void)WindowShouldClose();
+        cob_window_redraw();
+    } while (GetTime() - start < (double)seconds);
+    return 0;
+}
+/* window_button(<h>, <label>) -> 1 if clicked since the last read of
+ * this same label, else 0 (and the flag resets on read, so a click is
+ * reported exactly once). Declaring the button (first call with a new
+ * label) and reading its click state happen in the same call -- Cob
+ * has no separate "declare once, poll every frame" mechanism, so this
+ * redraws once per call the same way window_label() already does. */
+static long cob_window_button(long handle, const char *label) {
+    CobWidget *w;
+    if (handle != 1 || !cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_button() on invalid/closed handle %ld\n", handle);
+        return 0;
+    }
+    w = cob_widget_find_or_create(COB_WIDGET_BUTTON, label);
+    if (!w) return 0;
+    cob_window_redraw();
+    {
+        long clicked = w->clicked_since_read;
+        w->clicked_since_read = 0;
+        return clicked;
+    }
+}
+/* window_slider(<h>, <label>, <max>) -> current value as an int,
+ * 0..<max>. First call with a given label creates it (starting at 0);
+ * later calls just read the current position raygui's slider has been
+ * dragged to. Passing a different <max> on a later call re-ranges it
+ * (and clamps the current value into the new range) rather than being
+ * ignored, since Cob has no separate "configure" step. */
+static long cob_window_slider(long handle, const char *label, long max_value) {
+    CobWidget *w;
+    if (handle != 1 || !cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_slider() on invalid/closed handle %ld\n", handle);
+        return 0;
+    }
+    if (max_value <= 0) {
+        fprintf(stderr, "[cob_interp] warning: window_slider() needs a positive <max>, got %ld; treated as 1\n", max_value);
+        max_value = 1;
+    }
+    w = cob_widget_find_or_create(COB_WIDGET_SLIDER, label);
+    if (!w) return 0;
+    if (!w->slider_ready || w->max_value != (float)max_value) {
+        w->min_value = 0.0f;
+        w->max_value = (float)max_value;
+        if (!w->slider_ready) w->value = 0.0f;
+        else if (w->value > w->max_value) w->value = w->max_value;
+        w->slider_ready = 1;
+    }
+    cob_window_redraw();
+    return (long)(w->value + 0.5f);
+}
+/* window_textbox(<h>, <label>) -> current string contents of the box.
+ * Always editable (raygui's editMode=true) -- Cob has no focus/click-
+ * to-edit concept to hook a toggle to, so typing into it works as soon
+ * as it's on screen, same "no extra ceremony" spirit as the other
+ * widgets here. */
+static char *cob_window_textbox(long handle, const char *label) {
+    CobWidget *w;
+    if (handle != 1 || !cob_window_is_open) {
+        fprintf(stderr, "[cob_interp] warning: window_textbox() on invalid/closed handle %ld\n", handle);
+        return cob_strdup("");
+    }
+    w = cob_widget_find_or_create(COB_WIDGET_TEXTBOX, label);
+    if (!w) return cob_strdup("");
+    cob_window_redraw();
+    return cob_strdup(w->text);
+}
+static void cob_window_close(long handle) {
+    if (handle != 1 || !cob_window_is_open) return;
+    CloseWindow();
+    cob_window_is_open = 0;
+}
+static void cob_window_shutdown(void) {
+    if (cob_window_is_open) cob_window_close(1);
+}
+
+#else /* !COB_WITH_COBWINDOW -- stub, matches the sql_ and tcl_eval() stub pattern */
+static long cob_window_open(const char *title) {
+    (void)title;
+    fprintf(stderr, "[cob_interp] warning: window_open() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`); returned 0\n");
+    return 0;
+}
+static long cob_window_label(long handle, const char *text) {
+    (void)handle; (void)text;
+    fprintf(stderr, "[cob_interp] warning: window_label() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+    return 0;
+}
+static long cob_window_wait(long handle, long seconds) {
+    (void)handle; (void)seconds;
+    fprintf(stderr, "[cob_interp] warning: window_wait() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+    return 0;
+}
+static long cob_window_button(long handle, const char *label) {
+    (void)handle; (void)label;
+    fprintf(stderr, "[cob_interp] warning: window_button() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+    return 0;
+}
+static long cob_window_slider(long handle, const char *label, long max_value) {
+    (void)handle; (void)label; (void)max_value;
+    fprintf(stderr, "[cob_interp] warning: window_slider() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+    return 0;
+}
+static char *cob_window_textbox(long handle, const char *label) {
+    (void)handle; (void)label;
+    fprintf(stderr, "[cob_interp] warning: window_textbox() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`); returned \"\"\n");
+    return cob_strdup("");
+}
+static void cob_window_close(long handle) {
+    (void)handle;
+    fprintf(stderr, "[cob_interp] warning: window_close() is a stub in this build "
+                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+}
+static void cob_window_shutdown(void) {}
+#endif /* COB_WITH_COBWINDOW */
+
+/* Called once at process exit (both cache-hit and normal-execution
+ * paths in main()) so valgrind sees clean teardown of any open SQLite
+ * handles / the Tcl interpreter, same spirit as the rest of this file. */
+static void cob_ext_shutdown(void) {
+    cob_sql_shutdown();
+    cob_tcl_shutdown();
+    cob_window_shutdown();
+}
+
 static Value eval_expr(const Expr *e, EvalCtx *ctx) {
     switch (e->kind) {
         case EXPR_NUM: return value_int(e->num);
@@ -653,9 +1370,180 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
             }
             return value_int(id);
         }
+        case EXPR_SQL_OPEN: {
+            Value pathV = eval_expr(e->left, ctx);
+            const char *path;
+            char numbuf[32];
+            long id;
+            if (pathV.kind == VAL_STR) { path = pathV.s; }
+            else { long_to_str(pathV.i, numbuf, sizeof(numbuf)); path = numbuf; }
+            id = cob_sql_open(path);
+            value_free(&pathV);
+            return value_int(id);
+        }
+        case EXPR_SQL_EXEC: {
+            Value hV = eval_expr(e->left, ctx);
+            Value sqlV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            long rc;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: sql_exec() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (sqlV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: sql_exec() needs a string SQL statement, got a number; treated as \"\"\n");
+            }
+            rc = cob_sql_exec(handle, sqlV.kind == VAL_STR ? sqlV.s : "");
+            value_free(&hV); value_free(&sqlV);
+            return value_int(rc);
+        }
+        case EXPR_SQL_QUERY: {
+            Value hV = eval_expr(e->left, ctx);
+            Value sqlV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            char *result;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: sql_query() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (sqlV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: sql_query() needs a string SQL statement, got a number; treated as \"\"\n");
+            }
+            result = cob_sql_query(handle, sqlV.kind == VAL_STR ? sqlV.s : "");
+            value_free(&hV); value_free(&sqlV);
+            return value_str_take(result);
+        }
+        case EXPR_SQL_CLOSE: {
+            Value hV = eval_expr(e->left, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: sql_close() needs a numeric handle, got a string; treated as 0\n");
+            }
+            cob_sql_close(handle);
+            value_free(&hV);
+            return value_int(0);
+        }
+        case EXPR_TCL_EVAL: {
+            Value scriptV = eval_expr(e->left, ctx);
+            char *result;
+            if (scriptV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: tcl_eval() needs a string script, got a number; treated as \"\"\n");
+            }
+            result = cob_tcl_eval(scriptV.kind == VAL_STR ? scriptV.s : "");
+            value_free(&scriptV);
+            return value_str_take(result);
+        }
+        case EXPR_TK_EVAL: {
+            Value scriptV = eval_expr(e->left, ctx);
+            char *result;
+            if (scriptV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: tk_eval() needs a string script, got a number; treated as \"\"\n");
+            }
+            result = cob_tk_eval(scriptV.kind == VAL_STR ? scriptV.s : "");
+            value_free(&scriptV);
+            return value_str_take(result);
+        }
+        case EXPR_WINDOW_OPEN: {
+            Value titleV = eval_expr(e->left, ctx);
+            long id;
+            if (titleV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_open() needs a string title, got a number; treated as \"\"\n");
+            }
+            id = cob_window_open(titleV.kind == VAL_STR ? titleV.s : "");
+            value_free(&titleV);
+            return value_int(id);
+        }
+        case EXPR_WINDOW_LABEL: {
+            Value hV = eval_expr(e->left, ctx);
+            Value textV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_label() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (textV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_label() needs a string label, got a number; treated as \"\"\n");
+            }
+            cob_window_label(handle, textV.kind == VAL_STR ? textV.s : "");
+            value_free(&hV); value_free(&textV);
+            return value_int(0);
+        }
+        case EXPR_WINDOW_WAIT: {
+            Value hV = eval_expr(e->left, ctx);
+            Value secV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            long seconds = (secV.kind == VAL_STR) ? 0 : secV.i;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_wait() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (secV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_wait() needs a numeric seconds value, got a string; treated as 0\n");
+            }
+            cob_window_wait(handle, seconds);
+            value_free(&hV); value_free(&secV);
+            return value_int(0);
+        }
+        case EXPR_WINDOW_CLOSE: {
+            Value hV = eval_expr(e->left, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_close() needs a numeric handle, got a string; treated as 0\n");
+            }
+            cob_window_close(handle);
+            value_free(&hV);
+            return value_int(0);
+        }
+        case EXPR_WINDOW_BUTTON: {
+            Value hV = eval_expr(e->left, ctx);
+            Value labelV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            long clicked;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_button() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (labelV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_button() needs a string label, got a number; treated as \"\"\n");
+            }
+            clicked = cob_window_button(handle, labelV.kind == VAL_STR ? labelV.s : "");
+            value_free(&hV); value_free(&labelV);
+            return value_int(clicked);
+        }
+        case EXPR_WINDOW_SLIDER: {
+            Value hV = eval_expr(e->left, ctx);
+            Value labelV = eval_expr(e->right, ctx);
+            Value maxV = eval_expr(e->arg3, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            long max_value = (maxV.kind == VAL_STR) ? 0 : maxV.i;
+            long value;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_slider() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (labelV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_slider() needs a string label, got a number; treated as \"\"\n");
+            }
+            if (maxV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_slider() needs a numeric max, got a string; treated as 0\n");
+            }
+            value = cob_window_slider(handle, labelV.kind == VAL_STR ? labelV.s : "", max_value);
+            value_free(&hV); value_free(&labelV); value_free(&maxV);
+            return value_int(value);
+        }
+        case EXPR_WINDOW_TEXTBOX: {
+            Value hV = eval_expr(e->left, ctx);
+            Value labelV = eval_expr(e->right, ctx);
+            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
+            char *result;
+            if (hV.kind == VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_textbox() needs a numeric handle, got a string; treated as 0\n");
+            }
+            if (labelV.kind != VAL_STR) {
+                fprintf(stderr, "[cob_interp] warning: window_textbox() needs a string label, got a number; treated as \"\"\n");
+            }
+            result = cob_window_textbox(handle, labelV.kind == VAL_STR ? labelV.s : "");
+            value_free(&hV); value_free(&labelV);
+            return value_str_take(result);
+        }
     }
     return value_int(0);
 }
+
 
 static int eval_cond(const Cond *c, EvalCtx *ctx) {
     Value l = eval_expr(c->left, ctx);
@@ -961,6 +1849,25 @@ static int cob_load_library(const char *name, int line_no, Program *out_prog) {
     CobFileStatus status;
     int i;
 
+    /* _cobwindow special case: not a real .cob file on disk. `shuck
+     * cobwindow` reads naturally at the top of a script that wants
+     * window_open()/window_label()/window_wait()/window_close(), but
+     * there's nothing to load -- those four keywords are always
+     * parseable (see the call-style builtin table above), gated only
+     * at runtime by whether this binary was built with
+     * COB_WITH_COBWINDOW. Acknowledge and move on. */
+    if (strcmp(name, "cobwindow") == 0) {
+        program_init(out_prog);
+#ifndef COB_WITH_COBWINDOW
+        fprintf(stderr,
+            "[cob_interp] warning at line %d: shuck cobwindow -- this binary wasn't built with "
+            "window_open()/window_label()/window_wait()/window_close() support (see "
+            "`make cob_interp_window`); those keywords will warn and no-op instead of opening a real window\n",
+            line_no);
+#endif
+        return 0;
+    }
+
     for (i = 0; i < g_shuck_depth; i++) {
         if (strcmp(g_shuck_stack[i], name) == 0) {
             fprintf(stderr, "[cob_interp] error at line %d: circular shuck detected for '%s'\n", line_no, name);
@@ -1114,9 +2021,14 @@ static int cob_parse_source(const char *source, Program *out_prog, int *out_disa
 }
 
 /* ---------------------------------------------------------------------
- * .strawberry CACHE (binary AST dump, format v2)
+ * .strawberry CACHE (binary AST dump, format v6 -- v0.0.5 added the
+ * six SQLite/Tcl/Tk expression kinds (COBSTRW3 -> COBSTRW4), then the
+ * four _cobwindow expression kinds (COBSTRW4 -> COBSTRW5), and this
+ * session added the three raygui widget expression kinds (COBSTRW5 ->
+ * COBSTRW6); a cache written by an older cob_interp is simply treated
+ * as a miss and regenerated, same as any other magic mismatch)
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW3"
+#define STRAWBERRY_MAGIC      "COBSTRW6"
 #define STRAWBERRY_MAGIC_LEN  8
 
 typedef struct { unsigned char *data; size_t len, cap; } ByteBuf;
@@ -1170,6 +2082,25 @@ static int write_expr(ByteBuf *b, const Expr *e) {
             return write_expr(b, e->right);
         case EXPR_HARVEST:
             return write_expr(b, e->left);
+        case EXPR_SQL_OPEN:
+        case EXPR_SQL_CLOSE:
+        case EXPR_TCL_EVAL:
+        case EXPR_TK_EVAL:
+        case EXPR_WINDOW_OPEN:
+        case EXPR_WINDOW_CLOSE:
+            return write_expr(b, e->left);
+        case EXPR_SQL_EXEC:
+        case EXPR_SQL_QUERY:
+        case EXPR_WINDOW_LABEL:
+        case EXPR_WINDOW_WAIT:
+        case EXPR_WINDOW_BUTTON:
+        case EXPR_WINDOW_TEXTBOX:
+            if (write_expr(b, e->left) != 0) return -1;
+            return write_expr(b, e->right);
+        case EXPR_WINDOW_SLIDER:
+            if (write_expr(b, e->left) != 0) return -1;
+            if (write_expr(b, e->right) != 0) return -1;
+            return write_expr(b, e->arg3);
     }
     return -1;
 }
@@ -1292,6 +2223,40 @@ static int read_expr(ByteReader *r, Expr **out) {
             if (read_expr(r, &inner) != 0) return -1;
             *out = expr_new_harvest(inner);
             if (!*out) { expr_free(inner); return -1; }
+            return 0;
+        }
+        case EXPR_SQL_OPEN:
+        case EXPR_SQL_CLOSE:
+        case EXPR_TCL_EVAL:
+        case EXPR_TK_EVAL:
+        case EXPR_WINDOW_OPEN:
+        case EXPR_WINDOW_CLOSE: {
+            Expr *inner;
+            if (read_expr(r, &inner) != 0) return -1;
+            *out = expr_new_call1((ExprKind)kind, inner);
+            if (!*out) { expr_free(inner); return -1; }
+            return 0;
+        }
+        case EXPR_SQL_EXEC:
+        case EXPR_SQL_QUERY:
+        case EXPR_WINDOW_LABEL:
+        case EXPR_WINDOW_WAIT:
+        case EXPR_WINDOW_BUTTON:
+        case EXPR_WINDOW_TEXTBOX: {
+            Expr *l, *rr;
+            if (read_expr(r, &l) != 0) return -1;
+            if (read_expr(r, &rr) != 0) { expr_free(l); return -1; }
+            *out = expr_new_call2((ExprKind)kind, l, rr);
+            if (!*out) { expr_free(l); expr_free(rr); return -1; }
+            return 0;
+        }
+        case EXPR_WINDOW_SLIDER: {
+            Expr *l, *rr, *a3;
+            if (read_expr(r, &l) != 0) return -1;
+            if (read_expr(r, &rr) != 0) { expr_free(l); return -1; }
+            if (read_expr(r, &a3) != 0) { expr_free(l); expr_free(rr); return -1; }
+            *out = expr_new_call3((ExprKind)kind, l, rr, a3);
+            if (!*out) { expr_free(l); expr_free(rr); expr_free(a3); return -1; }
             return 0;
         }
         default: return -1;
@@ -1445,6 +2410,7 @@ int main(int argc, char **argv) {
             }
             execute(&prog, &ctx);
             program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+            cob_ext_shutdown();
             return 0;
         }
         fprintf(stderr, "[cob_interp] note: cache '%s' unreadable, reparsing source\n", cache_path);
@@ -1471,5 +2437,6 @@ int main(int argc, char **argv) {
     program_free(&prog);
     vars_free(&vars);
     handles_free_all(&handles);
+    cob_ext_shutdown();
     return 0;
 }

@@ -34,11 +34,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.4 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.5 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.4</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.5</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.work.gd/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -131,17 +131,22 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.4</div>
+        <div class="rv">0.0.5</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li>Strings — a real second value type, in both cob_interp and popcorn_comp</li>
-          <li>pop(x) now prints a variable's value; previously only a fixed literal</li>
+          <li>SQLite and a native, raylib-backed window — with real buttons, sliders, and text boxes — now build by default with a plain `make`</li>
+          <li>sql_open/sql_exec/sql_query/sql_close, window_open/label/wait/close, and window_button/slider/textbox: 12 new keywords, zero configure/autoconf anywhere in the default build's dependency chain</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.5</span>
+          <strong>SQLite, native windows, and widgets — all with zero autoconf</strong>
+          <p>Plain `make` now builds cob_interp_full: SQLite (sql_open/sql_exec/sql_query/sql_close) plus a native window backed by raylib (window_open/window_label/window_wait/window_close), with raygui-backed window_button/window_slider/window_textbox for real, interactive buttons, sliders, and text boxes. Tcl/Tk moved to the separate `cob_interp_db` build — still available, just no longer in the default dependency chain.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.4</span>
           <strong>Strings, and pop() that can finally print a variable</strong>

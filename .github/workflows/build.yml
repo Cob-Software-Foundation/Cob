@@ -43,6 +43,114 @@ jobs:
         grep -qx "smoke test ok" out2.txt
 
   # ---------------------------------------------------------------------
+  # v0.0.5 extensions: SQLite3/Tcl/Tk bindings (cob_interp_db) and the
+  # native-GUI _cobwindow bindings (cob_interp_window). Linux-only and
+  # real X11/Tcl/Tk builds here -- this is exactly the job that would
+  # have caught both the vendor/sqlite-vs-vendor/SQLite casing bug and
+  # the vendor/TK/unix-vs-vendor/TK/win mismatch documented in
+  # Release.txt, had it existed sooner.
+  # ---------------------------------------------------------------------
+  test_extensions:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true
+
+    - name: Install X11 dev headers + Xvfb (for Tk and _cobwindow)
+      run: sudo apt-get update && sudo apt-get install -y libx11-dev xvfb
+
+    - name: Build plain cob_interp (must stay dependency-free)
+      run: make cob_interp
+
+    - name: Build SQLite + Tcl + Tk, then cob_interp_db
+      run: make sqlite tcl tk cob_interp_db
+
+    - name: Build cob_interp_window (no vendor deps, just X11)
+      run: make cob_interp_window
+
+    - name: Smoke test -- plain cob_interp stubs out the new keywords
+      run: |
+        set -euo pipefail
+        cat > stub.cob << 'EOF'
+        _MakeCache = False
+        set h = sql_open("stub.db")
+        pop("h=" + h)
+        EOF
+        ./bin/cob_interp stub.cob 2> stub_err.txt | tee stub_out.txt
+        grep -qx "h=0" stub_out.txt
+        grep -q "stub in this build" stub_err.txt
+
+    - name: Smoke test -- cob_interp_db against real SQLite + Tcl
+      run: |
+        set -euo pipefail
+        export TCL_LIBRARY="$(pwd)/vendor/TCL/library"
+        cat > db.cob << 'EOF'
+        _MakeCache = False
+        set h = sql_open("db.sqlite")
+        set rc = sql_exec(h, "CREATE TABLE t (name TEXT)")
+        set rc = sql_exec(h, "INSERT INTO t VALUES ('cob')")
+        set name = sql_query(h, "SELECT name FROM t LIMIT 1")
+        pop("name=" + name)
+        set rc = sql_close(h)
+        pop("answer=" + tcl_eval("expr {6*7}"))
+        EOF
+        ./bin/cob_interp_db db.cob | tee db_out.txt
+        grep -qx "name=cob" db_out.txt
+        grep -qx "answer=42" db_out.txt
+
+    - name: Smoke test -- cob_interp_window opens a real X11 window
+      run: |
+        set -euo pipefail
+        Xvfb :99 -screen 0 800x600x24 &
+        sleep 1
+        cat > win.cob << 'EOF'
+        _MakeCache = False
+        shuck cobwindow
+        set h = window_open("CI smoke test")
+        set rc = window_label(h, "hello from CI")
+        set rc = window_wait(h, 1)
+        set rc = window_close(h)
+        pop("window handle=" + h)
+        EOF
+        DISPLAY=:99 ./bin/cob_interp_window win.cob | tee win_out.txt
+        grep -qx "window handle=1" win_out.txt
+
+  # ---------------------------------------------------------------------
+  # v0.0.5 extensions on Windows: cross-build via mingw-w64 to catch
+  # regressions in the win/-tree paths (vendor/TCL/win, vendor/TK/win,
+  # the xlib shim, STATIC_BUILD, stub-lib linking, WINDOW_LIBS). Can
+  # only verify the build here, not execution -- there's no Windows
+  # runner in this job, and no display to open a real window on even
+  # if there were. See Release.txt for what's been verified vs. not.
+  # ---------------------------------------------------------------------
+  test_extensions_windows:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true
+
+    - name: Install mingw-w64 cross toolchain
+      run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
+    - name: Cross-build cob_interp_window (no vendor deps)
+      run: |
+        make OS=Windows_NT CC=x86_64-w64-mingw32-gcc cob_interp_window
+        file bin/cob_interp_window.exe | grep -q "PE32+"
+
+    - name: Cross-build SQLite + Tcl + Tk + cob_interp_db
+      run: |
+        set -euo pipefail
+        make OS=Windows_NT CC=x86_64-w64-mingw32-gcc \
+          TCL_CONFIGURE="cd vendor/TCL/win && CC=x86_64-w64-mingw32-gcc sh ./configure --host=x86_64-w64-mingw32 --build=x86_64-linux-gnu --disable-shared --enable-64bit" \
+          TK_CONFIGURE="cd vendor/TK/win && CC=x86_64-w64-mingw32-gcc sh ./configure --host=x86_64-w64-mingw32 --build=x86_64-linux-gnu --disable-shared --enable-64bit --with-tcl=$(pwd)/vendor/TCL/win" \
+          sqlite tcl tk cob_interp_db
+        file bin/cob_interp_db.exe | grep -q "PE32+"
+
+  # ---------------------------------------------------------------------
   # Cross-platform build matrix.
   # ---------------------------------------------------------------------
   build:

@@ -1,0 +1,15 @@
+_MakeCache = False
+shuck cobwindow
+set w = window_open("Widget Smoke Test")
+set rc = window_label(w, "Hello from Cob widgets!")
+set clicked = window_button(w, "Click me")
+set val = window_slider(w, "Volume", 100)
+set txt = window_textbox(w, "Name")
+pop("clicked (should be 0, nothing clicked yet): " + clicked)
+pop("slider value (should be 0): " + val)
+pop("textbox contents (should be empty): " + txt)
+set rc = window_wait(w, 2)
+set clicked2 = window_button(w, "Click me")
+pop("clicked2 after 2s idle wait (should still be 0): " + clicked2)
+set rc = window_close(w)
+pop("done")
