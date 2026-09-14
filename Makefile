@@ -214,6 +214,7 @@ endif
 cob_interp_window: $(BIN_DIR) $(RAYLIB_LIB)
 	$(CC) $(CFLAGS) $(INCLUDE) -DCOB_WITH_COBWINDOW \
 		-I$(RAYLIB_BUILD_DIR) \
+		-I$(VENDOR_DIR)/raygui/src \
 		-o $(BIN_DIR)/cob_interp_window$(EXE_SUF) \
 		src/file_io.c src/cob_interp.c \
 		$(RAYLIB_LIB) $(WINDOW_LIBS)
@@ -241,6 +242,7 @@ cob_interp_full: $(BIN_DIR) $(SQLITE_LIB) $(RAYLIB_LIB)
 		-DCOB_WITH_SQLITE -DCOB_WITH_COBWINDOW \
 		-I$(VENDOR_DIR)/SQLite \
 		-I$(RAYLIB_BUILD_DIR) \
+		-I$(VENDOR_DIR)/raygui/src \
 		-o $(BIN_DIR)/cob_interp_full$(EXE_SUF) \
 		src/file_io.c src/cob_interp.c \
 		$(SQLITE_LIB) $(RAYLIB_LIB) $(WINDOW_LIBS)

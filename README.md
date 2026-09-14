@@ -44,10 +44,37 @@ set buffer = harvest(1024)
 trash(buffer)
 ```
 
+### SQLite (Requires `cob_interp_full` or `cob_interp_db`)
+```cob
+set h = sql_open("scores.db")
+set rc = sql_exec(h, "CREATE TABLE IF NOT EXISTS t (name TEXT)")
+set name = sql_query(h, "SELECT name FROM t LIMIT 1")
+pop("got: " + name)
+set rc = sql_close(h)
+```
+
+### Native Windows & Widgets (Requires `cob_interp_full` or `cob_interp_window`)
+```cob
+shuck cobwindow
+set w = window_open("Cob Window Demo")
+set rc = window_label(w, "Hello from Cob!")
+set clicked = window_button(w, "OK")
+set volume = window_slider(w, "Volume", 100)
+set name = window_textbox(w, "Name")
+set rc = window_wait(w, 5)
+set rc = window_close(w)
+```
+Backed by vendored `raylib` (window/drawing) and `raygui` (buttons,
+sliders, text boxes) — no OS windowing API code, no configure step.
+`window_button`/`window_slider`/`window_textbox` each identify their
+widget by its own label text; the first call with a new label creates
+it, auto-stacked on screen, and later calls with that label read or
+update the same widget.
+
 ## ⚙️ Toolchain & Ecosystem
 
-* **`cob_interp`**: The multi-platform bytecode/source interpreter.
-* **`popcorn_comp`**: Native compiler. Transpiles to C and compiles to a standalone binary using an embedded TCC instance (statically linked for native Linux amd64 targets).
+* **`cob_interp`**: The multi-platform interpreter. Plain `make` builds `cob_interp_full` (SQLite + native windows/widgets) by default; `make cob_interp` builds the original zero-dependency binary; `make cob_interp_db` swaps the window backend for Tcl/Tk instead.
+* **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. (SQLite/window/widget keywords and string values are cob_interp-only so far; not yet supported by popcorn_comp's codegen.)
 * **`farmer`**: Package manager. Installs zipped modules from a secure static JSON registry into `cob_modules/` via `farmer harvest <package>`.
 * **Caching Control**: Write `_MakeCache = False` as the literal first line of a `.cob` file to bypass the `.strawberry` fast-boot cache.
 

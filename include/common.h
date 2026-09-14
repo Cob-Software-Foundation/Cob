@@ -185,6 +185,20 @@ static inline void cob_print_license(void) {
 #define COB_KW_WINDOW_LABEL   "window_label" /* window_label(<h>, <text>) -> 0       */
 #define COB_KW_WINDOW_WAIT    "window_wait"  /* window_wait(<h>, <seconds>) -> 0     */
 #define COB_KW_WINDOW_CLOSE   "window_close" /* window_close(<h>) -> 0               */
+
+/* raygui widget keywords (v0.0.6-in-progress): vendor/raygui was
+ * carried alongside raylib since v0.0.5 but not yet wired to any Cob
+ * syntax -- these three are that wiring. Each widget is identified by
+ * its own label text (first call creates it, auto-stacked below the
+ * window_label() text; later calls with the same label update/read
+ * the same widget) -- same "identity is the text you gave it" idea
+ * window_label() already uses for the single label, just extended to
+ * more than one thing on screen. Only meaningful in a build with
+ * COB_WITH_COBWINDOW; the stub build prints a warning and returns a
+ * harmless default, same as the other four window_* keywords. */
+#define COB_KW_WINDOW_BUTTON  "window_button"  /* window_button(<h>, <label>) -> 1 if clicked since the last read, else 0 */
+#define COB_KW_WINDOW_SLIDER  "window_slider"  /* window_slider(<h>, <label>, <max>) -> current value, 0..<max>, int   */
+#define COB_KW_WINDOW_TEXTBOX "window_textbox" /* window_textbox(<h>, <label>) -> current string contents of the box    */
 #define COB_BLOCK_COLON       ':'        /* block opener terminator        */
 
 /* CLI flag recognized by cob_interp.c / popcorn_comp.c that unlocks the
