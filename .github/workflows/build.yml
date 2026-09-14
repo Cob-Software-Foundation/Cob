@@ -117,6 +117,33 @@ jobs:
         DISPLAY=:99 ./bin/cob_interp_window win.cob | tee win_out.txt
         grep -qx "window handle=1" win_out.txt
 
+    # v0.0.5-plus-widgets: window_button/window_slider/window_textbox
+    # bumped the .strawberry cache format to COBSTRW6 (see the header
+    # comment above write_expr()/read_expr() in src/cob_interp.c). This
+    # is the job that would catch a broken write_expr/read_expr pair
+    # for the three new expression kinds -- run once to write the
+    # cache, then again to force a cache hit, and diff the two runs'
+    # output. A mismatch here means the AST round-trip through the
+    # cache is lossy for one of the new widget keywords.
+    - name: Smoke test -- .strawberry cache round-trips the new widget expression kinds
+      run: |
+        set -euo pipefail
+        cat > widgets_cache.cob << 'EOF'
+        shuck cobwindow
+        set h = window_open("cache test")
+        set b = window_button(h, "OK")
+        set s = window_slider(h, "vol", 50)
+        set t = window_textbox(h, "name")
+        pop("b=" + b + " s=" + s + " t=" + t)
+        set rc = window_close(h)
+        EOF
+        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run1.txt
+        test -f widgets_cache.strawberry
+        grep -qx "b=0 s=0 t=" cache_run1.txt
+        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run2.txt
+        diff cache_run1.txt cache_run2.txt
+        echo "cache round-trip OK: window_button/window_slider/window_textbox decode identically from a cached AST"
+
   # ---------------------------------------------------------------------
   # v0.0.5 extensions on Windows: cross-build via mingw-w64 to catch
   # regressions in the win/-tree paths (vendor/TCL/win, vendor/TK/win,
