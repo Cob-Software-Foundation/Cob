@@ -9,11 +9,13 @@ affecting the interpreter's original zero-dependency build:
 
 * **SQLite** (`sql_open`/`sql_exec`/`sql_query`/`sql_close`) and
   **`_cobwindow`**, a native-window GUI backed by raylib
-  (`window_open`/`window_label`/`window_wait`/`window_close`), are now
-  baked into `cob_interp_full` -- **the binary plain `make` builds by
-  default.** Both build with a plain `Makefile`, no `configure`/autoconf
-  step for either, so a clean `make` from a fresh checkout builds
-  everything itself in well under a minute.
+  (`window_open`/`window_label`/`window_wait`/`window_close`) with
+  real, interactive **raygui widgets** (`window_button`/
+  `window_slider`/`window_textbox`), are now baked into
+  `cob_interp_full` -- **the binary plain `make` builds by default.**
+  Both build with a plain `Makefile`, no `configure`/autoconf step for
+  either, so a clean `make` from a fresh checkout builds everything
+  itself in well under a minute.
 * **Tcl/Tk** (`tcl_eval`/`tk_eval`) are still available, but no longer
   part of the default build -- `make cob_interp_db` builds a separate
   binary with them, for anyone who specifically wants that and is
@@ -24,8 +26,10 @@ affecting the interpreter's original zero-dependency build:
   no SQLite, no `_cobwindow`, no Tcl/Tk, no vendor build at all.
 
 Also new this release: a stress-test suite (`tools/stress/`), a
-`Dockerfile` to run it in a reproducible container, and a `ci.yml`
-GitHub Actions workflow that runs it both in Docker and natively.
+`Dockerfile` to run it in a reproducible container, and both a
+`ci.yml` GitHub Actions workflow that runs it in Docker and natively,
+and a `build.yml` workflow that now also round-trips the widget
+keywords through the `.strawberry` cache.
 
 ## Added
 
@@ -50,19 +54,27 @@ set rc = sql_close(h)
 Builds via a single-file amalgamation (`vendor/SQLite/sqlite3.c`) --
 no configure step, compiles the same way on every platform.
 
-### `_cobwindow` -- a native-window GUI backed by raylib
+### `_cobwindow` -- a native-window GUI backed by raylib, now with real widgets
 
 ```
 window_open(<title>)             -> handle (int, 0 on failure)
 window_label(<handle>, <text>)   -> 0 (sets/replaces the in-window text)
 window_wait(<handle>, <seconds>) -> 0 (keeps the window responsive for ~<seconds>)
 window_close(<handle>)           -> 0
+
+window_button(<h>, <label>)        -> 1 if clicked since the last read of
+                                       that label, else 0
+window_slider(<h>, <label>, <max>) -> current value, 0..<max>, as an int
+window_textbox(<h>, <label>)       -> current string contents of the box
 ```
 
 ```
 shuck cobwindow
 set h = window_open("Cob Window Demo")
 set rc = window_label(h, "Hello from Cob!")
+set clicked = window_button(h, "OK")
+set volume = window_slider(h, "Volume", 100)
+set name = window_textbox(h, "Name")
 set rc = window_wait(h, 5)
 set rc = window_close(h)
 ```
@@ -76,11 +88,18 @@ busybox-ash/vendor-tree fragility documented under "Fixed" below
 applies to it.
 
 `vendor/raygui` (a header-only immediate-mode widget library that
-draws on top of raylib -- buttons, sliders, text boxes) is vendored
-alongside it but **not yet wired up to any Cob keywords** -- currently
-just `window_open`/`label`/`wait`/`close`, which only draw plain text.
-Widget keywords (`window_button`, etc.) are a natural next step but
-didn't make this release.
+draws on top of raylib) is now wired up to Cob syntax as
+`window_button`/`window_slider`/`window_textbox`. Each widget is
+identified by its own label text -- the first call with a new label
+creates it, auto-stacked on screen below the `window_label()` text;
+every later call with that same label (and kind -- a button and a
+slider can share a label without colliding) reads or updates that
+same widget. Declaring and reading happen in the same call, since Cob
+has no separate "declare once, poll every frame" mechanism -- a
+button's click flag resets on read, so a click is reported exactly
+once; a slider re-ranges (and clamps) if called again with a
+different `<max>`; a textbox is always in raygui's edit mode, since
+Cob has no click-to-focus concept to hook a toggle to.
 
 raylib only supports one native window per process (`InitWindow()`/
 `CloseWindow()` are process-global, not per-handle) -- `window_open()`
@@ -95,9 +114,10 @@ memory.
 
 **Verified for real, not just built:** ran a `.cob` script against
 `cob_interp_window`/`cob_interp_full` on a live (headless, via Xvfb)
-X11 display and confirmed with an actual screenshot that a real
-window opened showing the exact label text the script set, rendered
-with proper anti-aliased text.
+X11 display and confirmed with actual screenshots that a real window
+opened showing the label text, a button, a slider (with a readable
+caption -- see "Fixed" below), and an editable text box with a
+blinking cursor, all rendered with proper anti-aliased text.
 
 ### `cob_interp_full` -- SQLite + `_cobwindow`, the new default
 
@@ -128,7 +148,7 @@ Windows toolchains, now resolved for the two specific failures
 reported so far. `_cobwindow` is not part of this binary; use
 `cob_interp_full` for that.
 
-### Stress-test suite, `Dockerfile`, and `ci.yml`
+### Stress-test suite, `Dockerfile`, `ci.yml`, and `build.yml`
 
 `tools/stress/run_stress.sh` builds `cob_interp_full` and runs three
 `.cob` scripts designed to catch regressions that only show up under
@@ -157,6 +177,14 @@ the `Dockerfile` (`docker-stress` job), once directly on the runner
 (`native-stress` job) -- on push/PR to `main`, nightly on a schedule,
 and on manual dispatch with a configurable iteration count.
 
+`.github/workflows/build.yml`'s `test_extensions` job now also opens
+a real headless X11 window and round-trips `window_button`/
+`window_slider`/`window_textbox` through the `.strawberry` cache --
+write once, run again to force a cache hit, diff the two runs' output
+-- specifically to catch a broken `write_expr()`/`read_expr()` pair
+for the three new widget expression kinds (see "Fixed" below for why
+this matters more than it might sound like).
+
 ### Legal: raylib/raygui licenses
 
 `legal/license_raylib.terms` and `legal/license_raygui.terms` added
@@ -178,6 +206,55 @@ them as cards matching the site's styling. This is a change to the
 this release, not included in the main source zip.
 
 ## Fixed
+
+### `popcorn_comp`: `.strawberry` magic constant was three format bumps stale
+
+**Repro:** any plain `.cob` script, no SQL/window keywords required --
+`./cob smoke.cob` then `./popcorn_comp smoke.strawberry -o smoke_native`
+failed with:
+
+```
+[popcorn_comp] error: 'smoke.strawberry' is not a valid .strawberry v3 file
+```
+
+**Root cause:** `popcorn_comp.c` keeps its own independent, byte-for-
+byte-compatible copy of the `.strawberry` reader (documented in its
+own header comment as deliberately duplicated from `cob_interp.c`),
+including its own `STRAWBERRY_MAGIC` constant. `cob_interp.c`'s magic
+has moved on three times since -- `COBSTRW3` (strings) -> `COBSTRW4`
+(SQLite/Tcl/Tk) -> `COBSTRW5` (`_cobwindow`) -> `COBSTRW6` (this
+release's widget keywords) -- but `popcorn_comp.c`'s copy was never
+updated past `COBSTRW3`. Once `cob_interp` started writing `COBSTRW6`
+caches, *every* cache it wrote looked invalid to `popcorn_comp`, even
+for scripts using none of the newer keywords -- this had already been
+silently broken for the `COBSTRW4`/`COBSTRW5` bumps too, just never
+caught until CI ran the widget cache round-trip test above and the
+existing end-to-end `popcorn_comp` smoke test both failed the same
+way.
+
+**Fix:** bumped `popcorn_comp.c`'s `STRAWBERRY_MAGIC` to `COBSTRW6`
+and de-hardcoded the version number out of its error message. Checked
+first, rather than just patching the string blindly, that this was
+actually safe: `popcorn_comp.c`'s `ExprKind` (0-4) and `StmtKind` (all
+4) enums are byte-identical to `cob_interp.c`'s -- the `COBSTRW4`/
+`COBSTRW5`/`COBSTRW6` bumps only ever *appended* new `ExprKind` values
+after `EXPR_HARVEST` for keywords `popcorn_comp` doesn't implement
+codegen for anyway, so its `read_expr()`'s existing
+`default: return -1` already handles those gracefully (reported as
+"corrupt or truncated", not a crash) with no further change needed.
+Added a comment on the constant spelling out that it needs bumping by
+hand every time `cob_interp.c`'s does, since that manual-sync step is
+the actual root cause here.
+
+### `_cobwindow`: slider caption was clipped off-window
+
+`window_slider()`'s on-screen caption ("Volume: 42") was passed as
+raygui's `textLeft` parameter, which draws to the *left* of the
+slider's bounding box -- at the `x=20` left margin used for every
+widget here, that put most of the caption off the edge of the window,
+invisible. Fixed by passing it as `textRight` instead (drawn to the
+right, where there's room). Caught by an actual screenshot during
+verification, not just a build check.
 
 ### `popcorn_comp`: Windows `system()` quoting bug in bundled-Zig auto-resolve
 
@@ -259,59 +336,58 @@ by actually adding them, then reverified from a genuinely clean tree).
 
 ## Verified this session
 
-* `make` (bare, from a completely clean tree -- `vendor/TCL`/`TK`
-  deleted and restored from git, `make vendor-clean` run first) builds
-  SQLite, raylib, and `cob_interp_full` with zero manual steps, on
-  both Linux and the Windows cross-build (mingw), producing a working
-  binary in both cases.
-* `make cob_interp` still builds the original lightweight binary
-  unchanged, zero warnings, zero vendor dependency.
-* Ran a `.cob` program end-to-end against `cob_interp_full` exercising
-  SQLite (create/insert/query/close) and `_cobwindow`
-  (open/label/wait/close) together in one process, on a live headless
-  X11 display (Xvfb) -- confirmed with an actual screenshot that a
-  real window opened with the correct label text, rendered with real
-  anti-aliased text via raylib.
-* raylib itself, and `cob_interp_full`/`cob_interp_window` built
-  against it, cross-compile clean for Windows via a real
-  `x86_64-w64-mingw32` toolchain -- zero warnings, valid PE32+
-  binaries, zero link errors, and dramatically simpler than the
-  equivalent Tcl/Tk build (no configure step, no busybox-ash PATH
-  issues, no stub-library linking).
-* Ran the full `tools/stress/run_stress.sh` suite for 10 consecutive
-  passes (200,000-iteration arithmetic loop, 2,000 sequential SQLite
-  inserts, 20 `_cobwindow` open/close cycles -- 20 windows opened and
-  closed per pass, 200 total) with stable timing and no crashes or
-  slowdowns across the run.
-* Manually simulated every `RUN`/`ENTRYPOINT` step of the `Dockerfile`
-  in an isolated copy of the repo (apt package list, `make
-  cob_interp_full`, the stress script) since a Docker daemon wasn't
-  available in this environment to run `docker build` directly --
-  every individual command it executes was verified this way.
-* Validated `.github/workflows/ci.yml`'s YAML syntax and ran the exact
-  shell commands from its `native-stress` job locally (10 iterations,
-  all passed).
-* `make cob_interp_db` (Tcl+Tk) and its Windows cross-build were
-  reverified unaffected by all of the above -- still builds the same
-  way it did before `_cobwindow` moved off Tcl/Tk.
-* Confirmed the original `popcorn_comp` bug-fix-1 repro matches the
-  documented `cmd.exe` quote-stripping behavior, and that the patched
-  `src/popcorn_comp.c` compiles clean on Linux.
-* Confirmed `docs/download.html`'s package-list rendering logic
-  against the real `cpi` repo's manifests (served locally).
+* All four build targets compile clean: `cob_interp`,
+  `cob_interp_window`, `cob_interp_full`, and `cob_interp_db`'s full
+  dependency chain (`make sqlite tcl tk cob_interp_db`).
+* Ran `window_button`/`window_slider`/`window_textbox` against
+  `cob_interp_window` on a live headless X11 display (Xvfb) and
+  confirmed via actual screenshots -- both before and after the
+  slider-caption fix -- that the button, slider, and an always-
+  editable text box with a blinking cursor render correctly alongside
+  the existing `window_label()` text.
+* Confirmed the `.strawberry` cache correctly round-trips the three
+  new widget expression kinds: wrote a cache, deleted nothing, reran
+  against the same script, and got byte-identical output both times.
+* Reran the full existing `tools/stress/run_stress.sh` suite
+  (arithmetic/SQLite/window cycles) after all of the above changes --
+  still all passing, no regressions.
+* Reproduced the `popcorn_comp` magic-desync CI failure locally
+  end-to-end (`gcc -> cob`/`popcorn_comp` -> write cache -> recompile
+  natively -> diff outputs against the interpreter's own output),
+  confirmed the exact error message and root cause, applied the fix,
+  and reran the identical sequence to confirm it now passes -- using
+  `--cc gcc` in place of `zig cc` only because this environment has no
+  network access to ziglang.org; the real CI runner already has Zig
+  set up via `mlugg/setup-zig@v2` and should use the default path.
+* Confirmed, by inspection of both files' enum definitions, that
+  `popcorn_comp.c`'s `ExprKind`/`StmtKind` enums are byte-identical to
+  `cob_interp.c`'s for every kind `popcorn_comp` actually implements,
+  so the magic-constant fix alone was sufficient -- no encoding
+  divergence to also account for.
+* Validated `.github/workflows/build.yml`'s YAML syntax after adding
+  the new widget-cache smoke test, and ran its exact shell commands
+  locally against `cob_interp_window` before committing them.
+* `test.cob` (this repo's manual GUI test script) runs clean
+  end-to-end, 20 one-second ticks then a graceful `window_close()`;
+  also confirmed a since-fixed version of this script that used `if`
+  statements does *not* parse -- Cob's grammar has no `if`/`else` at
+  all, only `while`/`set`/`pop`/`shuck` and the builtins.
 
 ## Not verified
 
 * Nothing in this release has been run on an actual Windows machine by
   anyone other than the person who reported the two `configure`
-  failures above (both now fixed and cross-compile-verified, not yet
-  confirmed by them on the real hardware). `cob_interp_full.exe`,
-  `cob_interp_window.exe`, and `cob_interp_db.exe` are all confirmed
-  to *build* correctly cross-compiled; none has been confirmed to
-  *run* on real Windows.
-* `_cobwindow` (raylib) has only been exercised headless (Xvfb) on
-  Linux and via cross-compilation for Windows -- no real desktop, no
-  Wayland/XWayland, no native Windows execution.
+  failures above (both now fixed and cross-compile-verified) and who
+  has since separately confirmed the widget keywords work for them on
+  real Windows hardware. Beyond that one confirmation, the raylib/
+  raygui widget path has otherwise only been exercised headless via
+  Xvfb on Linux in this environment.
+* `_cobwindow` (raylib/raygui) has not been exercised on a real
+  desktop compositor beyond the one Windows confirmation above -- no
+  Wayland/XWayland session, no verification of multiple simultaneous
+  `window_textbox()`es' keyboard-focus behavior (raygui's edit mode
+  isn't focus-aware across widgets; likely fine for one box at a time,
+  unverified with more than one open together).
 * `tcl_eval()`/`tk_eval()` (in `cob_interp_db`) need `TCL_LIBRARY`
   pointed at `vendor/TCL/library` for `Tcl_Init()` to succeed cleanly
   -- `make` prints the line to set it, but it isn't set automatically.
@@ -324,6 +400,9 @@ by actually adding them, then reverified from a genuinely clean tree).
 * The `cpi` repo's `download.html` fix has been verified locally, not
   against the live deployment -- needs to actually be pushed to
   `Cob-Software-Foundation/cpi`.
-* `ci.yml`'s scheduled/Docker jobs haven't executed inside a real
-  GitHub Actions runner yet -- validated by running their exact
-  commands locally, not by an actual workflow run.
+* `ci.yml`'s scheduled/Docker jobs, and `build.yml`'s full matrix
+  (Windows/macOS cross-builds, the Zig-bundling release step), haven't
+  executed inside a real GitHub Actions runner with this session's
+  changes yet -- the one real CI run available (the log that surfaced
+  the `popcorn_comp` bug) only got as far as the job that failed;
+  later jobs in that same workflow run haven't been confirmed since.

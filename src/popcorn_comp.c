@@ -140,13 +140,27 @@ static int program_push(Program *p, Stmt s) {
 }
 
 /* ---------------------------------------------------------------------
- * .strawberry READER (format v3 -- must stay byte-for-byte compatible
+ * .strawberry READER (format v6 -- must stay byte-for-byte compatible
  * with cob_interp.c's writer). See cob_interp.c for the authoritative
  * format documentation; duplicated in miniature here deliberately.
  * v3 added EXPR_STR (string literals) and changed STMT_POP to hold a
  * general Expr instead of a bare literal -- both mirrored below.
+ *
+ * v4 (SQLite/Tcl/Tk), v5 (_cobwindow), and v6 (raygui widgets) only
+ * ever *appended* new ExprKind values after EXPR_HARVEST -- they never
+ * touched the byte layout of EXPR_NUM/STR/VAR/BINOP/HARVEST or any
+ * StmtKind, and popcorn_comp doesn't implement any of those newer
+ * keywords' codegen. So the only thing that actually needs to change
+ * here on each of those bumps is STRAWBERRY_MAGIC below, to keep
+ * accepting cache files cob_interp now writes; a script that used one
+ * of the unsupported newer keywords still fails cleanly via read_expr()'s
+ * `default: return -1` below (reported as "corrupt or truncated"), not
+ * a crash -- this reader was never silently broken by those bumps, just
+ * silently behind on which magic byte it's willing to accept. Bump
+ * this whenever cob_interp.c's STRAWBERRY_MAGIC changes, even if this
+ * file's ExprKind/StmtKind enums don't need any other edit.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW3"
+#define STRAWBERRY_MAGIC      "COBSTRW6"
 #define STRAWBERRY_MAGIC_LEN  8
 
 typedef struct { const unsigned char *data; size_t len, pos; } ByteReader;
@@ -287,7 +301,8 @@ static int cob_load_strawberry(const char *path, Program *out_prog) {
     }
     ByteReader r; r.data = (const unsigned char *)file.data; r.len = file.size; r.pos = 0;
     if (r.len < STRAWBERRY_MAGIC_LEN || memcmp(r.data, STRAWBERRY_MAGIC, STRAWBERRY_MAGIC_LEN) != 0) {
-        fprintf(stderr, "[popcorn_comp] error: '%s' is not a valid .strawberry v3 file\n", path);
+        fprintf(stderr, "[popcorn_comp] error: '%s' is not a valid .strawberry file "
+                         "(expected magic \"%s\")\n", path, STRAWBERRY_MAGIC);
         cob_file_free(&file);
         return -1;
     }
