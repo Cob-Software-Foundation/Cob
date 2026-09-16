@@ -255,6 +255,41 @@ static inline int cob_count_leading_spaces(const char *line) {
     return n;
 }
 
+/* ---------------------------------------------------------------------
+ * .strawberry CACHE MAGIC -- single source of truth.
+ *
+ * cob_interp.c (the writer) and popcorn_comp.c (an independent reader,
+ * deliberately duplicated rather than linking the whole interpreter --
+ * see its own header comment) both used to keep their own private copy
+ * of this constant. That went out of sync twice: popcorn_comp.c was
+ * left checking a stale value across two separate format bumps in
+ * cob_interp.c, and each time, *every* cache cob_interp wrote looked
+ * "invalid" to popcorn_comp, even for a plain script using none of the
+ * newer keywords the bump was for (see Release.txt's "Fixed" section
+ * for the specific repros). A comment reminding whoever bumps one copy
+ * to also bump the other did not survive contact with reality twice in
+ * a row.
+ *
+ * Both files now #include "common.h" and use this one definition, so
+ * there is no second copy left to fall behind. Bump ONLY here when the
+ * on-disk format changes (i.e. cob_interp.c's write_expr()/read_expr()
+ * gain or change a case) -- history, for anyone reading this later:
+ *   COBSTRW3 -- strings (EXPR_STR) + STMT_POP holding a general Expr
+ *   COBSTRW4 -- SQLite/Tcl/Tk builtins (six new EXPR_* kinds)
+ *   COBSTRW5 -- _cobwindow (window_open/label/wait/close)
+ *   COBSTRW6 -- raygui widgets (window_button/slider/textbox)
+ * popcorn_comp.c does not implement codegen for the SQLite/_cobwindow/
+ * Tcl-Tk/widget keywords added in v4-v6 -- those bumps only ever
+ * *appended* new ExprKind values after EXPR_HARVEST, never changed the
+ * byte layout of anything popcorn_comp.c's reader already understood,
+ * so its own `default: return -1` case handles an unsupported kind by
+ * failing cleanly at that specific call, not by rejecting the whole
+ * file. That's what makes sharing one writer-side magic constant safe
+ * for a reader that only ever implements a subset of it.
+ * ------------------------------------------------------------------- */
+#define STRAWBERRY_MAGIC      "COBSTRW6"
+#define STRAWBERRY_MAGIC_LEN  8
+
 #ifdef __cplusplus
 }
 #endif

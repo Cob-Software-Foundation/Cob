@@ -2021,15 +2021,12 @@ static int cob_parse_source(const char *source, Program *out_prog, int *out_disa
 }
 
 /* ---------------------------------------------------------------------
- * .strawberry CACHE (binary AST dump, format v6 -- v0.0.5 added the
- * six SQLite/Tcl/Tk expression kinds (COBSTRW3 -> COBSTRW4), then the
- * four _cobwindow expression kinds (COBSTRW4 -> COBSTRW5), and this
- * session added the three raygui widget expression kinds (COBSTRW5 ->
- * COBSTRW6); a cache written by an older cob_interp is simply treated
- * as a miss and regenerated, same as any other magic mismatch)
+ * .strawberry CACHE (binary AST dump). STRAWBERRY_MAGIC/_LEN now live
+ * in common.h -- see the comment there for the format's version
+ * history and why this is shared with popcorn_comp.c instead of two
+ * independent copies. A cache written by an older cob_interp is simply
+ * treated as a miss and regenerated, same as any other magic mismatch.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW6"
-#define STRAWBERRY_MAGIC_LEN  8
 
 typedef struct { unsigned char *data; size_t len, cap; } ByteBuf;
 

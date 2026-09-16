@@ -23,10 +23,10 @@ jobs:
       with:
         lfs: true
 
-    - name: Build cob (native)
+    - name: Build cob (native, via Makefile)
       run: |
-        gcc -std=c99 -Wall -Wextra -Werror -Iinclude \
-            -o cob src/file_io.c src/cob_interp.c
+        make cob_interp CFLAGS="-std=c99 -Wall -Wextra -Werror"
+        cp bin/cob_interp cob
 
     - name: Run pop() smoke test
       run: |
@@ -116,6 +116,33 @@ jobs:
         EOF
         DISPLAY=:99 ./bin/cob_interp_window win.cob | tee win_out.txt
         grep -qx "window handle=1" win_out.txt
+
+    # v0.0.5-plus-widgets: window_button/window_slider/window_textbox
+    # bumped the .strawberry cache format to COBSTRW6 (see the header
+    # comment above write_expr()/read_expr() in src/cob_interp.c). This
+    # is the job that would catch a broken write_expr/read_expr pair
+    # for the three new expression kinds -- run once to write the
+    # cache, then again to force a cache hit, and diff the two runs'
+    # output. A mismatch here means the AST round-trip through the
+    # cache is lossy for one of the new widget keywords.
+    - name: Smoke test -- .strawberry cache round-trips the new widget expression kinds
+      run: |
+        set -euo pipefail
+        cat > widgets_cache.cob << 'EOF'
+        shuck cobwindow
+        set h = window_open("cache test")
+        set b = window_button(h, "OK")
+        set s = window_slider(h, "vol", 50)
+        set t = window_textbox(h, "name")
+        pop("b=" + b + " s=" + s + " t=" + t)
+        set rc = window_close(h)
+        EOF
+        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run1.txt
+        test -f widgets_cache.strawberry
+        grep -qx "b=0 s=0 t=" cache_run1.txt
+        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run2.txt
+        diff cache_run1.txt cache_run2.txt
+        echo "cache round-trip OK: window_button/window_slider/window_textbox decode identically from a cached AST"
 
   # ---------------------------------------------------------------------
   # v0.0.5 extensions on Windows: cross-build via mingw-w64 to catch
@@ -320,32 +347,41 @@ jobs:
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
-    - name: Compile cob, farmer, and popcorn_comp
+    - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
       run: |
         set -euo pipefail
         mkdir -p dist
 
-        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-          -Iinclude \
-          -o "dist/${{ matrix.output_name }}" \
-          src/file_io.c src/cob_interp.c
+        # Same three targets the old raw-gcc step compiled by hand,
+        # now built through the project's own Makefile instead of a
+        # second, separately-maintained copy of the same flags. This
+        # was worth doing after the .strawberry-magic bug (see
+        # Release.txt) -- that bug was exactly this workflow's own
+        # gcc invocations quietly drifting from what the Makefile
+        # (and every contributor's local `make`) actually builds.
+        # cob_interp/farmer/popcorn_comp are all plain, dependency-
+        # free C99 -- none of them touch the Makefile's OS-branched
+        # SQLite/raylib/Tcl-Tk logic (that's cob_interp_full/_window/
+        # _db, covered by the test_extensions jobs instead), so
+        # overriding CC/CFLAGS here is safe no matter which platform
+        # this matrix entry is actually targeting.
+        make cob_interp farmer popcorn_comp \
+          CC="${{ matrix.cc }}" \
+          CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}"
 
-        # farmer needs vendor/miniz (statically-linked zip extraction --
-        # see src/farmer.c's header comment) in addition to include/,
-        # unlike the other two tools.
-        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-          -Iinclude -Ivendor/miniz -D_POSIX_C_SOURCE=200809L -DMINIZ_NO_ZLIB_APIS \
-          -o "dist/${{ matrix.farmer_output_name }}" \
-          src/file_io.c src/farmer.c \
-          vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c \
-          vendor/miniz/miniz_tinfl.c vendor/miniz/miniz_zip.c \
-          -lm
-
-        ${{ matrix.cc }} -std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }} \
-          -Iinclude \
-          -o "dist/${{ matrix.popcorn_output_name }}" \
-          src/file_io.c src/popcorn_comp.c
+        # The Makefile's own binary names (cob_interp/farmer/popcorn_comp
+        # -- no .exe suffix here even for the Windows cross-compile
+        # entries, since $(OS) only reads as Windows_NT on a native
+        # Windows host, never on this Linux runner) differ from the
+        # shorter names this workflow's release archives actually
+        # ship (cob[.exe]/farmer[.exe]/popcorn_comp[.exe]) -- rename on
+        # the way into dist/ rather than renaming what `make` itself
+        # calls its own output, since other Makefile targets and the
+        # project's docs also refer to it as cob_interp.
+        cp bin/cob_interp   "dist/${{ matrix.output_name }}"
+        cp bin/farmer       "dist/${{ matrix.farmer_output_name }}"
+        cp bin/popcorn_comp "dist/${{ matrix.popcorn_output_name }}"
 
         ls -la dist/
 
@@ -505,4 +541,3 @@ jobs:
         body_path: Release.txt
         files: |
           all-binaries/*
-          
