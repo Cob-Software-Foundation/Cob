@@ -366,22 +366,37 @@ jobs:
         # _db, covered by the test_extensions jobs instead), so
         # overriding CC/CFLAGS here is safe no matter which platform
         # this matrix entry is actually targeting.
+        #
+        # EXE_SUF is explicitly forced here rather than left to the
+        # Makefile's own $(OS) check, and this is not cosmetic: the
+        # Makefile's check only ever reads Windows_NT on a *native*
+        # Windows host, so on this Linux runner it's always empty --
+        # but a mingw cross-compiler targeting Windows silently
+        # appends .exe to whatever output name it's given anyway
+        # (confirmed by actually reproducing the mingw build locally;
+        # `-o bin/cob_interp` really does write bin/cob_interp.exe to
+        # disk). Passing EXE_SUF=.exe here makes the name Make asks
+        # the compiler for match the name that compiler actually
+        # writes, instead of asking for one name and getting a
+        # different one back -- which is exactly what broke this
+        # step the first time (`cp: cannot stat 'bin/cob_interp'`).
+        EXE_SUF=""
+        if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
+
         make cob_interp farmer popcorn_comp \
           CC="${{ matrix.cc }}" \
-          CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}"
+          CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
+          EXE_SUF="$EXE_SUF"
 
-        # The Makefile's own binary names (cob_interp/farmer/popcorn_comp
-        # -- no .exe suffix here even for the Windows cross-compile
-        # entries, since $(OS) only reads as Windows_NT on a native
-        # Windows host, never on this Linux runner) differ from the
-        # shorter names this workflow's release archives actually
-        # ship (cob[.exe]/farmer[.exe]/popcorn_comp[.exe]) -- rename on
-        # the way into dist/ rather than renaming what `make` itself
-        # calls its own output, since other Makefile targets and the
-        # project's docs also refer to it as cob_interp.
-        cp bin/cob_interp   "dist/${{ matrix.output_name }}"
-        cp bin/farmer       "dist/${{ matrix.farmer_output_name }}"
-        cp bin/popcorn_comp "dist/${{ matrix.popcorn_output_name }}"
+        # The Makefile's own binary names (cob_interp/farmer/popcorn_comp)
+        # differ from the shorter names this workflow's release archives
+        # actually ship (cob[.exe]/farmer[.exe]/popcorn_comp[.exe]) --
+        # rename on the way into dist/ rather than renaming what `make`
+        # itself calls its own output, since other Makefile targets and
+        # the project's docs also refer to it as cob_interp.
+        cp "bin/cob_interp${EXE_SUF}"   "dist/${{ matrix.output_name }}"
+        cp "bin/farmer${EXE_SUF}"       "dist/${{ matrix.farmer_output_name }}"
+        cp "bin/popcorn_comp${EXE_SUF}" "dist/${{ matrix.popcorn_output_name }}"
 
         ls -la dist/
 
