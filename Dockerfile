@@ -44,7 +44,7 @@ COPY . /cob
 
 # Build once at image-build time so `docker run` starts fast and a broken
 # build fails the image build itself, not silently at container-run time.
-RUN make cob_interp_full
+RUN make
 
 RUN chmod +x tools/stress/run_stress.sh
 

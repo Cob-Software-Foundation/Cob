@@ -42,6 +42,14 @@
 CC      ?= gcc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
 INCLUDE  = -Iinclude
+# Used only by $(SQLITE_LIB) below to archive sqlite3.o into a static
+# lib. Matters for cross-compiling: the host's default `ar` can silently
+# produce a symbol index a foreign-arch linker can't read correctly
+# (confirmed with a real aarch64-w64-mingw32 cross-build -- the archive
+# built fine and `ar t` listed its member, but lld reported every
+# symbol inside it as undefined until the archive was rebuilt with the
+# matching cross toolchain's own `ar`, e.g. AR=aarch64-w64-mingw32-ar).
+AR      ?= ar
 
 BIN_DIR    = bin
 VENDOR_DIR = vendor
@@ -99,8 +107,59 @@ ifeq ($(OS),Windows_NT)
 else
     EXE_SUF =
     SLEEP_CMD = sleep 1
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Darwin)
     # ---------------------------------------------------------------
-    # Linux / macOS: the unix/ build tree, real X11 for Tk.
+    # macOS. Detected via `uname -s` (correctly reports "Darwin" on
+    # real macOS), not an explicit override -- unlike the Windows
+    # targets, this project doesn't cross-compile for macOS from
+    # Linux, so build.yml's macos-latest runner invokes `make`
+    # natively here and this branch just works without needing the
+    # WINDOW_LIBS/SQLITE_LIB/PLATFORM_OS overrides the mingw builds
+    # need. raylib's own vendored Makefile auto-detects Darwin the
+    # same way, so its recursive $(MAKE) call needs no extra help
+    # either.
+    #
+    # NOT verified by actually building on real macOS hardware or in
+    # a real macOS CI run -- this project has neither yet. The
+    # WINDOW_LIBS framework list below comes directly from raylib's
+    # own Makefile's documented OSX LDLIBS line, not from an actual
+    # successful build; if it's wrong, the expected failure mode is a
+    # loud "undefined symbol"/framework-not-found error at final link,
+    # not a silently broken binary.
+    # ---------------------------------------------------------------
+        TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
+        TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
+        TCL_LIB        = $(TCL_BUILD_DIR)/libtcl9.0.a
+        TCL_STUB_LIB   =
+        TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk9.0.a
+        TK_STUB_LIB    =
+        TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
+        TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
+        DB_DEFINES     =
+        # Real Tk on macOS needs its own Cocoa backend to avoid X11
+        # entirely -- vendor/TK/unix's configure does support this,
+        # but that combination has not been built or run on real macOS
+        # by anyone working on this project; treat cob_interp_db on
+        # macOS as unverified even after this Makefile change.
+        DB_LIBS        = $(TK_LIB) $(TCL_LIB) -framework Cocoa -lz -lpthread -lm
+        TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared --prefix=/tmp/tclinstall
+        TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" sh ./configure --disable-shared \
+                          --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
+        # _cobwindow: matches vendor/raylib/src/Makefile's own OSX
+        # LDLIBS line exactly.
+        WINDOW_LIBS    = -framework OpenGL -framework Cocoa -framework IOKit -framework CoreAudio -framework CoreVideo
+        RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
+        RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
+        # A macOS libsqlite3.a is a Mach-O archive -- not interchangeable
+        # with the Linux (ELF) or Windows (PE/COFF) ones. Own name for
+        # the same "don't silently link the wrong platform's stale
+        # archive" reason the Windows/Linux split below already has.
+        SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-macos.a
+        SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-macos.o
+    else
+    # ---------------------------------------------------------------
+    # Linux: the unix/ build tree, real X11 for Tk.
     # ---------------------------------------------------------------
     TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
     TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
@@ -128,6 +187,7 @@ else
     # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
     SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
     SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
+    endif
 endif
 
 .PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass
@@ -297,7 +357,7 @@ clean:
 $(SQLITE_LIB):
 	$(CC) -std=c99 -O2 -c $(VENDOR_DIR)/SQLite/sqlite3.c -o $(SQLITE_OBJ) \
 		-DSQLITE_THREADSAFE=1
-	ar rcs $(SQLITE_LIB) $(SQLITE_OBJ)
+	$(AR) rcs $(SQLITE_LIB) $(SQLITE_OBJ)
 
 .PHONY: sqlite
 sqlite: $(SQLITE_LIB)

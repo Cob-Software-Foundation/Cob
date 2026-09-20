@@ -205,6 +205,7 @@ jobs:
             runner: ubuntu-latest
             toolchain: mingw
             cc: x86_64-w64-mingw32-gcc
+            ar: x86_64-w64-mingw32-ar
             apt_pkg: gcc-mingw-w64-x86-64
             output_name: cob.exe
             farmer_output_name: farmer.exe
@@ -212,12 +213,14 @@ jobs:
             archive_name: cob-windows-amd64
             zig_target: x86_64-windows
             zig_ext: zip
+            full_build: true
 
           - goos: windows
             goarch: '386'
             runner: ubuntu-latest
             toolchain: mingw
             cc: i686-w64-mingw32-gcc
+            ar: i686-w64-mingw32-ar
             apt_pkg: gcc-mingw-w64-i686
             output_name: cob.exe
             farmer_output_name: farmer.exe
@@ -225,18 +228,21 @@ jobs:
             archive_name: cob-windows-386
             zig_target: x86-windows
             zig_ext: zip
+            full_build: true
 
           - goos: windows
             goarch: arm64
             runner: ubuntu-latest
             toolchain: llvm-mingw
             cc: aarch64-w64-mingw32-clang
+            ar: aarch64-w64-mingw32-ar
             output_name: cob.exe
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-arm64
             zig_target: aarch64-windows
             zig_ext: zip
+            full_build: true
           # windows/arm (32-bit ARM) intentionally not supported -- cut
           # per project decision.
 
@@ -252,6 +258,7 @@ jobs:
             archive_name: cob-linux-amd64
             zig_target: x86_64-linux
             zig_ext: tarxz
+            full_build: true
 
           - goos: linux
             goarch: '386'
@@ -266,12 +273,15 @@ jobs:
             archive_name: cob-linux-386
             zig_target: x86-linux
             zig_ext: tarxz
+            full_build: true
+            x11_arch: i386
 
           - goos: linux
             goarch: arm64
             runner: ubuntu-latest
             toolchain: cross
             cc: aarch64-linux-gnu-gcc
+            ar: aarch64-linux-gnu-ar
             apt_pkg: gcc-aarch64-linux-gnu
             output_name: cob
             farmer_output_name: farmer
@@ -279,12 +289,15 @@ jobs:
             archive_name: cob-linux-arm64
             zig_target: aarch64-linux
             zig_ext: tarxz
+            full_build: true
+            x11_arch: arm64
 
           - goos: linux
             goarch: arm
             runner: ubuntu-latest
             toolchain: cross
             cc: arm-linux-gnueabihf-gcc
+            ar: arm-linux-gnueabihf-ar
             apt_pkg: gcc-arm-linux-gnueabihf
             output_name: cob
             farmer_output_name: farmer
@@ -292,6 +305,8 @@ jobs:
             archive_name: cob-linux-arm32
             zig_target: arm-linux
             zig_ext: tarxz
+            full_build: true
+            x11_arch: armhf
 
           # ---------------- macOS ----------------
           - goos: darwin
@@ -306,6 +321,7 @@ jobs:
             archive_name: cob-darwin-arm64
             zig_target: aarch64-macos
             zig_ext: tarxz
+            full_build: true
 
           - goos: darwin
             goarch: amd64
@@ -319,6 +335,7 @@ jobs:
             archive_name: cob-darwin-amd64
             zig_target: x86_64-macos
             zig_ext: tarxz
+            full_build: true
 
     steps:
     - uses: actions/checkout@v6
@@ -337,6 +354,12 @@ jobs:
       if: matrix.toolchain == 'cross'
       run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_pkg }}
 
+    - name: Install X11/OpenGL dev headers (full build, native Linux only)
+      if: matrix.full_build == true && matrix.goos == 'linux'
+      run: |
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+          libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
     - name: Install llvm-mingw (Windows arm64)
       if: matrix.toolchain == 'llvm-mingw'
       run: |
@@ -346,6 +369,36 @@ jobs:
           "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_DIST}.tar.xz"
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
+
+    - name: Install X11/OpenGL dev headers (full build, native Linux)
+      if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch == null
+      run: |
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+          libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+    - name: Install X11/OpenGL dev headers (full build, foreign-arch Linux)
+      if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch != null
+      # NOT verified against a real run -- built and confirmed working
+      # for i386 (matrix.x11_arch on the linux/386 entry) in the same
+      # sandbox that verified everything else in this workflow, but the
+      # arm64/armhf entries could not be verified end-to-end: this
+      # sandbox's own network policy blocks ports.ubuntu.com outright
+      # (`x-deny-reason: host_not_allowed`), which is where Ubuntu's
+      # arm64/armhf binary packages actually live (only amd64/i386 are
+      # served from the main archive mirror) -- a real GitHub Actions
+      # runner should reach it fine, but that's this step's real first
+      # test, not a confirmed-working repeat of something already run.
+      run: |
+        sudo dpkg --add-architecture ${{ matrix.x11_arch }}
+        if [ "${{ matrix.x11_arch }}" != "i386" ]; then
+          echo "deb [arch=${{ matrix.x11_arch }}] http://ports.ubuntu.com/ubuntu-ports noble main universe" | sudo tee -a /etc/apt/sources.list
+          echo "deb [arch=${{ matrix.x11_arch }}] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe" | sudo tee -a /etc/apt/sources.list
+        fi
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libx11-dev:${{ matrix.x11_arch }} libgl1-mesa-dev:${{ matrix.x11_arch }} \
+          libxrandr-dev:${{ matrix.x11_arch }} libxinerama-dev:${{ matrix.x11_arch }} \
+          libxcursor-dev:${{ matrix.x11_arch }} libxi-dev:${{ matrix.x11_arch }}
 
     - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
@@ -360,12 +413,6 @@ jobs:
         # Release.txt) -- that bug was exactly this workflow's own
         # gcc invocations quietly drifting from what the Makefile
         # (and every contributor's local `make`) actually builds.
-        # cob_interp/farmer/popcorn_comp are all plain, dependency-
-        # free C99 -- none of them touch the Makefile's OS-branched
-        # SQLite/raylib/Tcl-Tk logic (that's cob_interp_full/_window/
-        # _db, covered by the test_extensions jobs instead), so
-        # overriding CC/CFLAGS here is safe no matter which platform
-        # this matrix entry is actually targeting.
         #
         # EXE_SUF is explicitly forced here rather than left to the
         # Makefile's own $(OS) check, and this is not cosmetic: the
@@ -378,23 +425,132 @@ jobs:
         # disk). Passing EXE_SUF=.exe here makes the name Make asks
         # the compiler for match the name that compiler actually
         # writes, instead of asking for one name and getting a
-        # different one back -- which is exactly what broke this
-        # step the first time (`cp: cannot stat 'bin/cob_interp'`).
+        # different one back.
         EXE_SUF=""
         if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
 
-        make cob_interp farmer popcorn_comp \
-          CC="${{ matrix.cc }}" \
-          CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
-          EXE_SUF="$EXE_SUF"
+        if [ "${{ matrix.full_build }}" = "true" ]; then
+          # This target ships cob_interp_full (SQLite + _cobwindow +
+          # raygui widgets) as its "cob"/"cob.exe", not the lightweight
+          # cob_interp. Confidence varies a lot by target -- see the
+          # per-OS notes below and Release.txt for what was actually
+          # cross-compiled and run versus just written to match a
+          # proven pattern:
+          #   - windows/amd64, windows/386, linux/amd64, linux/386:
+          #     built AND run (headless Xvfb for the two Linux ones)
+          #     in the same sandbox that verified the rest of this
+          #     workflow -- SQLite + a real window both confirmed
+          #     working through the actual output binary.
+          #   - windows/arm64 (llvm-mingw): built and inspected (a
+          #     real PE32+ Aarch64 binary with correct imports), not
+          #     run -- no way to execute an arm64 Windows binary in
+          #     this sandbox.
+          #   - linux/arm64, linux/arm (cross): NOT built here at all.
+          #     This sandbox's own network policy blocks
+          #     ports.ubuntu.com outright, which is where the
+          #     foreign-arch X11/OpenGL dev packages these need
+          #     actually live -- a real GitHub Actions runner should
+          #     reach it fine, but that makes this workflow's first
+          #     real run the first real test for these two targets.
+          #   - darwin/arm64, darwin/amd64: NOT built here at all --
+          #     this sandbox has no macOS toolchain or frameworks to
+          #     build against, full stop. The Makefile's Darwin branch
+          #     (WINDOW_LIBS/SQLITE_LIB) was added from raylib's own
+          #     documented OSX Makefile requirements, not from a
+          #     successful build. If it's wrong, the Makefile comment
+          #     next to it explains the expected failure mode is a
+          #     loud link error, not a silently broken binary.
+          #
+          # CFLAGS is deliberately NOT overridden anywhere in this
+          # branch -- cob_interp_full recurses into raylib's own
+          # vendored Makefile via $(MAKE), and GNU Make auto-forwards
+          # any command-line-origin variable into every recursive
+          # sub-make, so a CFLAGS override here doesn't just add to
+          # raylib's own internal flags, it silently *replaces* them,
+          # which is exactly how raylib decides its GLFW backend
+          # (confirmed directly: doing this reproduced raylib being
+          # built with the wrong backend for the target, failing at
+          # final link with a wall of `undefined reference to
+          # GetTime/InitPlatform/...` even though raylib itself
+          # compiled with zero errors). Anything matrix.cflags would
+          # have supplied (-m32, -arch arm64, ...) is folded into CC
+          # itself instead, the same way EXE_SUF handles the mingw
+          # auto-.exe-append quirk -- a value baked into CC applies to
+          # every invocation of it, in this Makefile and in raylib's,
+          # without needing CFLAGS at all.
+          #
+          # PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB are forced explicitly
+          # for Windows and Linux for the same reason EXE_SUF is: both
+          # this Makefile's and raylib's own vendored Makefile's
+          # platform branches are keyed on the *build host*
+          # ($(OS)/`uname`), never on the actual cross-compile target,
+          # so cross-building for Windows (or a foreign Linux arch)
+          # from this x86_64 runner needs every one of these forced by
+          # hand instead of auto-detected. macOS is the one goos here
+          # that's never cross-compiled -- the real macos-latest
+          # runner invokes `make` natively, so both Makefiles' own
+          # `uname`-based Darwin detection already works unassisted,
+          # and only the -arch flag (folded into CC below) is needed
+          # to pick the right side of Apple's universal toolchain.
+          FULL_CC="${{ matrix.cc }} ${{ matrix.cflags || '' }}"
+          FULL_AR="${{ matrix.ar || '' }}"
+          case "${{ matrix.goos }}" in
+            windows)
+              WINDOW_LIBS="-lopengl32 -lgdi32 -lwinmm -lshell32"
+              SQLITE_LIB_OVERRIDE="vendor/SQLite/libsqlite3-win.a"
+              PLATFORM_OS_OVERRIDE="WINDOWS"
+              ;;
+            linux)
+              WINDOW_LIBS="-lGL -lm -lpthread -ldl -lrt -lX11"
+              SQLITE_LIB_OVERRIDE="vendor/SQLite/libsqlite3-unix.a"
+              PLATFORM_OS_OVERRIDE="LINUX"
+              ;;
+            darwin)
+              # No PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB override at all --
+              # native `uname`-based detection in both Makefiles
+              # already picks the Darwin branch correctly here.
+              WINDOW_LIBS=""
+              SQLITE_LIB_OVERRIDE=""
+              PLATFORM_OS_OVERRIDE=""
+              ;;
+          esac
 
-        # The Makefile's own binary names (cob_interp/farmer/popcorn_comp)
-        # differ from the shorter names this workflow's release archives
-        # actually ship (cob[.exe]/farmer[.exe]/popcorn_comp[.exe]) --
-        # rename on the way into dist/ rather than renaming what `make`
-        # itself calls its own output, since other Makefile targets and
-        # the project's docs also refer to it as cob_interp.
-        cp "bin/cob_interp${EXE_SUF}"   "dist/${{ matrix.output_name }}"
+          # Build up the override list as an array instead of one long
+          # string, so an empty value (FULL_AR on every target except
+          # the three that need it; every *_OVERRIDE on darwin) is
+          # simply omitted instead of passed to `make` as a literal
+          # empty assignment.
+          FULL_BUILD_ARGS=(CC="$FULL_CC" EXE_SUF="$EXE_SUF")
+          [ -n "$FULL_AR" ] && FULL_BUILD_ARGS+=(AR="$FULL_AR")
+          [ -n "$WINDOW_LIBS" ] && FULL_BUILD_ARGS+=(WINDOW_LIBS="$WINDOW_LIBS")
+          [ -n "$SQLITE_LIB_OVERRIDE" ] && FULL_BUILD_ARGS+=(SQLITE_LIB="$SQLITE_LIB_OVERRIDE")
+          [ -n "$PLATFORM_OS_OVERRIDE" ] && FULL_BUILD_ARGS+=(PLATFORM_OS="$PLATFORM_OS_OVERRIDE")
+
+          make cob_interp_full "${FULL_BUILD_ARGS[@]}"
+
+          # farmer/popcorn_comp don't touch any vendor sub-make, so
+          # overriding CFLAGS for them is fine -- same as the non-
+          # full_build branch below.
+          make farmer popcorn_comp \
+            CC="${{ matrix.cc }}" \
+            CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
+            EXE_SUF="$EXE_SUF"
+
+          cp "bin/cob_interp_full${EXE_SUF}" "dist/${{ matrix.output_name }}"
+        else
+          make cob_interp farmer popcorn_comp \
+            CC="${{ matrix.cc }}" \
+            CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
+            EXE_SUF="$EXE_SUF"
+
+          cp "bin/cob_interp${EXE_SUF}" "dist/${{ matrix.output_name }}"
+        fi
+
+        # The Makefile's own binary names (farmer/popcorn_comp) differ
+        # from the shorter names this workflow's release archives
+        # actually ship (farmer[.exe]/popcorn_comp[.exe]) -- rename on
+        # the way into dist/ rather than renaming what `make` itself
+        # calls its own output.
         cp "bin/farmer${EXE_SUF}"       "dist/${{ matrix.farmer_output_name }}"
         cp "bin/popcorn_comp${EXE_SUF}" "dist/${{ matrix.popcorn_output_name }}"
 
