@@ -378,21 +378,44 @@ jobs:
 
     - name: Install X11/OpenGL dev headers (full build, foreign-arch Linux)
       if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch != null
-      # NOT verified against a real run -- built and confirmed working
-      # for i386 (matrix.x11_arch on the linux/386 entry) in the same
-      # sandbox that verified everything else in this workflow, but the
-      # arm64/armhf entries could not be verified end-to-end: this
-      # sandbox's own network policy blocks ports.ubuntu.com outright
-      # (`x-deny-reason: host_not_allowed`), which is where Ubuntu's
-      # arm64/armhf binary packages actually live (only amd64/i386 are
-      # served from the main archive mirror) -- a real GitHub Actions
-      # runner should reach it fine, but that's this step's real first
-      # test, not a confirmed-working repeat of something already run.
+      # i386 (matrix.x11_arch on the linux/386 entry) is confirmed
+      # working -- i386 packages are still served from the same
+      # archive.ubuntu.com/security.ubuntu.com mirrors as amd64, so no
+      # extra source needed. arm64/armhf are a different situation:
+      # Ubuntu only serves those from ports.ubuntu.com, never from the
+      # main archive/security mirrors at all, and this sandbox's own
+      # network policy blocks ports.ubuntu.com outright, so this
+      # exact step could never be tested here end-to-end.
+      #
+      # First real run against this surfaced two things that armchair
+      # review missed: (1) GitHub's ubuntu-24.04 runners default to
+      # the newer deb822 /etc/apt/sources.list.d/ubuntu.sources format,
+      # not the classic one-line-per-entry sources.list this step
+      # originally only appended to -- that part still worked (apt
+      # reads both), but (2) the *default* archive.ubuntu.com/
+      # security.ubuntu.com stanzas in ubuntu.sources have no
+      # Architectures: restriction, so once `dpkg --add-architecture
+      # arm64` runs, apt tries *every* configured suite -- including
+      # noble-security -- against those default mirrors too, and gets
+      # a 404 for binary-arm64/Packages there (arm64 was never on
+      # those mirrors to begin with; only ports.ubuntu.com has it).
+      # Restricting the default stanzas to amd64/i386 stops apt from
+      # ever trying them for a foreign arch, and the dedicated
+      # ports.ubuntu.com source below now covers all four suites
+      # (main/updates/backports/security), not just the two this step
+      # originally had.
       run: |
         sudo dpkg --add-architecture ${{ matrix.x11_arch }}
         if [ "${{ matrix.x11_arch }}" != "i386" ]; then
-          echo "deb [arch=${{ matrix.x11_arch }}] http://ports.ubuntu.com/ubuntu-ports noble main universe" | sudo tee -a /etc/apt/sources.list
-          echo "deb [arch=${{ matrix.x11_arch }}] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe" | sudo tee -a /etc/apt/sources.list
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64 i386' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports.list > /dev/null << 'PORTS_EOF'
+        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse
+        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse
+        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-backports main universe restricted multiverse
+        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse
+        PORTS_EOF
         fi
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
