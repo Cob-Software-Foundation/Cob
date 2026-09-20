@@ -551,6 +551,18 @@ jobs:
 
           make cob_interp_full "${FULL_BUILD_ARGS[@]}"
 
+          # Same idea as the release archive this job already produces,
+          # but minimal: just cob(.exe) + license text, meant to be
+          # embedded inside another application's own distribution
+          # rather than installed as a dev toolchain -- see
+          # EMBED-README.md and handoff.md for the full rationale.
+          # Reuses the exact same override array cob_interp_full itself
+          # was just built with (`embed` depends on `cob_interp_full`
+          # as a real Make prerequisite, so this doesn't rebuild
+          # anything -- it just packages what's already in bin/).
+          make embed "${FULL_BUILD_ARGS[@]}" EMBED_SUF="-${{ matrix.goos }}-${{ matrix.goarch }}"
+          cp bin/cob-*-embed-*.zip "dist/"
+
           # farmer/popcorn_comp don't touch any vendor sub-make, so
           # overriding CFLAGS for them is fine -- same as the non-
           # full_build branch below.
@@ -690,14 +702,28 @@ jobs:
         sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.sha256"
         sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.hashfrag"
 
+        # The embeddable package (see EMBED-README.md/handoff.md) --
+        # named by `make embed` itself as cob-<VERSION>-embed-<goos>-
+        # <goarch>.zip, so glob for it rather than hardcoding the
+        # version here too.
+        for f in cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip; do
+          [ -e "$f" ] || continue
+          sha256sum "$f" > "$f.sha256"
+          sha256sum "$f" > "$f.hashfrag"
+        done
+
     - name: Upload temporary matrix artifacts
       uses: actions/upload-artifact@v4
       with:
         name: artifact-${{ matrix.archive_name }}
+        if-no-files-found: ignore
         path: |
           dist/${{ matrix.archive_name }}.zip
           dist/${{ matrix.archive_name }}.zip.sha256
           dist/${{ matrix.archive_name }}.zip.hashfrag
+          dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+          dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.sha256
+          dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
   release:
     needs: build

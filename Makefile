@@ -322,6 +322,56 @@ farmer: $(BIN_DIR)
 		vendor/miniz/miniz_tinfl.c vendor/miniz/miniz_zip.c \
 		-lm
 
+# =========================================================================
+# EMBEDDABLE PACKAGE
+# =========================================================================
+# The Python-embeddable-zip idea, for Cob: a minimal, no-installer,
+# extract-and-run folder meant to be dropped inside *another*
+# application's own distribution, not used as a standalone dev
+# toolchain. Deliberately NOT the same thing as the release archives
+# build.yml produces -- those bundle cob+farmer+popcorn_comp+docs for
+# someone developing *in* Cob; this bundles only the one binary another
+# program embeds to *run* .cob scripts.
+#
+# Contents, mirroring Python's embeddable zip's own minimalism:
+#   cob$(EXE_SUF)     -- cob_interp_full, renamed (SQLite + _cobwindow
+#                        + widgets; no Tcl/Tk -- see EMBED-README.md
+#                        for why cob_interp_full specifically)
+#   LICENSE.md         -- Cob's own license
+#   legal/             -- only the two third-party licenses that
+#                        actually apply to this binary (raylib,
+#                        raygui); SQLite is public domain (see its own
+#                        header's "blessing"), and Tcl/Tk/miniz aren't
+#                        compiled into cob_interp_full at all, so
+#                        their license terms don't apply here the way
+#                        they would to a full release archive.
+#   EMBED-README.md    -- embedding contract: invocation, exit codes,
+#                        flags, stdout/stderr, what's deliberately left
+#                        out and why (no farmer, no popcorn_comp, no
+#                        docs -- a host application embeds the runtime,
+#                        not the toolchain).
+#   VERSION            -- so an embedding app can detect what it's got
+#
+# Explicitly NOT included: farmer, popcorn_comp, docs/ -- see
+# EMBED-README.md's "What's not in here, on purpose" section.
+EMBED_STAGE = $(BIN_DIR)/embed-stage
+EMBED_SUF  ?=
+EMBED_ZIP   = $(BIN_DIR)/cob-$(shell cat VERSION)-embed$(EMBED_SUF).zip
+
+.PHONY: embed
+embed: cob_interp_full
+	rm -rf $(EMBED_STAGE) $(EMBED_ZIP)
+	mkdir -p $(EMBED_STAGE)/legal
+	cp $(BIN_DIR)/cob_interp_full$(EXE_SUF) $(EMBED_STAGE)/cob$(EXE_SUF)
+	cp LICENSE.md $(EMBED_STAGE)/
+	cp legal/license_raylib.terms legal/license_raygui.terms $(EMBED_STAGE)/legal/
+	cp VERSION $(EMBED_STAGE)/
+	cp EMBED-README.md $(EMBED_STAGE)/README.md
+	cd $(EMBED_STAGE) && zip -rq "../../$(EMBED_ZIP)" .
+	rm -rf $(EMBED_STAGE)
+	@echo ""
+	@echo "Built $(EMBED_ZIP) -- extract-and-run, no installer, just cob$(EXE_SUF) + license text."
+
 clean:
 	rm -rf $(BIN_DIR)
 
