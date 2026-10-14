@@ -534,17 +534,21 @@ cleanup:
 static void print_usage(const char *argv0) {
     fprintf(stderr,
         "Usage: %s harvest <package>\n"
+        "       %s --license\n"
+        "       %s --version\n"
         "\n"
         "  farmer harvest <package>   download and install a Cob package\n"
         "                             into %s/<package>/\n"
+        "  farmer --license           print the short license notice and exit\n"
         "\n"
         "Environment:\n"
         "  %s   override the registry base URL (default: %s)\n",
-        argv0, COB_FARMER_MODULES_DIR, COB_FARMER_BASE_URL_ENV, COB_FARMER_DEFAULT_BASE_URL);
+        argv0, argv0, argv0, COB_FARMER_MODULES_DIR, COB_FARMER_BASE_URL_ENV, COB_FARMER_DEFAULT_BASE_URL);
 }
 
 int main(int argc, char **argv) {
     if (cob_check_hidden_version_flag(argc, argv)) return 0;
+    if (cob_check_hidden_license_flag(argc, argv)) return 0;
 
     if (argc < 2) { print_usage(argv[0]); return 1; }
 

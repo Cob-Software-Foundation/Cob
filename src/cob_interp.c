@@ -133,6 +133,8 @@
 #include <ctype.h>
 #include <stdint.h>
 
+#include "cob.h"   /* CEP-2: CobValue / CobFFIFunc -- the native-extension ABI */
+
 /* v0.0.5 SQLite/Tcl/Tk bindings -- only pulled in by `make cob_interp_db`
  * (see Makefile). A plain `make cob_interp` defines none of these and
  * stays exactly as dependency-free as every prior release. */
@@ -170,7 +172,38 @@
 #include "raygui.h"
 #endif
 
+/* ---------------------------------------------------------------------
+ * COB_WASM -- the browser-sandbox build (see `make wasm`). Only the pure
+ * language core is compiled: no SQLite, no Tcl/Tk, no _cobwindow, no
+ * dlopen(). Those keywords still *parse*, and evaluate as silent no-op
+ * stubs (see cob_web_warn_once() below) so a script written for the
+ * desktop keeps running its pure-language logic instead of crashing.
+ * ------------------------------------------------------------------- */
+#if defined(COB_WASM) && (defined(COB_WITH_SQLITE) || defined(COB_WITH_TCL) || \
+                          defined(COB_WITH_TK) || defined(COB_WITH_COBWINDOW))
+#error "COB_WASM is the dependency-free sandbox build: do not combine it with COB_WITH_SQLITE/TCL/TK/COBWINDOW"
+#endif
+
+/* Dynamic loading for `extern` (CEP-2): dlopen()/dlsym() on POSIX,
+ * LoadLibraryA()/GetProcAddress() on Windows. Declared by hand on
+ * Windows instead of #including <windows.h> because raylib.h (pulled in
+ * above under COB_WITH_COBWINDOW) defines Rectangle/CloseWindow/ShowCursor,
+ * which collide with <windows.h>'s -- if something already included it,
+ * its own prototypes are used instead. Not compiled for COB_WASM. */
+#if defined(COB_WASM)
+/* nothing: the sandbox cannot load native code */
+#elif defined(_WIN32)
+#   if !defined(_WINDOWS_) && !defined(_INC_WINDOWS)
+__declspec(dllimport) void *__stdcall LoadLibraryA(const char *);
+__declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
+__declspec(dllimport) int   __stdcall FreeLibrary(void *);
+#   endif
+#else
+#   include <dlfcn.h>
+#endif
+
 #define COB_MAX_LOOP_ITERATIONS 10000000UL
+#define COB_MAX_EXTERN_ARGS 255
 #define COB_MAX_SHUCK_DEPTH 16
 
 /* ---------------------------------------------------------------------
@@ -207,7 +240,13 @@ typedef enum {
     /* raygui widgets, wired to Cob syntax this session. Two-arg:
      * WINDOW_BUTTON, WINDOW_TEXTBOX (left=handle, right=label). Three-
      * arg: WINDOW_SLIDER (left=handle, right=label, arg3=max). */
-    EXPR_WINDOW_BUTTON, EXPR_WINDOW_SLIDER, EXPR_WINDOW_TEXTBOX
+    EXPR_WINDOW_BUTTON, EXPR_WINDOW_SLIDER, EXPR_WINDOW_TEXTBOX,
+    /* C API / FFI (CEP-2): a call to a name bound by an `extern`
+     * statement. The name lives in `var`, the arguments in args[0..argc-1].
+     * Appended last so every earlier kind keeps its numeric value --
+     * popcorn_comp.c's reader depends on that (it hard-codes this one as
+     * 18; keep the two in sync). */
+    EXPR_EXTERN_CALL
 } ExprKind;
 
 typedef struct Expr {
@@ -223,6 +262,8 @@ typedef struct Expr {
                             * second (SQL text / widget label) arg */
     struct Expr *arg3;    /* three-arg builtin's third arg (currently only
                             * window_slider's <max>) -- NULL otherwise */
+    struct Expr **args;   /* EXPR_EXTERN_CALL: owned array of owned Exprs */
+    int argc;             /* EXPR_EXTERN_CALL: number of entries in args */
 } Expr;
 
 static Expr *expr_new_num(long n) {
@@ -276,8 +317,21 @@ static Expr *expr_new_call3(ExprKind kind, Expr *arg1, Expr *arg2, Expr *arg3) {
     e->kind = kind; e->left = arg1; e->right = arg2; e->arg3 = arg3;
     return e;
 }
+/* CEP-2: takes ownership of `owned_name` and of `args` (and each Expr in it). */
+static Expr *expr_new_extern_call(char *owned_name, Expr **args, int argc) {
+    Expr *e = (Expr *)calloc(1, sizeof(Expr));
+    if (!e) return NULL;
+    e->kind = EXPR_EXTERN_CALL; e->var = owned_name; e->args = args; e->argc = argc;
+    return e;
+}
 static void expr_free(Expr *e) {
     if (!e) return;
+    if (e->kind == EXPR_EXTERN_CALL) {
+        int i;
+        free(e->var);
+        for (i = 0; i < e->argc; i++) expr_free(e->args[i]);
+        free(e->args);
+    }
     if (e->kind == EXPR_STR) free(e->str_lit);
     if (e->kind == EXPR_VAR) free(e->var);
     if (e->kind == EXPR_BINOP) { expr_free(e->left); expr_free(e->right); }
@@ -301,6 +355,11 @@ static int expr_uses_harvest(const Expr *e) {
     if (!e) return 0;
     if (e->kind == EXPR_HARVEST) return 1;
     if (e->kind == EXPR_BINOP) return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
+    if (e->kind == EXPR_EXTERN_CALL) {
+        int i;
+        for (i = 0; i < e->argc; i++) if (expr_uses_harvest(e->args[i])) return 1;
+        return 0;
+    }
     if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
         e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
         e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE) {
@@ -338,7 +397,9 @@ static void cond_free(Cond *c) {
 /* ---------------------------------------------------------------------
  * AST: STATEMENTS / PROGRAM
  * ------------------------------------------------------------------- */
-typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH } StmtKind;
+/* STMT_EXTERN (CEP-2) is appended last so earlier kinds keep their numeric
+ * values -- see the matching note on EXPR_EXTERN_CALL. */
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN } StmtKind;
 
 typedef struct Program {
     struct Stmt *items;
@@ -351,6 +412,7 @@ typedef struct Stmt {
     char *set_name; Expr *set_expr;           /* STMT_SET */
     Cond *while_cond; Program while_body;     /* STMT_WHILE */
     char *trash_name;                         /* STMT_TRASH */
+    char *ext_name; char *ext_lib;            /* STMT_EXTERN: C symbol name, library path */
 } Stmt;
 
 static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
@@ -376,6 +438,7 @@ static void stmt_free_contents(Stmt *s) {
         case STMT_POP: expr_free(s->pop_expr); break;
         case STMT_SET: free(s->set_name); expr_free(s->set_expr); break;
         case STMT_TRASH: free(s->trash_name); break;
+        case STMT_EXTERN: free(s->ext_name); free(s->ext_lib); break;
         case STMT_WHILE: {
             cond_free(s->while_cond);
             size_t i;
@@ -610,6 +673,95 @@ static const char *parse_identifier(const char *p, char **out_name) {
  * ------------------------------------------------------------------- */
 static const char *parse_expr(const char *p, Expr **out); /* fwd decl */
 
+/* ---------------------------------------------------------------------
+ * C API / FFI (CEP-2) -- PARSE-TIME SIDE
+ *
+ * An `extern f(x) from "lib"` line registers `f` here as it is parsed
+ * (parse_block walks statements in source order), so a *later*
+ * `f(...)` parses as a call instead of a variable followed by a stray
+ * '('. Declare before use, same as everything else in Cob. The actual
+ * dlopen()/dlsym() happens at execution time -- see cob_extern_bind().
+ * ------------------------------------------------------------------- */
+static char **g_extern_decl = NULL;
+static size_t g_extern_decl_count = 0, g_extern_decl_cap = 0;
+
+static int cob_extern_is_declared(const char *name) {
+    size_t i;
+    for (i = 0; i < g_extern_decl_count; i++)
+        if (strcmp(g_extern_decl[i], name) == 0) return 1;
+    return 0;
+}
+static int cob_extern_declare(const char *name) {
+    if (cob_extern_is_declared(name)) return 0;
+    if (g_extern_decl_count == g_extern_decl_cap) {
+        size_t new_cap = g_extern_decl_cap ? g_extern_decl_cap * 2 : 8;
+        char **grown = (char **)realloc(g_extern_decl, new_cap * sizeof(char *));
+        if (!grown) return -1;
+        g_extern_decl = grown; g_extern_decl_cap = new_cap;
+    }
+    g_extern_decl[g_extern_decl_count] = cob_strdup(name);
+    if (!g_extern_decl[g_extern_decl_count]) return -1;
+    g_extern_decl_count++;
+    return 0;
+}
+static void cob_extern_decl_free(void) {
+    size_t i;
+    for (i = 0; i < g_extern_decl_count; i++) free(g_extern_decl[i]);
+    free(g_extern_decl);
+    g_extern_decl = NULL; g_extern_decl_count = g_extern_decl_cap = 0;
+}
+
+/* An extern may not shadow a statement keyword or a built-in call -- the
+ * built-in would silently win at every call site, which is a worse
+ * failure mode than refusing the declaration outright. */
+static int cob_is_reserved_word(const char *name) {
+    static const char *const reserved[] = {
+        COB_KW_WHILE, COB_KW_SET, COB_KW_POP, COB_KW_SHUCK, COB_KW_HARVEST,
+        COB_KW_TRASH, COB_KW_EXTERN,
+        COB_KW_SQL_OPEN, COB_KW_SQL_EXEC, COB_KW_SQL_QUERY, COB_KW_SQL_CLOSE,
+        COB_KW_TCL_EVAL, COB_KW_TK_EVAL,
+        COB_KW_WINDOW_OPEN, COB_KW_WINDOW_LABEL, COB_KW_WINDOW_WAIT, COB_KW_WINDOW_CLOSE,
+        COB_KW_WINDOW_BUTTON, COB_KW_WINDOW_SLIDER, COB_KW_WINDOW_TEXTBOX
+    };
+    size_t i;
+    for (i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
+        if (strcmp(reserved[i], name) == 0) return 1;
+    return 0;
+}
+
+/* `p` points just past the '(' of an already-declared extern's call.
+ * Takes ownership of `name`. Returns the position after ')' or NULL. */
+static const char *parse_extern_call(char *name, const char *p, Expr **out) {
+    Expr **args = NULL; int argc = 0, cap = 0, i;
+    p = skip_blank(p);
+    if (*p != ')') {
+        for (;;) {
+            Expr *arg;
+            p = parse_expr(p, &arg);
+            if (!p) goto fail;
+            if (argc >= COB_MAX_EXTERN_ARGS) { expr_free(arg); goto fail; }
+            if (argc == cap) {
+                int new_cap = cap ? cap * 2 : 4;
+                Expr **grown = (Expr **)realloc(args, (size_t)new_cap * sizeof(Expr *));
+                if (!grown) { expr_free(arg); goto fail; }
+                args = grown; cap = new_cap;
+            }
+            args[argc++] = arg;
+            p = skip_blank(p);
+            if (*p == ',') { p = skip_blank(p + 1); continue; }
+            break;
+        }
+        if (*p != ')') goto fail;
+    }
+    *out = expr_new_extern_call(name, args, argc);
+    if (!*out) goto fail;
+    return p + 1;
+fail:
+    for (i = 0; i < argc; i++) expr_free(args[i]);
+    free(args); free(name);
+    return NULL;
+}
+
 static const char *parse_primary(const char *p, Expr **out) {
     p = skip_blank(p);
 
@@ -725,6 +877,11 @@ static const char *parse_primary(const char *p, Expr **out) {
         char *name;
         const char *after = parse_identifier(p, &name);
         if (!after) return NULL;
+        /* CEP-2: a declared extern directly followed by '(' is a native call */
+        if (cob_extern_is_declared(name)) {
+            const char *paren = skip_blank(after);
+            if (*paren == '(') return parse_extern_call(name, paren + 1, out);
+        }
         *out = expr_new_var(name);
         if (!*out) { free(name); return NULL; }
         return after;
@@ -820,6 +977,22 @@ static void long_to_str(long n, char *buf, size_t bufsize) {
  * are opt-in (COB_WITH_*) and don't need to participate in the
  * harvest/trash --no-gc bookkeeping.
  * ------------------------------------------------------------------- */
+#ifdef COB_WASM
+/* The sandbox's "No-Op Stub" notice. Printed to *stdout* (so it lands in
+ * the playground terminal next to the script's own pop() output), once
+ * per run no matter how many desktop-only calls follow, and never fatal:
+ * the stub that triggered it just returns its harmless default and the
+ * script keeps running. */
+static int g_web_warned = 0;
+static void cob_web_warn_once(void) {
+    if (g_web_warned) return;
+    g_web_warned = 1;
+    fputs(COB_WEB_WARNING_LINE1 "\n", stdout);
+    fputs(COB_WEB_WARNING_LINE2 "\n", stdout);
+    fflush(stdout);
+}
+#endif
+
 #ifdef COB_WITH_SQLITE
 #define COB_SQL_MAX_HANDLES 16
 static sqlite3 *cob_sql_handles[COB_SQL_MAX_HANDLES];
@@ -901,26 +1074,42 @@ static void cob_sql_shutdown(void) {
 #else
 static long cob_sql_open(const char *path) {
     (void)path;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: sql_open() is a stub in this build "
                      "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
+#endif
     return 0;
 }
 static long cob_sql_exec(long handle, const char *sql) {
     (void)handle; (void)sql;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: sql_exec() is a stub in this build "
                      "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
+#endif
     return 0;
 }
 static char *cob_sql_query(long handle, const char *sql) {
     (void)handle; (void)sql;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: sql_query() is a stub in this build "
                      "(compiled without SQLite support -- see `make cob_interp_db`); returned \"\"\n");
+#endif
     return cob_strdup("");
 }
 static void cob_sql_close(long handle) {
     (void)handle;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: sql_close() is a stub in this build "
                      "(compiled without SQLite support -- see `make cob_interp_db`)\n");
+#endif
 }
 static void cob_sql_shutdown(void) {}
 #endif /* COB_WITH_SQLITE */
@@ -1251,47 +1440,223 @@ static void cob_window_shutdown(void) {
 #else /* !COB_WITH_COBWINDOW -- stub, matches the sql_ and tcl_eval() stub pattern */
 static long cob_window_open(const char *title) {
     (void)title;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_open() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`); returned 0\n");
+#endif
     return 0;
 }
 static long cob_window_label(long handle, const char *text) {
     (void)handle; (void)text;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_label() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+#endif
     return 0;
 }
 static long cob_window_wait(long handle, long seconds) {
     (void)handle; (void)seconds;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_wait() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+#endif
     return 0;
 }
 static long cob_window_button(long handle, const char *label) {
     (void)handle; (void)label;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_button() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+#endif
     return 0;
 }
 static long cob_window_slider(long handle, const char *label, long max_value) {
     (void)handle; (void)label; (void)max_value;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_slider() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+#endif
     return 0;
 }
 static char *cob_window_textbox(long handle, const char *label) {
     (void)handle; (void)label;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_textbox() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`); returned \"\"\n");
+#endif
     return cob_strdup("");
 }
 static void cob_window_close(long handle) {
     (void)handle;
+#ifdef COB_WASM
+    cob_web_warn_once();
+#else
     fprintf(stderr, "[cob_interp] warning: window_close() is a stub in this build "
                      "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
+#endif
 }
 static void cob_window_shutdown(void) {}
 #endif /* COB_WITH_COBWINDOW */
+
+/* ---------------------------------------------------------------------
+ * C API / FFI (CEP-2) -- RUN-TIME SIDE
+ *
+ * `extern f(x) from "lib"` resolves EAGERLY, at the point the statement
+ * runs (not on first call): a missing library or a misspelled symbol
+ * should fail at the line that named it, not at some later, possibly
+ * never-executed call site. On failure a warning goes to stderr and `f`
+ * is bound to a stub that evaluates to 0 -- same "warn and return a
+ * harmless default, never crash the interpreter" convention sql_open()
+ * and the _cobwindow keywords use in a build that lacks that feature.
+ *
+ * Every native function has the one signature in include/cob.h
+ * (CobFFIFunc), so a call is always: evaluate args -> CobValue[] ->
+ * one call through one function pointer -> convert the result back.
+ *
+ * In the COB_WASM sandbox there is no dlopen(): the name is registered
+ * as a permanent stub and the sandbox notice is printed once per name.
+ * ------------------------------------------------------------------- */
+typedef struct { char *name; CobFFIFunc fn; void *lib; } ExternBinding;
+static ExternBinding *g_externs = NULL;
+static size_t g_extern_count = 0, g_extern_cap = 0;
+
+static ExternBinding *cob_extern_find(const char *name) {
+    size_t i;
+    for (i = 0; i < g_extern_count; i++)
+        if (strcmp(g_externs[i].name, name) == 0) return &g_externs[i];
+    return NULL;
+}
+
+#if !defined(COB_WASM)
+static void *cob_lib_open(const char *path) {
+    void *h = NULL;
+    char local[1100];
+#if defined(_WIN32)
+    int has_sep = (strchr(path, '/') != NULL || strchr(path, '\\') != NULL);
+    if (!has_sep && snprintf(local, sizeof(local), ".\\%s", path) < (int)sizeof(local))
+        h = (void *)LoadLibraryA(local);
+    if (!h) h = (void *)LoadLibraryA(path);
+#else
+    /* dlopen() with a slash-free name searches the system library path,
+     * not the current directory -- so `from "math_ext.so"` would never
+     * find a file sitting next to the script. Try ./name first, then the
+     * name as given (which is what makes `from "libm.so.6"` still work). */
+    if (strchr(path, '/') == NULL && snprintf(local, sizeof(local), "./%s", path) < (int)sizeof(local))
+        h = dlopen(local, RTLD_NOW | RTLD_LOCAL);
+    if (!h) h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
+    return h;
+}
+static CobFFIFunc cob_lib_sym(void *lib, const char *name) {
+    CobFFIFunc fn = NULL;
+    void *sym;
+#if defined(_WIN32)
+    sym = (void *)GetProcAddress(lib, name);
+#else
+    sym = dlsym(lib, name);
+#endif
+    /* memcpy, not a cast: object-pointer <-> function-pointer conversion
+     * isn't strictly ISO C, and this keeps -Wpedantic quiet too. */
+    memcpy(&fn, &sym, sizeof(fn) < sizeof(sym) ? sizeof(fn) : sizeof(sym));
+    return fn;
+}
+static void cob_lib_close(void *lib) {
+    if (!lib) return;
+#if defined(_WIN32)
+    FreeLibrary(lib);
+#else
+    dlclose(lib);
+#endif
+}
+#endif /* !COB_WASM */
+
+static void cob_extern_bind(const char *name, const char *lib_path) {
+    ExternBinding *b = cob_extern_find(name);
+#ifdef COB_WASM
+    (void)lib_path;
+    if (!b) {
+        if (g_extern_count == g_extern_cap) {
+            size_t new_cap = g_extern_cap ? g_extern_cap * 2 : 8;
+            ExternBinding *grown = (ExternBinding *)realloc(g_externs, new_cap * sizeof(ExternBinding));
+            if (!grown) return;
+            g_externs = grown; g_extern_cap = new_cap;
+        }
+        b = &g_externs[g_extern_count];
+        memset(b, 0, sizeof(*b));
+        b->name = cob_strdup(name);
+        if (!b->name) return;
+        g_extern_count++;
+        printf(COB_WEB_WARNING_EXTERN_LINE1_FMT, name);
+        fputs(COB_WEB_WARNING_EXTERN_LINE2 "\n", stdout);
+        fflush(stdout);
+    }
+#else
+    void *lib; CobFFIFunc fn = NULL;
+    if (!b) {
+        if (g_extern_count == g_extern_cap) {
+            size_t new_cap = g_extern_cap ? g_extern_cap * 2 : 8;
+            ExternBinding *grown = (ExternBinding *)realloc(g_externs, new_cap * sizeof(ExternBinding));
+            if (!grown) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return; }
+            g_externs = grown; g_extern_cap = new_cap;
+        }
+        b = &g_externs[g_extern_count];
+        memset(b, 0, sizeof(*b));
+        b->name = cob_strdup(name);
+        if (!b->name) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return; }
+        g_extern_count++;
+    } else {
+        /* the same `extern` line ran again (e.g. inside a while loop):
+         * drop the previous binding rather than leak its library handle */
+        cob_lib_close(b->lib);
+        b->lib = NULL; b->fn = NULL;
+    }
+    lib = cob_lib_open(lib_path);
+    if (!lib) {
+#if defined(_WIN32)
+        fprintf(stderr, "[cob_interp] warning: extern %s -- could not load library '%s'; calls to it will return 0\n",
+                name, lib_path);
+#else
+        const char *why = dlerror();
+        fprintf(stderr, "[cob_interp] warning: extern %s -- could not load library '%s' (%s); calls to it will return 0\n",
+                name, lib_path, why ? why : "unknown error");
+#endif
+        return;
+    }
+    fn = cob_lib_sym(lib, name);
+    if (!fn) {
+        fprintf(stderr, "[cob_interp] warning: extern %s -- symbol '%s' not found in '%s'; calls to it will return 0\n",
+                name, name, lib_path);
+        cob_lib_close(lib);
+        return;
+    }
+    b->lib = lib; b->fn = fn;
+#endif
+}
+
+static void cob_extern_shutdown(void) {
+    size_t i;
+    for (i = 0; i < g_extern_count; i++) {
+#if !defined(COB_WASM)
+        cob_lib_close(g_externs[i].lib);
+#endif
+        free(g_externs[i].name);
+    }
+    free(g_externs);
+    g_externs = NULL; g_extern_count = g_extern_cap = 0;
+    cob_extern_decl_free();
+}
 
 /* Called once at process exit (both cache-hit and normal-execution
  * paths in main()) so valgrind sees clean teardown of any open SQLite
@@ -1300,6 +1665,7 @@ static void cob_ext_shutdown(void) {
     cob_sql_shutdown();
     cob_tcl_shutdown();
     cob_window_shutdown();
+    cob_extern_shutdown();
 }
 
 static Value eval_expr(const Expr *e, EvalCtx *ctx) {
@@ -1540,6 +1906,41 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
             value_free(&hV); value_free(&labelV);
             return value_str_take(result);
         }
+        case EXPR_EXTERN_CALL: {
+            int n = e->argc, i;
+            Value *vals = (Value *)calloc((size_t)(n > 0 ? n : 1), sizeof(Value));
+            CobValue *argv = (CobValue *)calloc((size_t)(n > 0 ? n : 1), sizeof(CobValue));
+            ExternBinding *b = cob_extern_find(e->var);
+            Value result;
+            if (!vals || !argv) {
+                fprintf(stderr, "[cob_interp] out of memory calling extern '%s'\n", e->var);
+                free(vals); free(argv);
+                return value_int(0);
+            }
+            for (i = 0; i < n; i++) {
+                vals[i] = eval_expr(e->args[i], ctx);
+                if (vals[i].kind == VAL_STR) { argv[i].kind = COB_STR; argv[i].as.s = vals[i].s; }
+                else                         { argv[i].kind = COB_INT; argv[i].as.i = vals[i].i; }
+            }
+            if (!b) {
+                fprintf(stderr, "[cob_interp] warning: extern '%s' called before its `extern` statement ran; treated as 0\n", e->var);
+                result = value_int(0);
+            } else if (!b->fn) {
+                /* failed or sandboxed binding: already warned once, stay quiet per call */
+                result = value_int(0);
+            } else {
+                CobValue r = b->fn(argv, n);
+                if (r.kind == COB_STR) {
+                    char *copy = cob_strdup(r.as.s ? r.as.s : "");
+                    result = copy ? value_str_take(copy) : value_int(0);
+                } else {
+                    result = value_int(r.as.i);
+                }
+            }
+            for (i = 0; i < n; i++) value_free(&vals[i]);
+            free(vals); free(argv);
+            return result;
+        }
     }
     return value_int(0);
 }
@@ -1627,6 +2028,9 @@ static void execute(const Program *prog, EvalCtx *ctx) {
                 }
                 break;
             }
+            case STMT_EXTERN:
+                cob_extern_bind(s->ext_name, s->ext_lib);
+                break;
             case STMT_WHILE: {
                 unsigned long iterations = 0;
                 while (eval_cond(s->while_cond, ctx)) {
@@ -1737,6 +2141,84 @@ static int parse_trash_statement(const char *after_kw, int line_no, char **out_n
     }
     *out_name = name;
     return 0;
+}
+
+/* extern <name>(<param>, ...) from "<library>"          (CEP-2)
+ *
+ * Parameter names are accepted for readability but carry no type
+ * information and are not stored: every argument is just whichever
+ * value (int or string) it evaluates to, and arity is deliberately not
+ * checked against the native function (CEP-2 3.5). Registers <name> so
+ * later calls parse as extern calls. */
+static int parse_extern_statement(const char *after_kw, int line_no, char **out_name, char **out_lib) {
+    const char *p = skip_blank(after_kw);
+    char *name = NULL, *lib = NULL, *param = NULL;
+    size_t lib_len = 0, kw_len;
+
+    p = parse_identifier(p, &name);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected a function name after 'extern'\n", line_no);
+        return -1;
+    }
+    if (cob_is_reserved_word(name)) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: extern cannot reuse the reserved name '%s'\n", line_no, name);
+        goto fail;
+    }
+    p = skip_blank(p);
+    if (*p != '(') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected '(' after extern %s\n", line_no, name);
+        goto fail;
+    }
+    p = skip_blank(p + 1);
+    if (*p != ')') {
+        int nparams = 0;
+        for (;;) {
+            p = parse_identifier(p, &param);
+            if (!p) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: expected a parameter name in extern %s(...)\n", line_no, name);
+                goto fail;
+            }
+            free(param); param = NULL;
+            if (++nparams > COB_MAX_EXTERN_ARGS) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: extern %s has too many parameters (max %d)\n",
+                        line_no, name, COB_MAX_EXTERN_ARGS);
+                goto fail;
+            }
+            p = skip_blank(p);
+            if (*p == ',') { p = skip_blank(p + 1); continue; }
+            break;
+        }
+        if (*p != ')') {
+            fprintf(stderr, "[cob_interp] syntax error at line %d: expected ')' to close extern %s(\n", line_no, name);
+            goto fail;
+        }
+    }
+    p = skip_blank(p + 1);
+    kw_len = strlen(COB_KW_FROM);
+    if (strncmp(p, COB_KW_FROM, kw_len) != 0 || is_ident_char(p[kw_len])) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected 'from \"<library>\"' after extern %s(...)\n", line_no, name);
+        goto fail;
+    }
+    p = skip_blank(p + kw_len);
+    p = parse_string_literal(p, &lib, &lib_len);
+    if (!p || lib_len == 0) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected a non-empty library path string after 'from'\n", line_no);
+        goto fail;
+    }
+    p = skip_blank(p);
+    if (*p != '\0') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: unexpected text after extern statement: %s\n", line_no, p);
+        goto fail;
+    }
+    if (cob_extern_declare(name) != 0) {
+        fprintf(stderr, "[cob_interp] out of memory declaring extern '%s'\n", name);
+        goto fail;
+    }
+    *out_name = name; *out_lib = lib;
+    return 0;
+fail:
+    free(name); free(lib); free(param);
+    return -1;
 }
 
 /* ---------------------------------------------------------------------
@@ -1858,7 +2340,10 @@ static int cob_load_library(const char *name, int line_no, Program *out_prog) {
      * COB_WITH_COBWINDOW. Acknowledge and move on. */
     if (strcmp(name, "cobwindow") == 0) {
         program_init(out_prog);
-#ifndef COB_WITH_COBWINDOW
+#if defined(COB_WASM)
+        (void)line_no;
+        cob_web_warn_once();
+#elif !defined(COB_WITH_COBWINDOW)
         fprintf(stderr,
             "[cob_interp] warning at line %d: shuck cobwindow -- this binary wasn't built with "
             "window_open()/window_label()/window_wait()/window_close() support (see "
@@ -1965,6 +2450,17 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
             Stmt s; memset(&s, 0, sizeof(s));
             s.kind = STMT_TRASH; s.trash_name = name;
             if (program_push(out_prog, s) != 0) { free(name); program_free(out_prog); return -1; }
+            (*pos)++;
+            continue;
+        }
+
+        kw_len = strlen(COB_KW_EXTERN);
+        if (strncmp(trimmed, COB_KW_EXTERN, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            char *name, *lib;
+            if (parse_extern_statement(trimmed + kw_len, line_no, &name, &lib) != 0) { program_free(out_prog); return -1; }
+            Stmt s; memset(&s, 0, sizeof(s));
+            s.kind = STMT_EXTERN; s.ext_name = name; s.ext_lib = lib;
+            if (program_push(out_prog, s) != 0) { free(name); free(lib); program_free(out_prog); return -1; }
             (*pos)++;
             continue;
         }
@@ -2079,6 +2575,13 @@ static int write_expr(ByteBuf *b, const Expr *e) {
             return write_expr(b, e->right);
         case EXPR_HARVEST:
             return write_expr(b, e->left);
+        case EXPR_EXTERN_CALL: {
+            int i;
+            if (bytebuf_bytes(b, e->var, strlen(e->var)) != 0) return -1;
+            if (bytebuf_u32(b, (uint32_t)e->argc) != 0) return -1;
+            for (i = 0; i < e->argc; i++) if (write_expr(b, e->args[i]) != 0) return -1;
+            return 0;
+        }
         case EXPR_SQL_OPEN:
         case EXPR_SQL_CLOSE:
         case EXPR_TCL_EVAL:
@@ -2116,6 +2619,9 @@ static int write_stmt(ByteBuf *b, const Stmt *s) {
             if (bytebuf_bytes(b, s->set_name, strlen(s->set_name)) != 0) return -1;
             return write_expr(b, s->set_expr);
         case STMT_TRASH: return bytebuf_bytes(b, s->trash_name, strlen(s->trash_name));
+        case STMT_EXTERN:
+            if (bytebuf_bytes(b, s->ext_name, strlen(s->ext_name)) != 0) return -1;
+            return bytebuf_bytes(b, s->ext_lib, strlen(s->ext_lib));
         case STMT_WHILE:
             if (write_cond(b, s->while_cond) != 0) return -1;
             return write_program(b, &s->while_body);
@@ -2222,6 +2728,30 @@ static int read_expr(ByteReader *r, Expr **out) {
             if (!*out) { expr_free(inner); return -1; }
             return 0;
         }
+        case EXPR_EXTERN_CALL: {
+            char *name; uint32_t argc, i; Expr **args = NULL;
+            if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
+            if (reader_u32(r, &argc) != 0 || argc > COB_MAX_EXTERN_ARGS) { free(name); return -1; }
+            if (argc > 0) {
+                args = (Expr **)calloc(argc, sizeof(Expr *));
+                if (!args) { free(name); return -1; }
+            }
+            for (i = 0; i < argc; i++) {
+                if (read_expr(r, &args[i]) != 0) {
+                    uint32_t j;
+                    for (j = 0; j < i; j++) expr_free(args[j]);
+                    free(args); free(name);
+                    return -1;
+                }
+            }
+            *out = expr_new_extern_call(name, args, (int)argc);
+            if (!*out) {
+                for (i = 0; i < argc; i++) expr_free(args[i]);
+                free(args); free(name);
+                return -1;
+            }
+            return 0;
+        }
         case EXPR_SQL_OPEN:
         case EXPR_SQL_CLOSE:
         case EXPR_TCL_EVAL:
@@ -2284,6 +2814,10 @@ static int read_stmt(ByteReader *r, Stmt *out) {
             if (reader_bytes_alloc(r, &out->set_name, NULL) != 0) return -1;
             return read_expr(r, &out->set_expr);
         case STMT_TRASH: return reader_bytes_alloc(r, &out->trash_name, NULL);
+        case STMT_EXTERN:
+            if (reader_bytes_alloc(r, &out->ext_name, NULL) != 0) return -1;
+            if (reader_bytes_alloc(r, &out->ext_lib, NULL) != 0) { free(out->ext_name); out->ext_name = NULL; return -1; }
+            return 0;
         case STMT_WHILE:
             if (read_cond(r, &out->while_cond) != 0) return -1;
             return read_program(r, &out->while_body);
@@ -2325,13 +2859,16 @@ static int cob_load_strawberry_cache(const char *cache_path, Program *out_prog) 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
         "Usage: %s <file.cob> [--no-cache] [--no-gc]\n"
+        "       %s --license\n"
+        "       %s --version\n"
         "  --no-cache   ignore/skip the .strawberry fast-boot cache\n"
         "  --no-gc      unlock harvest(<bytes>) / trash(<variable>)\n"
+        "  --license    print the short license notice and exit\n"
         "\n"
         "If a .cob file's first line is exactly `_MakeCache = False`\n"
         "(whitespace/case-insensitive), the .strawberry cache is\n"
         "disabled for that file automatically.\n",
-        argv0);
+        argv0, argv0, argv0);
 }
 
 int main(int argc, char **argv) {
@@ -2346,6 +2883,7 @@ int main(int argc, char **argv) {
     int i;
 
     if (cob_check_hidden_version_flag(argc, argv)) return 0;
+    if (cob_check_hidden_license_flag(argc, argv)) return 0;
     if (argc < 2) { print_usage(argv[0]); return 1; }
 
     for (i = 1; i < argc; i++) {
@@ -2417,6 +2955,7 @@ int main(int argc, char **argv) {
     if (cob_parse_source(source.data, &prog, &disable_cache_directive) != 0) {
         cob_file_free(&source);
         vars_free(&vars); handles_free_all(&handles);
+        cob_ext_shutdown();
         return 1;
     }
     cob_file_free(&source);

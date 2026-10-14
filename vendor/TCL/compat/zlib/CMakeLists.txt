@@ -1,310 +1,318 @@
-cmake_minimum_required(VERSION 3.12...3.31)
+function(ZLIB_findTestEnv testName)
+    set(testEnv "PATH=")
 
-project(
-    zlib
-    LANGUAGES C
-    VERSION 1.3.2
-    HOMEPAGE_URL "https://zlib.net/"
-    DESCRIPTION "a general-purpose lossless data-compression library")
+    if(MSVC OR MINGW)
+        set(separator "\\\;")
+    else()
+        set(separator ":")
+    endif()
 
-# ============================================================================
-# CPack
-# ============================================================================
-set(CPACK_PACKAGE_VENDOR "zlib-Project")
-set(CPACK_PACKAGE_DESCRIPTION_FILE ${zlib_SOURCE_DIR}/README)
-set(CPACK_RESOURCE_FILE_LICENSE ${zlib_SOURCE_DIR}/LICENSE)
-set(CPACK_RESOURCE_FILE_README ${zlib_SOURCE_DIR}/README)
+    string(APPEND testEnv "$<TARGET_FILE_DIR:ZLIB::ZLIB>${separator}")
+    string(APPEND testEnv "$ENV{PATH}")
 
-# ============================================================================
-# configuration
-# ============================================================================
-
-option(ZLIB_BUILD_TESTING "Enable Zlib Examples as tests" ON)
-option(ZLIB_BUILD_SHARED "Enable building zlib shared library" ON)
-option(ZLIB_BUILD_STATIC "Enable building zlib static library" ON)
-option(ZLIB_INSTALL "Enable installation of zlib" ON)
-option(ZLIB_PREFIX "prefix for all types and library functions, see zconf.h.in"
-       OFF)
-mark_as_advanced(ZLIB_PREFIX)
-
-get_property(IS_MULTI GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-
-if(NOT DEFINED CMAKE_BUILD_TYPE AND NOT IS_MULTI)
-    message(STATUS "No CMAKE_BUILD_TYPE set -- using Release")
-    set(CMAKE_BUILD_TYPE Release)
-endif(NOT DEFINED CMAKE_BUILD_TYPE AND NOT IS_MULTI)
-
-include(CheckCSourceCompiles)
-include(CheckFunctionExists)
-include(CheckIncludeFile)
-include(CMakePackageConfigHelpers)
-include(CheckTypeSize)
-include(CPack)
-include(GNUInstallDirs)
-
-set(CPACK_INCLUDED TRUE)
-
-if(NOT ZLIB_CONF_WRITTEN)
-    set(Z_PREFIX ${ZLIB_PREFIX})
-    set(CONF_OUT_FILE ${zlib_BINARY_DIR}/zconf.h.cmakein)
-    file(READ ${zlib_SOURCE_DIR}/zconf.h ZCONF_CONTENT LIMIT 245)
-    file(WRITE ${CONF_OUT_FILE} ${ZCONF_CONTENT})
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine Z_PREFIX 1\n")
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_STDARG_H 1\n")
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_UNISTD_H 1\n")
-    file(READ ${zlib_SOURCE_DIR}/zconf.h ZCONF_CONTENT OFFSET 244)
-    set(FIRST_ITEM TRUE)
-
-    foreach(item IN LISTS ZCONF_CONTENT)
-        if(FIRST_ITEM)
-            string(APPEND OUT_CONTENT ${item})
-            set(FIRST_ITEM FALSE)
-        else(FIRST_ITEM)
-            string(APPEND OUT_CONTENT "\;" ${item})
-        endif(FIRST_ITEM)
-    endforeach(item IN LISTS ${ZCONF_CONTENT})
-
-    file(APPEND ${CONF_OUT_FILE} ${OUT_CONTENT})
-    set(ZLIB_CONF_WRITTEN
-        TRUE
-        CACHE BOOL "zconf.h.cmakein was created")
-    mark_as_advanced(ZLIB_CONF_WRITTEN)
-endif(NOT ZLIB_CONF_WRITTEN)
-
-#
-# Check to see if we have large file support
-#
-set(CMAKE_REQUIRED_DEFINITIONS -D_LARGEFILE64_SOURCE=1)
-check_type_size(off64_t OFF64_T)
-unset(CMAKE_REQUIRED_DEFINITIONS) # clear variable
-
-#
-# Check for fseeko
-#
-check_function_exists(fseeko HAVE_FSEEKO)
-
-#
-# Check for stdarg.h
-#
-check_include_file(stdarg.h HAVE_STDARG_H)
-
-#
-# Check for unistd.h
-#
-check_include_file(unistd.h HAVE_UNISTD_H)
-
-#
-# Check visibility attribute is supported
-#
-if(MSVC)
-    set(CMAKE_REQUIRED_FLAGS "-WX")
-else(MSVC)
-    set(CMAKE_REQUIRED_FLAGS "-Werror")
-endif(MSVC)
-
-check_c_source_compiles(
-    "
-        #include <stdlib.h>
-        static void f(void) __attribute__ ((visibility(\"hidden\")));
-        int main(void) {return 0;}
-    "
-    HAVE___ATTR__VIS_HIDDEN)
-
-unset(CMAKE_COMPILE_FLAGS)
-set(ZLIB_PC ${zlib_BINARY_DIR}/zlib.pc)
-configure_file(${zlib_SOURCE_DIR}/zlib.pc.cmakein ${ZLIB_PC} @ONLY)
-configure_file(${zlib_BINARY_DIR}/zconf.h.cmakein ${zlib_BINARY_DIR}/zconf.h)
-
-# ============================================================================
-# zlib
-# ============================================================================
-
-set(ZLIB_PUBLIC_HDRS ${zlib_BINARY_DIR}/zconf.h zlib.h)
-
-set(ZLIB_PRIVATE_HDRS
-    crc32.h
-    deflate.h
-    gzguts.h
-    inffast.h
-    inffixed.h
-    inflate.h
-    inftrees.h
-    trees.h
-    zutil.h)
-
-set(ZLIB_SRCS
-    adler32.c
-    compress.c
-    crc32.c
-    deflate.c
-    gzclose.c
-    gzlib.c
-    gzread.c
-    gzwrite.c
-    inflate.c
-    infback.c
-    inftrees.c
-    inffast.c
-    trees.c
-    uncompr.c
-    zutil.c)
-
-if(WIN32)
-    set(zlib_static_suffix "s")
-    set(CMAKE_DEBUG_POSTFIX "d")
-endif(WIN32)
+    set_tests_properties(${testName} PROPERTIES ENVIRONMENT "${testEnv}")
+endfunction()
 
 if(ZLIB_BUILD_SHARED)
-    add_library(
-        zlib SHARED ${ZLIB_SRCS} ${ZLIB_PUBLIC_HDRS} ${ZLIB_PRIVATE_HDRS}
-                    $<$<OR:$<BOOL:${WIN32}>,$<BOOL:${CYGWIN}>>:win32/zlib1.rc>)
-    add_library(ZLIB::ZLIB ALIAS zlib)
-    target_include_directories(
-        zlib
-        PUBLIC $<BUILD_INTERFACE:${zlib_BINARY_DIR}>
-               $<BUILD_INTERFACE:${zlib_SOURCE_DIR}>
-               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    add_executable(zlib_example example.c)
+    target_link_libraries(zlib_example ZLIB::ZLIB)
+    target_compile_definitions(zlib_example PRIVATE ZLIB_BUILD)
+    add_test(NAME zlib_example COMMAND zlib_example)
+
+    add_executable(minigzip minigzip.c)
     target_compile_definitions(
-        zlib
-        PRIVATE ZLIB_BUILD
-                $<$<BOOL:NOT:${HAVE_FSEEKO}>:NO_FSEEKO>
-                $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>
-                $<$<BOOL:${MSVC}>:_CRT_SECURE_NO_DEPRECATE>
-                $<$<BOOL:${MSVC}>:_CRT_NONSTDC_NO_DEPRECATE>
-        PUBLIC $<$<BOOL:${HAVE_OFF64_T}>:_LARGEFILE64_SOURCE=1>)
-    set(INSTALL_VERSION ${zlib_VERSION})
+        minigzip PRIVATE $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>)
+    target_link_libraries(minigzip ZLIB::ZLIB)
 
-    if(NOT CYGWIN)
-        set_target_properties(zlib PROPERTIES SOVERSION ${zlib_VERSION_MAJOR}
-                                              VERSION ${INSTALL_VERSION})
-    endif(NOT CYGWIN)
-
-    set_target_properties(
-        zlib
-        PROPERTIES DEFINE_SYMBOL ZLIB_DLL
-                   EXPORT_NAME ZLIB
-                   OUTPUT_NAME z)
-    if(UNIX
-        AND NOT APPLE
-        AND NOT (CMAKE_SYSTEM_NAME STREQUAL AIX)
-        AND NOT (CMAKE_SYSTEM_NAME STREQUAL SunOS))
-        # On unix-like platforms the library is almost always called libz
-        set_target_properties(
-            zlib
-            PROPERTIES LINK_FLAGS
-                       "-Wl,--version-script,\"${zlib_SOURCE_DIR}/zlib.map\"")
+    if(MSVC
+       OR MSYS
+       OR MINGW
+       OR CYGWIN)
+        zlib_findtestenv(zlib_example)
     endif(
-        UNIX
-        AND NOT APPLE
-        AND NOT (CMAKE_SYSTEM_NAME STREQUAL AIX)
-        AND NOT (CMAKE_SYSTEM_NAME STREQUAL SunOS))
+        MSVC
+        OR MSYS
+        OR MINGW
+        OR CYGWIN)
+
+    if(HAVE_OFF64_T)
+        add_executable(zlib_example64 example.c)
+        target_compile_definitions(
+            zlib_example64
+            PRIVATE ZLIB_BUILD
+                    $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>)
+        target_link_libraries(zlib_example64 ZLIB::ZLIB)
+        add_test(NAME zlib_example64 COMMAND zlib_example64)
+
+        if(MSVC
+           OR MSYS
+           OR MINGW
+           OR CYGWIN)
+            zlib_findtestenv(zlib_example64)
+        endif(
+            MSVC
+            OR MSYS
+            OR MINGW
+            OR CYGWIN)
+    endif(HAVE_OFF64_T)
 endif(ZLIB_BUILD_SHARED)
 
 if(ZLIB_BUILD_STATIC)
-    add_library(zlibstatic STATIC ${ZLIB_SRCS} ${ZLIB_PUBLIC_HDRS}
-                                  ${ZLIB_PRIVATE_HDRS})
-    add_library(ZLIB::ZLIBSTATIC ALIAS zlibstatic)
-    target_include_directories(
-        zlibstatic
-        PUBLIC $<BUILD_INTERFACE:${zlib_BINARY_DIR}>
-               $<BUILD_INTERFACE:${zlib_SOURCE_DIR}>
-               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    add_executable(zlib_static_example example.c)
+    target_link_libraries(zlib_static_example ZLIB::ZLIBSTATIC)
     target_compile_definitions(
-        zlibstatic
+        zlib_static_example
         PRIVATE ZLIB_BUILD
-                $<$<BOOL:NOT:${HAVE_FSEEKO}>:NO_FSEEKO>
-                $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>
-                $<$<BOOL:${MSVC}>:_CRT_SECURE_NO_DEPRECATE>
-                $<$<BOOL:${MSVC}>:_CRT_NONSTDC_NO_DEPRECATE>
-        PUBLIC $<$<BOOL:${HAVE_OFF64_T}>:_LARGEFILE64_SOURCE=1>)
-    set_target_properties(
-        zlibstatic PROPERTIES EXPORT_NAME ZLIBSTATIC OUTPUT_NAME
-                                                     z${zlib_static_suffix})
+                $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>)
+    add_test(NAME zlib_static_example COMMAND zlib_static_example)
+
+    add_executable(static_minigzip minigzip.c)
+    target_link_libraries(static_minigzip ZLIB::ZLIBSTATIC)
+
+    if(${CMAKE_C_COMPILER_ID} STREQUAL "GNU" OR ${CMAKE_C_COMPILER_ID} STREQUAL
+                                                "Clang")
+        set(CFLAGS_OLD ${CMAKE_C_FLAGS})
+        set(CMAKE_C_FLAGS
+            ""
+            CACHE STRING "" FORCE)
+
+        if(${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
+            find_program(GCOV_EXECUTABLE gcov)
+        endif(${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
+
+        if(${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
+            set(llvm_names llvm_cov)
+            list(APPEND llvm_names llvm-cov)
+
+            foreach(ver RANGE 11 99)
+                list(APPEND llvm_names llvm-cov-${ver})
+            endforeach(ver RANGE 11 99)
+
+            find_program(GCOV_EXECUTABLE NAMES ${llvm_names})
+            set(llvm_option "gcov")
+        endif(${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
+
+        add_executable(infcover infcover.c)
+        target_link_libraries(infcover ZLIB::ZLIBSTATIC)
+        target_compile_options(infcover PRIVATE -coverage)
+        target_link_options(infcover PRIVATE -coverage)
+        target_compile_definitions(
+            infcover PRIVATE $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>)
+        add_test(NAME zlib_coverage COMMAND infcover)
+        set(INFCOVER_DIR ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/infcover.dir)
+        add_test(
+            NAME zlib_coverage-summary
+            COMMAND
+                ${GCOV_EXECUTABLE} ${llvm_option}
+                ${CMAKE_CURRENT_SOURCE_DIR}/infcover.c -o
+                ${INFCOVER_DIR}/infcover.c.gcda)
+        set_tests_properties(zlib_coverage-summary PROPERTIES DEPENDS
+                                                              zlib-coverage)
+        set(CMAKE_C_FLAGS
+            ${CFLAGS_OLD}
+            CACHE STRING "" FORCE)
+    endif(${CMAKE_C_COMPILER_ID} STREQUAL "GNU" OR ${CMAKE_C_COMPILER_ID}
+                                                   STREQUAL "Clang")
+
+    if(HAVE_OFF64_T)
+        add_executable(zlib_static_example64 example.c)
+        target_compile_definitions(
+            zlib_static_example64
+            PRIVATE ZLIB_BUILD
+                    $<$<BOOL:${HAVE___ATTR__VIS_HIDDEN}>:HAVE_HIDDEN>)
+        target_link_libraries(zlib_static_example64 ZLIB::ZLIBSTATIC)
+        add_test(NAME zlib_static_example64 COMMAND zlib_static_example64)
+    endif(HAVE_OFF64_T)
 endif(ZLIB_BUILD_STATIC)
 
-if(ZLIB_INSTALL)
-    if(ZLIB_BUILD_SHARED)
-        install(
-            TARGETS zlib
-            COMPONENT Runtime
-            EXPORT zlibSharedExport
-            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-            ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-        install(
-            EXPORT zlibSharedExport
-            FILE ZLIB-shared.cmake
-            NAMESPACE ZLIB::
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
+add_test(
+    NAME zlib_install
+    COMMAND ${CMAKE_COMMAND} --install ${zlib_BINARY_DIR} --prefix
+            ${CMAKE_CURRENT_BINARY_DIR}/test_install --config $<CONFIG>
+    WORKING_DIRECTORY ${zlib_BINARY_DIR})
 
-        if(MSVC)
-            install(
-                FILES $<TARGET_PDB_FILE:zlib>
-                COMPONENT Runtime
-                DESTINATION ${CMAKE_INSTALL_BINDIR}
-                CONFIGURATIONS Debug OR RelWithDebInfo
-                OPTIONAL)
-        endif(MSVC)
-    endif(ZLIB_BUILD_SHARED)
+set_tests_properties(zlib_install PROPERTIES FIXTURES_SETUP zlib_install)
 
-    if(ZLIB_BUILD_STATIC)
-        install(
-            TARGETS zlibstatic
-            COMPONENT Development
-            EXPORT zlibStaticExport
-            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-            ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-        install(
-            EXPORT zlibStaticExport
-            FILE ZLIB-static.cmake
-            NAMESPACE ZLIB::
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-    endif(ZLIB_BUILD_STATIC)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/find_package_no_components_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/find_package_wrong_components_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test)
 
-    configure_package_config_file(
-        ${zlib_SOURCE_DIR}/zlibConfig.cmake.in
-        ${zlib_BINARY_DIR}/ZLIBConfig.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test/CMakeLists.txt @ONLY)
 
-    write_basic_package_version_file(
-        "${zlib_BINARY_DIR}/ZLIBConfigVersion.cmake"
-        VERSION "${zlib_VERSION}"
-        COMPATIBILITY AnyNewerVersion)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_no_components_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test/CMakeLists.txt @ONLY)
 
-    install(FILES ${zlib_BINARY_DIR}/ZLIBConfig.cmake
-                  ${zlib_BINARY_DIR}/ZLIBConfigVersion.cmake
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-    install(
-        FILES ${ZLIB_PUBLIC_HDRS}
-        COMPONENT Development
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-    install(
-        FILES zlib.3
-        COMPONENT Docs
-        DESTINATION "${CMAKE_INSTALL_MANDIR}/man3")
-    install(
-        FILES LICENSE
-              doc/algorithm.txt
-              doc/crc-doc.1.0.pdf
-              doc/rfc1950.txt
-              doc/rfc1951.txt
-              doc/rfc1952.txt
-              doc/txtvsbin.txt
-        COMPONENT Docs
-        DESTINATION "${CMAKE_INSTALL_DOCDIR}/zlib")
-    install(
-        FILES ${ZLIB_PC}
-        COMPONENT Development
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
-endif(ZLIB_INSTALL)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_wrong_components_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test/CMakeLists.txt @ONLY)
 
-# ============================================================================
-# Tests
-# ============================================================================
-if(ZLIB_BUILD_TESTING)
-    enable_testing()
-    add_subdirectory(test)
-endif(ZLIB_BUILD_TESTING)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_subdirectory_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test/CMakeLists.txt @ONLY)
 
-add_subdirectory(contrib)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_subdirectory_exclude_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test/CMakeLists.txt
+    @ONLY)
+
+# CMAKE_GENERATOR_PLATFORM doesn't work in the if
+set(GENERATOR ${CMAKE_GENERATOR_PLATFORM})
+
+if(GENERATOR)
+    set(PLATFORM "-A ${GENERATOR}")
+endif(GENERATOR)
+#
+# findpackage_test
+#
+add_test(
+    NAME zlib_find_package_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_install --fresh
+        -G "${CMAKE_GENERATOR}" -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+
+add_test(
+    NAME zlib_find_package_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test_build)
+
+add_test(
+    NAME zlib_find_package_test
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test_build)
+
+set_tests_properties(
+    zlib_find_package_configure PROPERTIES FIXTURES_REQUIRED zlib_install
+                                           FIXTURES_SETUP fp_config)
+
+set_tests_properties(
+    zlib_find_package_build PROPERTIES FIXTURES_REQUIRED fp_config
+                                       FIXTURES_SETUP fp_build)
+
+set_tests_properties(
+    zlib_find_package_test PROPERTIES FIXTURES_REQUIRED fp_build ENVIRONMENT
+                                      CTEST_OUTPUT_ON_FAILURE=1)
+
+#
+# findpackage_no_components_test
+#
+add_test(
+    NAME zlib_find_package_no_components_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_install --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test)
+
+set_tests_properties(
+    zlib_find_package_no_components_configure
+        PROPERTIES FIXTURES_REQUIRED zlib_install)
+
+if(NOT ZLIB_BUILD_SHARED OR NOT ZLIB_BUILD_STATIC)
+    set_tests_properties(
+        zlib_find_package_no_components_configure
+            PROPERTIES WILL_FAIL TRUE)
+endif(NOT ZLIB_BUILD_SHARED OR NOT ZLIB_BUILD_STATIC)
+
+#
+# findpackage_no_component_test
+#
+add_test(
+    NAME zlib_find_package_wrong_components_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_install --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test)
+
+set_tests_properties(
+    zlib_find_package_wrong_components_configure
+        PROPERTIES FIXTURES_REQUIRED zlib_install
+                   WILL_FAIL TRUE)
+
+#
+# add_subdirectory_test
+#
+add_test(
+    NAME zlib_add_subdirectory_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_install --fresh
+        -G "${CMAKE_GENERATOR}" -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+
+add_test(
+    NAME zlib_add_subdirectory_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test_build)
+
+add_test(
+    NAME zlib_add_subdirectory_test
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test_build)
+
+set_tests_properties(
+    zlib_add_subdirectory_configure PROPERTIES FIXTURES_REQUIRED zlib_install
+                                               FIXTURES_SETUP as_config)
+
+set_tests_properties(
+    zlib_add_subdirectory_build PROPERTIES FIXTURES_REQUIRED as_config
+                                           FIXTURES_SETUP as_build)
+
+set_tests_properties(
+    zlib_add_subdirectory_test PROPERTIES FIXTURES_REQUIRED as_build
+                                          ENVIRONMENT CTEST_OUTPUT_ON_FAILURE=1)
+
+#
+# add_subdirectory_exclude_test
+#
+add_test(
+    NAME zlib_add_subdirectory_exclude_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/test_install --fresh
+        -G "${CMAKE_GENERATOR}" -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+
+add_test(
+    NAME zlib_add_subdirectory_exclude_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY
+        ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test_build)
+
+add_test(
+    NAME zlib_add_subdirectory_exclude_test
+    COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG>
+    WORKING_DIRECTORY
+        ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test_build)
+
+set_tests_properties(
+    zlib_add_subdirectory_exclude_configure
+    PROPERTIES FIXTURES_REQUIRED zlib_install FIXTURES_SETUP asx_config)
+
+set_tests_properties(
+    zlib_add_subdirectory_exclude_build PROPERTIES FIXTURES_REQUIRED as_config
+                                                   FIXTURES_SETUP asx_build)
+
+set_tests_properties(
+    zlib_add_subdirectory_exclude_test
+    PROPERTIES FIXTURES_REQUIRED asx_build ENVIRONMENT
+               CTEST_OUTPUT_ON_FAILURE=1)

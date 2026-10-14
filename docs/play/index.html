@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Play — Cob</title>
+<meta name="description" content="Run Cob right in your browser. No install — an instant, zero-install playground for trying the language.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../css/style.css">
+<style>
+  .play-wrap{
+    display:grid; grid-template-columns:1fr 1fr; gap:20px;
+    height:calc(100vh - 230px); min-height:420px;
+  }
+  .play-pane{
+    display:flex; flex-direction:column; background:var(--white);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden; min-height:0;
+  }
+  .play-pane-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 16px; border-bottom:1px solid var(--line); background:rgba(140,90,43,0.04);
+    font-size:13px; font-weight:600; color:rgba(28,26,15,0.6);
+  }
+  .play-pane-head .dot{
+    width:8px; height:8px; border-radius:50%; margin-right:8px; display:inline-block;
+    background:var(--kernel);
+  }
+  #editor{
+    flex:1; width:100%; border:none; resize:none; outline:none;
+    font-family:'IBM Plex Mono', monospace; font-size:14px; line-height:1.6;
+    padding:16px; color:var(--ink); background:var(--white); tab-size:4;
+  }
+  #terminal{
+    flex:1; overflow-y:auto; padding:16px; margin:0;
+    font-family:'IBM Plex Mono', monospace; font-size:13.5px; line-height:1.6;
+    background:var(--ink); color:rgba(255,253,246,0.92); white-space:pre-wrap; word-break:break-word;
+  }
+  #terminal .err{color:#ff9b9b;}
+  #terminal .warn{color:var(--kernel);}
+  #terminal .sys{color:rgba(255,253,246,0.45); font-style:italic;}
+  .run-btn{
+    display:inline-flex; align-items:center; gap:8px; border:none; cursor:pointer;
+    background:var(--husk); color:var(--white); font-weight:600; font-size:13.5px;
+    padding:7px 16px; border-radius:7px; font-family:'IBM Plex Sans', sans-serif;
+  }
+  .run-btn:hover{background:var(--husk-deep);}
+  .run-btn:disabled{opacity:0.55; cursor:default;}
+  .run-btn .kbd{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; opacity:0.75;
+    border:1px solid rgba(255,253,246,0.35); border-radius:4px; padding:1px 5px;
+  }
+  .examples{display:flex; gap:8px; flex-wrap:wrap;}
+  .examples button{
+    font-family:'IBM Plex Sans', sans-serif; font-size:12.5px; font-weight:500;
+    background:var(--silk-hi); border:1px solid var(--line); color:var(--ink);
+    border-radius:20px; padding:5px 13px; cursor:pointer;
+  }
+  .examples button:hover{background:var(--silk);}
+  .play-note{
+    font-size:13.5px; color:rgba(28,26,15,0.6); margin-top:14px; line-height:1.6;
+  }
+  .play-note code{font-family:'IBM Plex Mono', monospace; font-size:12.5px;}
+  @media (max-width: 880px){
+    .play-wrap{grid-template-columns:1fr; height:auto;}
+    #editor{min-height:260px;}
+    #terminal{min-height:200px;}
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="nav">
+    <a class="brand" href="../index.html">
+      <span class="brand-mark">C</span>
+      <span class="brand-word">Cob</span>
+    </a>
+    <nav class="links">
+      <a href="../about.html">About</a>
+      <a href="../download.html">Downloads</a>
+      <a href="https://docs.cob.pixel-pulse.dev/">Docs</a>
+      <a href="../community.html">Community</a>
+      <a href="index.html" aria-current="page">Play</a>
+      <a class="nav-cta" href="../download.html">Get Cob</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="page-head">
+    <div class="wrap">
+      <div class="eyebrow-plain">Zero-install</div>
+      <h1>Play with Cob</h1>
+      <p class="lede">A real build of <code class="mono">cob_interp</code>, compiled to WebAssembly, running entirely in this tab. Nothing is installed and nothing is sent anywhere — edit the script on the left, hit Run, and read the output on the right.</p>
+      <div class="examples" id="examples" style="margin-top:18px;">
+        <button data-ex="hello">Hello, world</button>
+        <button data-ex="loop">A while loop</button>
+        <button data-ex="strings">Strings</button>
+        <button data-ex="sandbox">Desktop-only keywords</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="play-wrap">
+      <div class="play-pane">
+        <div class="play-pane-head">
+          <span><span class="dot"></span>script.cob</span>
+          <button class="run-btn" id="runBtn">Run <span class="kbd">⌘⏎</span></button>
+        </div>
+        <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+      </div>
+      <div class="play-pane">
+        <div class="play-pane-head"><span>Output</span></div>
+        <pre id="terminal"><span class="sys">Loading the WebAssembly build…</span></pre>
+      </div>
+    </div>
+
+    <p class="play-note">
+      This is the stripped-down <code>cob_interp</code> core — no SQLite, no Tcl/Tk, no
+      <code>_cobwindow</code>, and no native <code>extern</code> libraries (a browser tab can't
+      <code>dlopen()</code> anything). A script that uses any of those keywords still runs: they
+      quietly do nothing and print a one-time notice, so the rest of your script keeps going.
+      Want the full thing? <a href="../download.html">Download the native build</a> for real
+      windows, databases, and C extensions.
+    </p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">Cob</div>
+        <p class="foot-brand-sub">A corn-threshed language: an interpreter, a native compiler, and a package manager, built by Pixel Pulse Labs.</p>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="../download.html">Downloads</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.dev/">Documentation</a></li>
+          <li><a href="../about.html">About</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <ul>
+          <li><a href="../community.html">Get involved</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob">GitHub</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/cpi">Package registry</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/LICENSE.md">License</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/Cob/blob/main/.github/SECURITY.md">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 Pixel Pulse Labs.</span>
+      <span>cob.pixel-pulse.dev</span>
+    </div>
+  </div>
+</footer>
+
+<script src="cob_interp.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var editor = document.getElementById("editor");
+  var terminal = document.getElementById("terminal");
+  var runBtn = document.getElementById("runBtn");
+
+  var EXAMPLES = {
+    hello: 'pop("Hello, world!")\n',
+    loop:
+      'set i = 0\n' +
+      'while i < 5:\n' +
+      '    pop("counting: " + i)\n' +
+      '    set i = i + 1\n' +
+      'pop("done")\n',
+    strings:
+      'set name = "corn"\n' +
+      'pop("hello, " + name + "!")\n' +
+      'pop("1 + 1 == 2 is " + (1 + 1 == 2))\n',
+    sandbox:
+      '# These are desktop-only features -- in this browser sandbox they\n' +
+      '# quietly no-op (see the note below the playground) instead of\n' +
+      '# crashing, so the rest of the script still runs.\n' +
+      'set h = sql_open(":memory:")\n' +
+      'pop("sql handle=" + h)\n' +
+      'extern calculate_fast(x) from "math_ext.so"\n' +
+      'pop("extern result=" + calculate_fast(6))\n' +
+      'pop("still running after both")\n'
+  };
+
+  editor.value = EXAMPLES.hello;
+
+  document.getElementById("examples").addEventListener("click", function (e) {
+    var key = e.target && e.target.getAttribute("data-ex");
+    if (key && EXAMPLES[key]) editor.value = EXAMPLES[key];
+  });
+
+  function appendLine(text, cls) {
+    var span = document.createElement("span");
+    if (cls) span.className = cls;
+    // textContent, never innerHTML -- this is the script's own stdout/
+    // stderr, i.e. untrusted text, not markup.
+    span.textContent = text;
+    terminal.appendChild(span);
+    terminal.appendChild(document.createTextNode("\n"));
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  function clearTerminal() {
+    terminal.textContent = "";
+  }
+
+  function lineClassFor(line) {
+    if (line.indexOf("[cob_interp] error") === 0) return "err";
+    if (line.indexOf("[cob_interp] warning") === 0) return "warn";
+    if (line.indexOf("\u26A0") === 0) return "warn"; // the sandbox ⚠️ notice
+    if (line.indexOf("\uD83D\uDC49") === 0) return "warn"; // the sandbox 👉 notice
+    return null;
+  }
+
+  var moduleReady = typeof createCobModule === "function";
+  if (moduleReady) {
+    clearTerminal();
+    appendLine("Ready. Click Run, or press \u2318/Ctrl+Enter.", "sys");
+  } else {
+    clearTerminal();
+    appendLine(
+      "Couldn't load the WebAssembly build (cob_interp.js/.wasm). " +
+      "If you're running this site locally, build it first with `make play`.",
+      "err"
+    );
+  }
+
+  var running = false;
+
+  async function run() {
+    if (running || !moduleReady) return;
+    running = true;
+    runBtn.disabled = true;
+    clearTerminal();
+
+    var sawOutput = false;
+    function onOut(line) { sawOutput = true; appendLine(line, lineClassFor(line)); }
+    function onErr(line) { sawOutput = true; appendLine(line, lineClassFor(line) || "err"); }
+
+    try {
+      // One fresh module instance per run, matching the Makefile's
+      // MODULARIZE+EXIT_RUNTIME design: script state, the once-per-run
+      // sandbox-warning flag, and the extern table all start clean every
+      // time, with nothing left over from a previous run.
+      var Module = await createCobModule({ print: onOut, printErr: onErr });
+      Module.FS.writeFile("/program.cob", editor.value);
+      // --no-cache: a fresh in-memory FS every run makes a .strawberry
+      // cache pointless, and skipping it avoids ever reading a stale one.
+      Module.callMain(["/program.cob", "--no-cache"]);
+    } catch (e) {
+      // callMain throws on a nonzero exit() (an ExitStatus object) as
+      // well as on a real crash -- only the latter is unexpected here.
+      if (!(e && typeof e.status === "number")) {
+        appendLine("Internal error running the sandbox: " + e, "err");
+      } else if (!sawOutput) {
+        appendLine("(exited with status " + e.status + ", no output)", "sys");
+      }
+    } finally {
+      running = false;
+      runBtn.disabled = false;
+    }
+  }
+
+  runBtn.addEventListener("click", run);
+  editor.addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
+    // Plain-textarea editors eat Tab by default (focus moves away) --
+    // insert a real tab character instead, since Cob's while-blocks are
+    // indentation-delimited.
+    if (e.key === "Tab") {
+      e.preventDefault();
+      var start = editor.selectionStart, end = editor.selectionEnd;
+      editor.value = editor.value.slice(0, start) + "    " + editor.value.slice(end);
+      editor.selectionStart = editor.selectionEnd = start + 4;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

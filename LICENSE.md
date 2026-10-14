@@ -35,7 +35,7 @@ URL for them above, as well as copies of any plain-text lines
 beginning with `Required Notice:` that the licensor provided
 with the software.  For example:
 
-> Required Notice: Copyright Pixel-Pulse (pixel-pulse.duckdns.org)
+> Required Notice: Copyright Pixel-Pulse (pixel-pulse.dev)
 
 ## Changes and New Works License
 

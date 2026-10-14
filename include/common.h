@@ -18,7 +18,7 @@
  * License: PolyForm Noncommercial License 1.0.0
  *          <https://polyformproject.org/licenses/noncommercial/1.0.0>
  *          See LICENSE.md at the repository root for the full text.
- *          Required Notice: Copyright Pixel-Pulse (pixel-pulse.duckdns.org)
+ *          Required Notice: Copyright Pixel-Pulse (pixel-pulse.dev)
  * ===================================================================== */
 
 #ifndef COB_COMMON_H
@@ -40,7 +40,7 @@ extern "C" {
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
 #define COB_VERSION_PATCH       2
-#define COB_VERSION_STRING      "0.0.5"
+#define COB_VERSION_STRING      "0.0.6"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
@@ -79,12 +79,31 @@ static inline int cob_check_hidden_version_flag(int argc, char **argv) {
 #define COB_LICENSE_NOTICE \
     COB_PROJECT_NAME " is licensed under the " COB_LICENSE_NAME ".\n" \
     "Full terms: " COB_LICENSE_URL "\n" \
-    "Required Notice: Copyright Pixel-Pulse (pixel-pulse.duckdns.org)\n" \
+    "Required Notice: Copyright Pixel-Pulse (pixel-pulse.dev)\n" \
     "This is a noncommercial license: permitted uses are personal,\n" \
     "educational, charitable, and governmental. See LICENSE.md.\n"
 
 static inline void cob_print_license(void) {
     fputs(COB_LICENSE_NOTICE, stdout);
+}
+
+/* Scans argv for a literal "--license" token. Returns 1 (and prints the
+ * notice above to stdout) if found, otherwise returns 0 and prints
+ * nothing. Unlike cob_check_hidden_version_flag()'s --version, this one
+ * IS meant to be documented/advertised in each tool's --help/usage text
+ * (see the comment on COB_LICENSE_NOTICE above) -- every tool built on
+ * this header (cob_interp, popcorn_comp, farmer) should call this very
+ * early in main(), the same place --version is checked, and the caller
+ * should exit(0) immediately if it returns 1. */
+static inline int cob_check_hidden_license_flag(int argc, char **argv) {
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (argv[i] != NULL && strcmp(argv[i], "--license") == 0) {
+            cob_print_license();
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ---------------------------------------------------------------------
@@ -201,6 +220,40 @@ static inline void cob_print_license(void) {
 #define COB_KW_WINDOW_TEXTBOX "window_textbox" /* window_textbox(<h>, <label>) -> current string contents of the box    */
 #define COB_BLOCK_COLON       ':'        /* block opener terminator        */
 
+/* C API / FFI (CEP-2). `extern <name>(<params>) from "<library>"` binds
+ * a Cob name to an exported C symbol of the same name (see include/cob.h
+ * for the one fixed signature every native function has). cob_interp
+ * resolves it eagerly with dlopen()/dlsym() (POSIX) or LoadLibraryA()/
+ * GetProcAddress() (Windows); popcorn_comp emits an `extern`
+ * declaration and links the library at compile time instead. */
+#define COB_KW_EXTERN         "extern"   /* extern f(x) from "lib.so"      */
+#define COB_KW_FROM           "from"     /* ... from "<library>"           */
+
+/* Browser sandbox (WebAssembly build of cob_interp, -DCOB_WASM). The
+ * desktop-only modules (_cobwindow, SQLite) are compiled out and their
+ * keywords become silent no-op stubs; the first time a script touches
+ * one, this two-line notice is appended to stdout -- once per run, never
+ * fatal. Kept here so the text lives in one place. The leading glyphs
+ * are spelled as UTF-8 byte escapes so the source stays ASCII-clean:
+ *   \xE2\x9A\xA0\xEF\xB8\x8F  = U+26A0 U+FE0F (warning sign)
+ *   \xF0\x9F\x91\x89          = U+1F449 (pointing right) */
+#define COB_WEB_WARNING_LINE1 \
+    "\xE2\x9A\xA0\xEF\xB8\x8F [COB Warning]: Desktop graphics (_cobwindow) and storage " \
+    "(SQLite) are bypassed in the web sandbox."
+#define COB_WEB_WARNING_LINE2 \
+    "\xF0\x9F\x91\x89 Download the native compiler at cob.pixel-pulse.dev/download.html " \
+    "to launch full windows and databases on your desktop!"
+
+/* Same sandbox, different cause: `extern` (CEP-2) needs dlopen(), which a
+ * WebAssembly module doesn't have. LINE1 is a printf format taking the
+ * extern's name; the call is bypassed and evaluates to 0. */
+#define COB_WEB_WARNING_EXTERN_LINE1_FMT \
+    "\xE2\x9A\xA0\xEF\xB8\x8F [COB Warning]: Native extensions (extern) cannot be loaded in the " \
+    "web sandbox; calls to '%s' are bypassed and evaluate to 0.\n"
+#define COB_WEB_WARNING_EXTERN_LINE2 \
+    "\xF0\x9F\x91\x89 Download the native compiler at cob.pixel-pulse.dev/download.html " \
+    "to run scripts with native C extensions on your desktop!"
+
 /* CLI flag recognized by cob_interp.c / popcorn_comp.c that unlocks the
  * low-level manual-memory keywords (harvest/trash). Off by default --
  * Cob is garbage-collected unless the farmer/dev explicitly opts out.
@@ -223,7 +276,7 @@ static inline void cob_print_license(void) {
  * runtime via the COB_FARMER_BASE_URL environment variable (handy for
  * local testing against a dev server, or pointing at a private mirror
  * without rebuilding). */
-#define COB_FARMER_DEFAULT_BASE_URL "https://cpi.cob.pixel-pulse.work.gd"
+#define COB_FARMER_DEFAULT_BASE_URL "https://cpi.cob.pixel-pulse.dev"
 #define COB_FARMER_BASE_URL_ENV     "COB_FARMER_BASE_URL"
 
 /* Local workspace folder farmer installs packages into, and shuck
@@ -278,6 +331,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  *   COBSTRW4 -- SQLite/Tcl/Tk builtins (six new EXPR_* kinds)
  *   COBSTRW5 -- _cobwindow (window_open/label/wait/close)
  *   COBSTRW6 -- raygui widgets (window_button/slider/textbox)
+ *   COBSTRW7 -- C API / FFI (CEP-2): STMT_EXTERN + EXPR_EXTERN_CALL
  * popcorn_comp.c does not implement codegen for the SQLite/_cobwindow/
  * Tcl-Tk/widget keywords added in v4-v6 -- those bumps only ever
  * *appended* new ExprKind values after EXPR_HARVEST, never changed the
@@ -287,7 +341,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  * file. That's what makes sharing one writer-side magic constant safe
  * for a reader that only ever implements a subset of it.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW6"
+#define STRAWBERRY_MAGIC      "COBSTRW7"
 #define STRAWBERRY_MAGIC_LEN  8
 
 #ifdef __cplusplus

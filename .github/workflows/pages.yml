@@ -31,6 +31,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      # docs/play/'s two generated files (cob_interp.js, cob_interp.wasm)
+      # are .gitignore'd on purpose -- they're a build output of `make
+      # play`, not something to keep committed and let drift from
+      # src/cob_interp.c. Built fresh here, right before the artifact
+      # upload below, with the Makefile's own default WASM_ENV
+      # (web,worker) -- the one real browsers need; CI's own test_wasm
+      # job in build.yml overrides this to `node` purely so it can run
+      # the module under a Node-based smoke test, and that override must
+      # never leak into what actually gets deployed here.
+      - name: Install Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          # Keep this in sync with the pin in build.yml's test_wasm job
+          # -- see the comment there for why it's pinned, not "latest".
+          version: 4.0.17
+
+      - name: Build the WASM playground (`make play`)
+        run: make play
 
       - name: Upload docs/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3

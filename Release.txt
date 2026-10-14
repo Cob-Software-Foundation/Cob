@@ -1,408 +1,291 @@
-# Cob Language v0.0.5
-
-![Cob v0.0.5 -- Codename C!](docs/img/cob-v0.0.5-codename-c.png)
+# Cob Language v0.0.6
 
 ## Overview
 
-Three new capabilities for `cob_interp`, all opt-in and none of them
-affecting the interpreter's original zero-dependency build:
+The headline feature is CEP-2: a C API / FFI for native Cob
+extensions. A Cob script can now call a real, exported C function:
 
-* **SQLite** (`sql_open`/`sql_exec`/`sql_query`/`sql_close`) and
-  **`_cobwindow`**, a native-window GUI backed by raylib
-  (`window_open`/`window_label`/`window_wait`/`window_close`) with
-  real, interactive **raygui widgets** (`window_button`/
-  `window_slider`/`window_textbox`), are now baked into
-  `cob_interp_full` -- **the binary plain `make` builds by default.**
-  Both build with a plain `Makefile`, no `configure`/autoconf step for
-  either, so a clean `make` from a fresh checkout builds everything
-  itself in well under a minute.
-* **Tcl/Tk** (`tcl_eval`/`tk_eval`) are still available, but no longer
-  part of the default build -- `make cob_interp_db` builds a separate
-  binary with them, for anyone who specifically wants that and is
-  willing to accept a much heavier, autoconf-based Tcl/Tk source build
-  (see "Fixed" below for what that build fights through on some
-  Windows toolchains).
-* `make cob_interp` remains the original lightweight interpreter --
-  no SQLite, no `_cobwindow`, no Tcl/Tk, no vendor build at all.
+```
+extern calculate_fast(x) from "math_ext.so"
+pop("result=" + calculate_fast(42))
+```
 
-Also new this release: a stress-test suite (`tools/stress/`), a
-`Dockerfile` to run it in a reproducible container, and both a
-`ci.yml` GitHub Actions workflow that runs it in Docker and natively,
-and a `build.yml` workflow that now also round-trips the widget
-keywords through the `.strawberry` cache.
+and the native side is an ordinary C function against one fixed
+signature, with no Cob-specific build step of its own:
+
+```c
+#include "cob.h"
+COB_EXPORT CobValue calculate_fast(CobValue *argv, int argc) {
+    if (argc < 1 || argv[0].kind != COB_INT) return cob_int(0);
+    return cob_int(argv[0].as.i * argv[0].as.i + 1);
+}
+```
+
+Both tools support it, with two different, deliberately-matched
+strategies:
+
+* **`cob_interp`** resolves `extern` *eagerly*, right when the
+  statement runs -- not lazily on first call -- using `dlopen()`/
+  `dlsym()` on Linux/macOS and `LoadLibraryA()`/`GetProcAddress()` on
+  Windows. A missing library or symbol prints one warning and binds a
+  harmless stub that evaluates to `0`; it never aborts the script.
+* **`popcorn_comp`** links statically: it emits a real
+  `extern CobValue name(CobValue*, int);` forward declaration into the
+  generated C and passes the named library straight to the spawned
+  compiler's command line (`-lname`, or the literal path, matching
+  CEP-2's own examples) -- no `dlopen()` anywhere in the compiled
+  binary. Because that's a *static* link, the same extern name can't be
+  pointed at two different libraries anywhere in one program; doing so
+  is a clear compile-time error instead of silently picking one.
+
+Second: a WebAssembly build of the pure-language core now powers an
+in-browser playground at `/play` -- try Cob with zero install, no
+download, nothing sent anywhere. It's deliberately the stripped-down
+`cob_interp` core: no SQLite, no Tcl/Tk, no `_cobwindow`, and no
+`extern` (a browser tab can't `dlopen()` anything). All of those
+keywords still *parse* in that build; they just quietly no-op and
+print a one-time notice to the sandbox's own output instead of
+crashing, so the rest of the script keeps running:
+
+```
+WARNING [COB Warning]: Desktop graphics (_cobwindow) and storage (SQLite) are bypassed in the web sandbox.
+-> Download the native compiler at cob.pixel-pulse.dev/download.html to launch full windows and databases on your desktop!
+```
+
+Also in this release: `--license` actually works now (see "Fixed"
+below), and the project finished moving off its old `*.work.gd`/
+`*.duckdns.org` hostnames onto `pixel-pulse.dev` everywhere -- the
+license notices, the security contact, the package-registry default
+URL, and the website.
 
 ## Added
 
-### SQLite bindings
+### C API / FFI (CEP-2)
 
 ```
-sql_open(<path>)           -> handle (int, 0 on failure)
-sql_exec(<handle>, <sql>)  -> rc (int, 0 on success)
-sql_query(<handle>, <sql>) -> string (first column of first row, "" if none)
-sql_close(<handle>)        -> 0
+extern <name>(<param>, ...) from "<library>"
 ```
 
-```
-set h = sql_open("scores.db")
-set rc = sql_exec(h, "CREATE TABLE IF NOT EXISTS t (name TEXT)")
-set rc = sql_exec(h, "INSERT INTO t VALUES ('cob')")
-set name = sql_query(h, "SELECT name FROM t LIMIT 1")
-pop("got: " + name)
-set rc = sql_close(h)
-```
+* `include/cob.h` -- the one header a native extension needs: the
+  `CobValue` struct (an `int`/`string` tagged union, matching Cob's own
+  two value kinds exactly), the `CobFFIFunc` signature every native
+  function has regardless of how many arguments it takes, and
+  `cob_int()`/`cob_str()` constructors for building a return value.
+  `COB_EXPORT` makes the symbol visible to `dlsym()`/`GetProcAddress()`
+  (required on Windows; harmless elsewhere).
+* Parameter names in `extern name(x, y) from "lib"` are accepted for
+  readability but carry no type information and aren't stored --
+  arity is deliberately not checked against the native function,
+  matching how Cob already treats every other call.
+* An `extern` name can't reuse a keyword or a built-in call name
+  (`extern pop(x) from "lib"` is a syntax error) -- the built-in would
+  otherwise silently win at every call site, which is a worse failure
+  mode than refusing the declaration outright.
+* `.strawberry` cache format bumped to `COBSTRW7` (from `COBSTRW6`):
+  `STMT_EXTERN` and `EXPR_EXTERN_CALL` round-trip through the cache
+  the same way every other statement/expression kind does.
+* `popcorn_comp` link arguments: a library named with a path or
+  extension (`"math_ext.so"`, `"./a.so"`) is passed to the compiler as
+  a literal link input, matching CEP-2's own example; a bare name with
+  neither (`"m"`, for `libm`) becomes a conventional `-lm` flag. A
+  bare-filename native library (no directory component) also gets a
+  `-Wl,-rpath` pointed at the directory `popcorn_comp` ran from, so
+  "the `.so` sitting next to the script" resolves automatically at
+  run time without needing `$LD_LIBRARY_PATH` set by hand -- Windows
+  and macOS/Linux-without-a-path-like-library skip this; PE's DLL
+  search order already includes the executable's own directory.
+* `tools/ffi/` -- a worked example: `math_ext.c` (four native
+  functions covering int args/returns, string args/returns, variable
+  arity, and a zero-argument call) plus `ffi_test.cob` exercising all
+  of them, including a nested call (`calculate_fast(calculate_fast(2))`)
+  and a nonexistent symbol.
 
-Builds via a single-file amalgamation (`vendor/SQLite/sqlite3.c`) --
-no configure step, compiles the same way on every platform.
+### Browser sandbox / WebAssembly (`make wasm`, `make play`)
 
-### `_cobwindow` -- a native-window GUI backed by raylib, now with real widgets
+* `make wasm` compiles `src/file_io.c` + `src/cob_interp.c` with
+  Emscripten and `-DCOB_WASM` -- deliberately just those two files,
+  with none of `COB_WITH_SQLITE`/`COB_WITH_TCL`/`COB_WITH_TK`/
+  `COB_WITH_COBWINDOW` defined, so there's no `vendor/` build at all:
+  no SQLite, no Tcl/Tk (and therefore no autoconf), no raylib/raygui.
+  `make play` does the same and copies the two output files
+  (`cob_interp.js`, `cob_interp.wasm`) into `docs/play/`, next to the
+  playground page.
+* `sql_open`/`sql_exec`/`sql_query`/`sql_close`, every `_cobwindow`
+  keyword, and `shuck cobwindow` all still parse under `-DCOB_WASM`
+  and become silent no-ops, printing the sandbox notice to stdout
+  once per run (not once per call) the first time any of them is hit.
+* `extern` gets its own tailored sandbox notice (there's genuinely no
+  `dlopen()` in a `.wasm` module, so this isn't the same "feature
+  compiled out" situation as SQLite/`_cobwindow` -- it's a hard
+  platform limit) and evaluates to `0`, same as a failed native bind.
+* `docs/play/index.html` -- the actual playground: a two-pane editor/
+  terminal page matching the rest of the site's design, four example
+  scripts (including one that deliberately exercises the sandbox
+  no-op path), Ctrl/Cmd+Enter to run, and a fresh WebAssembly module
+  instance per run (so script state, the once-per-run warning flag,
+  and the extern table all start clean every time).
+* `.github/workflows/pages.yml` now builds the WASM module (a real,
+  version-pinned `emsdk`, not a distro package -- see "Fixed" below
+  for why that distinction mattered) immediately before uploading
+  `docs/` as the Pages artifact, since the two generated files are
+  `.gitignore`'d on purpose rather than committed and left to drift
+  from `src/cob_interp.c`.
+* A `Play` link in the site nav on every page.
 
-```
-window_open(<title>)             -> handle (int, 0 on failure)
-window_label(<handle>, <text>)   -> 0 (sets/replaces the in-window text)
-window_wait(<handle>, <seconds>) -> 0 (keeps the window responsive for ~<seconds>)
-window_close(<handle>)           -> 0
+### `--license`
 
-window_button(<h>, <label>)        -> 1 if clicked since the last read of
-                                       that label, else 0
-window_slider(<h>, <label>, <max>) -> current value, 0..<max>, as an int
-window_textbox(<h>, <label>)       -> current string contents of the box
-```
+Every tool (`cob_interp`, `popcorn_comp`, `farmer`) now actually
+supports `--license`, printing the short PolyForm Noncommercial notice
+and exiting 0 -- and it's documented in each tool's own usage/`--help`
+text this time, not left as a hidden flag with a comment claiming it
+works. See "Fixed" below.
 
-```
-shuck cobwindow
-set h = window_open("Cob Window Demo")
-set rc = window_label(h, "Hello from Cob!")
-set clicked = window_button(h, "OK")
-set volume = window_slider(h, "Volume", 100)
-set name = window_textbox(h, "Name")
-set rc = window_wait(h, 5)
-set rc = window_close(h)
-```
+### CI
 
-Backed by `vendor/raylib` (real 2D/3D graphics, proper anti-aliased
-text rendering) instead of raw Win32/Xlib calls -- one build recipe
-and one code path for every platform, rather than hand-maintained
-separate Win32 and Xlib implementations. raylib's own build is a
-plain `Makefile`: no configure, no autoconf, so none of the
-busybox-ash/vendor-tree fragility documented under "Fixed" below
-applies to it.
-
-`vendor/raygui` (a header-only immediate-mode widget library that
-draws on top of raylib) is now wired up to Cob syntax as
-`window_button`/`window_slider`/`window_textbox`. Each widget is
-identified by its own label text -- the first call with a new label
-creates it, auto-stacked on screen below the `window_label()` text;
-every later call with that same label (and kind -- a button and a
-slider can share a label without colliding) reads or updates that
-same widget. Declaring and reading happen in the same call, since Cob
-has no separate "declare once, poll every frame" mechanism -- a
-button's click flag resets on read, so a click is reported exactly
-once; a slider re-ranges (and clamps) if called again with a
-different `<max>`; a textbox is always in raygui's edit mode, since
-Cob has no click-to-focus concept to hook a toggle to.
-
-raylib only supports one native window per process (`InitWindow()`/
-`CloseWindow()` are process-global, not per-handle) -- `window_open()`
-called again before the first window is closed warns and returns `0`,
-same "0 means failure" convention every other handle-returning keyword
-here uses. The close button ([X]) is intentionally swallowed -- Cob
-has no callback mechanism to notify a running script that the user
-clicked it, so the window keeps running until `window_wait()`'s timer
-runs out or `window_close()` is called explicitly, the same
-"explicit close only" model `harvest()`/`trash()` already use for
-memory.
-
-**Verified for real, not just built:** ran a `.cob` script against
-`cob_interp_window`/`cob_interp_full` on a live (headless, via Xvfb)
-X11 display and confirmed with actual screenshots that a real window
-opened showing the label text, a button, a slider (with a readable
-caption -- see "Fixed" below), and an editable text box with a
-blinking cursor, all rendered with proper anti-aliased text.
-
-### `cob_interp_full` -- SQLite + `_cobwindow`, the new default
-
-`make` (no target, i.e. `make all`) now builds `cob_interp_full`
-instead of the lightweight `cob_interp`. It lists `$(SQLITE_LIB)` and
-`$(RAYLIB_LIB)` as real Make prerequisites, so a single `make` builds
-SQLite and raylib from `vendor/` itself, with no separate build steps,
-no configure/autoconf anywhere in the chain, and (confirmed) well
-under a minute on a clean checkout.
-
-`make cob_interp` still builds the original lightweight binary --
-zero vendor dependency, builds in under a second -- for anyone who
-wants that explicitly instead of the new default.
-
-### Kept as opt-in: `cob_interp_db` (SQLite + Tcl + Tk)
-
-```
-tcl_eval(<script>) -> string (Tcl's string result)
-tk_eval(<script>)  -> string (same interpreter as tcl_eval, plus Tk)
-```
-
-Still available via `make cob_interp_db` for anyone who specifically
-wants `tcl_eval()`/`tk_eval()`. This needs a real Tcl/Tk source build
-(`make sqlite tcl tk`, or `cob_interp_db` triggers it automatically
-the same way `cob_interp_full` triggers SQLite/raylib) -- see "Fixed"
-below for the autoconf/busybox-ash issues that build can hit on some
-Windows toolchains, now resolved for the two specific failures
-reported so far. `_cobwindow` is not part of this binary; use
-`cob_interp_full` for that.
-
-### Stress-test suite, `Dockerfile`, `ci.yml`, and `build.yml`
-
-`tools/stress/run_stress.sh` builds `cob_interp_full` and runs three
-`.cob` scripts designed to catch regressions that only show up under
-sustained load, not a single quick smoke test:
-
-* `stress_arithmetic.cob` -- 200,000-iteration loop (interpreter
-  overhead/stability)
-* `stress_sqlite.cob` -- 2,000 sequential `INSERT`s + a query (SQLite
-  under load)
-* `stress_window.cob` -- 20 open/label/wait/close cycles (resource
-  leaks in the raylib backend would show up as the loop slowing down
-  or crashing, not just "does it open one window")
-
-`Dockerfile` builds `cob_interp_full` in a clean Ubuntu 24.04
-container with exactly the dependencies it needs (X11 + OpenGL dev
-headers, Xvfb) and runs the stress suite as its entrypoint:
-
-```
-docker build -t cob-stress .
-docker run --rm cob-stress                    # one pass
-docker run --rm cob-stress --iterations 20    # repeat 20x
-```
-
-`.github/workflows/ci.yml` runs the same suite two ways -- once via
-the `Dockerfile` (`docker-stress` job), once directly on the runner
-(`native-stress` job) -- on push/PR to `main`, nightly on a schedule,
-and on manual dispatch with a configurable iteration count.
-
-`.github/workflows/build.yml`'s `test_extensions` job now also opens
-a real headless X11 window and round-trips `window_button`/
-`window_slider`/`window_textbox` through the `.strawberry` cache --
-write once, run again to force a cache hit, diff the two runs' output
--- specifically to catch a broken `write_expr()`/`read_expr()` pair
-for the three new widget expression kinds (see "Fixed" below for why
-this matters more than it might sound like).
-
-### Legal: raylib/raygui licenses
-
-`legal/license_raylib.terms` and `legal/license_raygui.terms` added
-(both zlib License). `LICENSE.md`'s "THIRD-PARTY LICENSE NOTICE"
-section was also out of date -- it only mentioned TinyCC, which isn't
-even in this repo anymore -- rewritten to list every vendored
-component actually present (`miniz`, SQLite, Tcl, Tk, raylib, raygui)
-and where its license text lives.
-
-### cpi.cob.pixel-pulse.work.gd: fixed the "Package registry" 404 (separate repo)
-
-`docs/index.html`'s footer nav links "Package registry" to
-`.../download.html`, which never existed on the `cpi` registry site
-(`Cob-Software-Foundation/cpi`, a separate repo) -- only `index.html`
-did, so the link 404'd. Added `docs/download.html` there: fetches
-`api/v1/packages/index.json` and each manifest client-side, renders
-them as cards matching the site's styling. This is a change to the
-`cpi` repo, not this one -- shipped as its own small zip alongside
-this release, not included in the main source zip.
+* `test_ffi` (`build.yml`): builds a tiny native extension with plain
+  `gcc`, then round-trips a script using `extern` three ways --
+  `cob_interp` cold, `cob_interp` against its own `.strawberry` cache,
+  and `popcorn_comp`'s statically-linked output -- diffing all three
+  against each other. Also confirms the missing-library path warns and
+  returns `0` instead of crashing.
+* `test_wasm` (`build.yml`): builds the WASM sandbox for Node
+  (`WASM_ENV=node`, not the default `web,worker` the real site ships),
+  runs a plain script and confirms its output, then runs a script
+  using `sql_open` and `extern` together and confirms both the
+  sandbox-warning text and that the script still finishes.
 
 ## Fixed
 
-### `popcorn_comp`: `.strawberry` magic constant was three format bumps stale
-
-**Repro:** any plain `.cob` script, no SQL/window keywords required --
-`./cob smoke.cob` then `./popcorn_comp smoke.strawberry -o smoke_native`
-failed with:
-
-```
-[popcorn_comp] error: 'smoke.strawberry' is not a valid .strawberry v3 file
-```
-
-**Root cause:** `popcorn_comp.c` keeps its own independent, byte-for-
-byte-compatible copy of the `.strawberry` reader (documented in its
-own header comment as deliberately duplicated from `cob_interp.c`),
-including its own `STRAWBERRY_MAGIC` constant. `cob_interp.c`'s magic
-has moved on three times since -- `COBSTRW3` (strings) -> `COBSTRW4`
-(SQLite/Tcl/Tk) -> `COBSTRW5` (`_cobwindow`) -> `COBSTRW6` (this
-release's widget keywords) -- but `popcorn_comp.c`'s copy was never
-updated past `COBSTRW3`. Once `cob_interp` started writing `COBSTRW6`
-caches, *every* cache it wrote looked invalid to `popcorn_comp`, even
-for scripts using none of the newer keywords -- this had already been
-silently broken for the `COBSTRW4`/`COBSTRW5` bumps too, just never
-caught until CI ran the widget cache round-trip test above and the
-existing end-to-end `popcorn_comp` smoke test both failed the same
-way.
-
-**Fix:** bumped `popcorn_comp.c`'s `STRAWBERRY_MAGIC` to `COBSTRW6`
-and de-hardcoded the version number out of its error message. Checked
-first, rather than just patching the string blindly, that this was
-actually safe: `popcorn_comp.c`'s `ExprKind` (0-4) and `StmtKind` (all
-4) enums are byte-identical to `cob_interp.c`'s -- the `COBSTRW4`/
-`COBSTRW5`/`COBSTRW6` bumps only ever *appended* new `ExprKind` values
-after `EXPR_HARVEST` for keywords `popcorn_comp` doesn't implement
-codegen for anyway, so its `read_expr()`'s existing
-`default: return -1` already handles those gracefully (reported as
-"corrupt or truncated", not a crash) with no further change needed.
-Added a comment on the constant spelling out that it needs bumping by
-hand every time `cob_interp.c`'s does, since that manual-sync step is
-the actual root cause here.
-
-### `_cobwindow`: slider caption was clipped off-window
-
-`window_slider()`'s on-screen caption ("Volume: 42") was passed as
-raygui's `textLeft` parameter, which draws to the *left* of the
-slider's bounding box -- at the `x=20` left margin used for every
-widget here, that put most of the caption off the edge of the window,
-invisible. Fixed by passing it as `textRight` instead (drawn to the
-right, where there's room). Caught by an actual screenshot during
-verification, not just a build check.
-
-### `popcorn_comp`: Windows `system()` quoting bug in bundled-Zig auto-resolve
-
-Repro:
-
-```powershell
-./popcorn_comp.exe smoke_test.strawberry -o temp.exe --no-gc
-```
-
-with a `zig\` folder present next to `popcorn_comp.exe` (auto-resolve
-path, no `--cc` given) failed with:
-
-```
-'C:\...\zig\zig.exe" cc -std=c99 ... ' is not recognized as an internal or external command
-```
-
-**Root cause:** `find_bundled_zig_cc()` (`src/popcorn_comp.c`) returns
-a pre-quoted compiler string (`"path" cc`). `cob_spawn_compile()` then
-appends further quoted arguments, producing a command line with
-multiple separate quoted tokens that starts with a quote. `system()`
-on Windows hands this to `cmd.exe /c <string>`, which strips only the
-first and last `"` of a command line that starts with a quote -- not
-matching pairs -- corrupting the line. The explicit
-`--cc "zig\zig.exe cc"` path was never affected.
-
-**Fix:** in `cob_spawn_compile()`, on Windows, if the assembled
-command starts with `"`, wrap the whole command in one more pair of
-quotes before calling `system()`. Only `src/popcorn_comp.c` changed;
-`cob_interp` and `farmer` are unaffected.
-
-### Makefile: vendor directory casing
-
-`make sqlite`/`tcl`/`tk` referenced `vendor/sqlite`/`tcl`/`tk`
-(lowercase); the real directories are `vendor/SQLite`/`TCL`/`TK`.
-Failed outright on any case-sensitive filesystem. Fixed.
-
-### Makefile: Windows Tcl/Tk build (for `cob_interp_db`)
-
-The Tcl/Tk build (used only by `cob_interp_db` now) needed real
-Windows-specific handling that the first pass got wrong: a separate
-`win/` build tree (not `unix/`), different static-lib names
-(`libtcl90.a`/`libtcl9tk90.a`, no dot before "90"), Tk's own
-`vendor/TK/xlib/` shim instead of real X11, `-DSTATIC_BUILD=1` plus
-stub libs for both Tcl and Tk, and Windows-specific system libraries
-instead of `-lX11`. Verified by cross-building the entire chain with a
-real `x86_64-w64-mingw32` toolchain through the actual Makefile
-targets.
-
-Two further real-world Windows build failures were reported and
-fixed the same way (reading the vendored `configure` script's exact
-logic to find the specific escape-hatch environment variable, since
-w64devkit's bundled `sh` -- BusyBox ash -- parses a Windows-style
-`PATH` incorrectly and breaks autoconf's own tool-detection loops):
-`configure: error: no acceptable C compiler found` (fixed via
-`CC="$(CC)"`) and `configure: error: no acceptable egrep could be
-found` (fixed via `EGREP_TRADITIONAL="grep -E"`). Both confirmed via
-BusyBox-based reproduction and/or direct script analysis; if a further
-"no acceptable X could be found" error turns up for some other tool,
-that's a different code path needing the same kind of targeted fix,
-not a sign these two didn't work.
-
-### Makefile: `cob_interp_db`/`cob_interp_full` now build their own dependencies
-
-`sqlite`/`tcl`/`tk`/`raylib` are real file targets (keyed on the
-actual library file each one produces) instead of always-rerun
-`.PHONY` targets, and `cob_interp_db`/`cob_interp_full` list them as
-real prerequisites. One command each -- `make cob_interp_db` or
-`make cob_interp_full` -- now builds everything needed the first time
-and skips anything already built on later runs.
-
-Two bugs were found and fixed while getting this right: SQLite's
-compiled `.a` initially had one shared path across platforms, so
-switching from a Linux build to a Windows cross-compile without
-`make vendor-clean` silently linked a stale Linux object into a
-Windows binary (fixed by giving it an OS-specific name); and the
-"builds its own dependencies" claim was initially true only by
-accident, since the prerequisite lists were missing entirely (fixed
-by actually adding them, then reverified from a genuinely clean tree).
+* **`--license` was dead code.** `cob_print_license()` existed in
+  `include/common.h` but nothing ever called it, and `--license`
+  wasn't recognized by any of the three tools' argument parsing --
+  `cob_interp --license` printed "unrecognized flag" and exited 1,
+  directly contradicting the comment sitting right above
+  `COB_LICENSE_NOTICE` that described it as a real, working flag.
+  Added a shared `cob_check_hidden_license_flag()` (mirroring the
+  existing `--version` helper) and wired it into all three tools'
+  `main()`, plus their usage text -- unlike `--version`, this one is
+  meant to be discoverable, not hidden.
+* **A real use-after-free in `popcorn_comp`'s generated FFI adapter.**
+  The first version of the generated C converted each argument to the
+  native `CobFFIValue` form by aliasing its string pointer, then
+  immediately freed the source `CobValue` -- before the native
+  function that still held the aliased pointer had actually been
+  called. `greet("corn")` compiled fine and ran, but printed garbage
+  instead of `"Hello, corn!"`. Fixed by moving the free to after the
+  native call returns, matching `cob_interp.c`'s own real evaluation
+  order (evaluate all arguments, call the function, free() them only
+  then) -- caught by actually running the compiled output and
+  comparing it against the interpreter's output for the same script,
+  not just by getting both to compile cleanly.
+* **`sb_appendf()`'s fixed internal buffer (512 bytes) was too small**
+  for the new FFI adapter's multi-line template and would have
+  silently truncated it via `vsnprintf()`, producing broken, half-written
+  C that would have failed far away, inside the spawned compiler, with
+  no indication why. Enlarged to 4096 bytes and added an explicit
+  check that now treats a would-be truncation as a hard error instead
+  of silently emitting partial output -- a correctness fix for every
+  other call site in the file, not just the new one.
+* **Old `*.work.gd`/`*.duckdns.org` hostnames**, replaced with
+  `pixel-pulse.dev` throughout: the security contact
+  (`.github/SECURITY.md`), every copyright notice's required-notice
+  URL (`LICENSE.md`, `legal/LICENSE.md`, `EMBED-README.md`,
+  `include/common.h`), the package-registry default base URL
+  (`COB_FARMER_DEFAULT_BASE_URL`), and five website pages' nav/footer
+  links and body copy. Left untouched on purpose: the one `*.work.gd`
+  mention in this file's own v0.0.5 entry (a dated historical record
+  of a past fix, not a live link) and the "moved from
+  pixel-pulse-labs to Cob-Software-Foundation" GitHub-org history
+  (a separate, still-true fact unrelated to the DNS migration).
 
 ## Verified this session
 
-* All four build targets compile clean: `cob_interp`,
-  `cob_interp_window`, `cob_interp_full`, and `cob_interp_db`'s full
-  dependency chain (`make sqlite tcl tk cob_interp_db`).
-* Ran `window_button`/`window_slider`/`window_textbox` against
-  `cob_interp_window` on a live headless X11 display (Xvfb) and
-  confirmed via actual screenshots -- both before and after the
-  slider-caption fix -- that the button, slider, and an always-
-  editable text box with a blinking cursor render correctly alongside
-  the existing `window_label()` text.
-* Confirmed the `.strawberry` cache correctly round-trips the three
-  new widget expression kinds: wrote a cache, deleted nothing, reran
-  against the same script, and got byte-identical output both times.
-* Reran the full existing `tools/stress/run_stress.sh` suite
-  (arithmetic/SQLite/window cycles) after all of the above changes --
-  still all passing, no regressions.
-* Reproduced the `popcorn_comp` magic-desync CI failure locally
-  end-to-end (`gcc -> cob`/`popcorn_comp` -> write cache -> recompile
-  natively -> diff outputs against the interpreter's own output),
-  confirmed the exact error message and root cause, applied the fix,
-  and reran the identical sequence to confirm it now passes -- using
-  `--cc gcc` in place of `zig cc` only because this environment has no
-  network access to ziglang.org; the real CI runner already has Zig
-  set up via `mlugg/setup-zig@v2` and should use the default path.
-* Confirmed, by inspection of both files' enum definitions, that
-  `popcorn_comp.c`'s `ExprKind`/`StmtKind` enums are byte-identical to
-  `cob_interp.c`'s for every kind `popcorn_comp` actually implements,
-  so the magic-constant fix alone was sufficient -- no encoding
-  divergence to also account for.
-* Validated `.github/workflows/build.yml`'s YAML syntax after adding
-  the new widget-cache smoke test, and ran its exact shell commands
-  locally against `cob_interp_window` before committing them.
-* `test.cob` (this repo's manual GUI test script) runs clean
-  end-to-end, 20 one-second ticks then a graceful `window_close()`;
-  also confirmed a since-fixed version of this script that used `if`
-  statements does *not* parse -- Cob's grammar has no `if`/`else` at
-  all, only `while`/`set`/`pop`/`shuck` and the builtins.
+* `tools/ffi/ffi_test.cob` (int args/returns, string args/returns,
+  variable arity, a zero-argument call, a nested call, and a call to a
+  symbol that doesn't exist) produces byte-identical output three
+  ways: `cob_interp` run cold, `cob_interp` against its own
+  `.strawberry` cache, and `popcorn_comp`'s statically-linked native
+  output.
+* `cob_interp`'s native build (including the new `extern`/dlopen code
+  path) compiles clean under `-Wall -Wextra -Wpedantic` and runs clean
+  under AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer,
+  including an `extern` statement that re-runs inside a `while` loop
+  (confirming the previous library handle is closed, not leaked, on
+  rebind).
+* `popcorn_comp`'s extern-conflict detection (`extern f(x) from "a.so"`
+  then later `extern f(x) from "b.so"` for the same program) rejects
+  with a clear compile-time error rather than silently picking one;
+  a missing library at actual link time fails the spawned compiler
+  with a clear error and nonzero exit, same as any other bad input.
+* The `-DCOB_WASM` build's C-level correctness was verified
+  independently of Emscripten: compiled with Zig's bundled, genuinely
+  version-matched `wasm32-wasi` clang (installed via `pip install
+  ziglang`, since this environment's network policy blocks
+  `storage.googleapis.com`, which both the real `emsdk` installer and
+  a working Debian `emscripten` package ultimately depend on) and run
+  under Node's experimental WASI support. Confirmed: ordinary scripts
+  produce output identical to the native build; `sql_open` and every
+  `_cobwindow` keyword no-op with the documented notice printed
+  exactly once; `extern` no-ops with its own notice and evaluates to
+  `0`; nothing crashes; the full `tools/ffi/ffi_test.cob` suite runs
+  to completion with every extern call correctly evaluating to `0`.
+* Root-caused why `emcc` itself, installed via a force-assembled
+  Debian `emscripten` package (apt's own version has unresolvable
+  dependency conflicts with this environment's installed `nodejs` and
+  had to be forced in with mismatched `clang-15`/`lld-15`/`binaryen`
+  packages), silently stripped the *entire* compiled program during
+  link -- reporting success, exit 0, and producing a non-functional
+  ~1.7 KB `.wasm` with no user code in it at all, even for a one-line
+  `main()`. Confirmed by bisection (a single-file, single-translation-
+  unit build using the exact same mismatched toolchain showed the
+  identical symptom) that this is a toolchain-mismatch problem, not a
+  `cob_interp.c`/`-DCOB_WASM` bug: Emscripten expects its own patched
+  LLVM fork, and pairing its frontend with a vanilla distro
+  `clang`/`lld` is exactly the combination upstream's own documentation
+  warns against. `docs/play/index.html`'s JS driver logic (module
+  readiness detection, loading each example, running a script,
+  `print`/`printErr` capture and line-classification for the sandbox
+  warning text, Ctrl/Cmd+Enter, Tab-key indentation) was validated
+  against the real, documented Emscripten `MODULARIZE`/`FS`/`callMain`
+  API contract using `jsdom` plus a hand-written mock module matching
+  that contract, with correct browser script-execution ordering
+  (the mock `createCobModule` global defined before the page's own
+  inline script runs, matching how a real, successfully-loaded
+  `cob_interp.js` would behave).
+* `.github/workflows/build.yml`'s `test_ffi` and `test_wasm` jobs,
+  and `pages.yml`'s new `make play` step: YAML-parsed successfully
+  with `pyyaml`, and every shell step's *exact* extracted script
+  (parsed back out of the real YAML, not retyped by hand) was run
+  locally end-to-end -- `test_ffi` for real, against a `gcc`-built
+  native extension; `test_wasm`'s embedded Node driver against the
+  same `jsdom`/mock-module approach used for the playground page
+  above, since this environment can't run a real Emscripten-built
+  module any more than it can build one. This caught a real bug
+  before it shipped: an embedded JS string meant to contain the
+  literal two characters `\n` had an actual newline injected into it
+  instead (a Python string-escaping mistake while generating the
+  YAML), which broke the YAML's indentation -- `pyyaml` failed to
+  parse the file with a column-accurate error, pointing straight at
+  the bad line.
 
 ## Not verified
 
-* Nothing in this release has been run on an actual Windows machine by
-  anyone other than the person who reported the two `configure`
-  failures above (both now fixed and cross-compile-verified) and who
-  has since separately confirmed the widget keywords work for them on
-  real Windows hardware. Beyond that one confirmation, the raylib/
-  raygui widget path has otherwise only been exercised headless via
-  Xvfb on Linux in this environment.
-* `_cobwindow` (raylib/raygui) has not been exercised on a real
-  desktop compositor beyond the one Windows confirmation above -- no
-  Wayland/XWayland session, no verification of multiple simultaneous
-  `window_textbox()`es' keyboard-focus behavior (raygui's edit mode
-  isn't focus-aware across widgets; likely fine for one box at a time,
-  unverified with more than one open together).
-* `tcl_eval()`/`tk_eval()` (in `cob_interp_db`) need `TCL_LIBRARY`
-  pointed at `vendor/TCL/library` for `Tcl_Init()` to succeed cleanly
-  -- `make` prints the line to set it, but it isn't set automatically.
-* If w64devkit's `sh` has the same broken-PATH problem for some other
-  tool lookup inside Tcl/Tk's `configure` beyond the two already
-  fixed, that would need the same kind of targeted fix and hasn't been
-  ruled out.
-* GitHub Actions Zig download/bundle on genuine Windows/macOS runners:
-  still outstanding from prior releases.
-* The `cpi` repo's `download.html` fix has been verified locally, not
-  against the live deployment -- needs to actually be pushed to
-  `Cob-Software-Foundation/cpi`.
-* `ci.yml`'s scheduled/Docker jobs, and `build.yml`'s full matrix
-  (Windows/macOS cross-builds, the Zig-bundling release step), haven't
-  executed inside a real GitHub Actions runner with this session's
-  changes yet -- the one real CI run available (the log that surfaced
-  the `popcorn_comp` bug) only got as far as the job that failed;
-  later jobs in that same workflow run haven't been confirmed since.
+* `make wasm`/`make play` have not been run successfully end-to-end
+  with a real `emsdk` in this environment, for the network-policy
+  reason described above -- `test_wasm` and `pages.yml`'s new step are
+  believed correct (pinned to a specific, non-bleeding-edge Emscripten
+  version; built against the well-documented, stable `MODULARIZE` API)
+  but their first real execution will be whatever CI run first
+  triggers them.
+* Everything Windows/macOS/cross-compile-related that previous
+  releases already flagged as not verified on real hardware remains
+  not verified here either -- this release touched none of that code.
+* The rpath `popcorn_comp` now adds for a path-like `extern` library
+  has only been exercised on Linux (ELF, via `gcc`'s `-Wl,-rpath`);
+  the equivalent on macOS (Mach-O) uses the same linker flag spelling
+  via `clang`, which should work identically, but hasn't actually
+  been run on real macOS hardware.
+* The new website copy (`docs/index.html`, `docs/download.html`,
+  `docs/play/index.html`) has been checked for HTML tag balance and
+  the playground's JS logic simulated as described above, but neither
+  page has been opened in an actual browser.

@@ -43,6 +43,208 @@ jobs:
         grep -qx "smoke test ok" out2.txt
 
   # ---------------------------------------------------------------------
+  # CEP-2 (C API / FFI): `extern` round-trips through the .strawberry
+  # cache (bumped to COBSTRW7, see common.h) the same way the raygui
+  # widget keywords were required to in v0.0.5 -- run once to write the
+  # cache, again to force a cache hit, diff the two runs' output, exactly
+  # mirroring the widget test in test_extensions below. Also exercises
+  # the *compiled* path: popcorn_comp reads that same cache, generates C
+  # with a real `extern CobFFIValue name(CobFFIValue*, int);` forward
+  # declaration, and links directly against a tiny native extension
+  # built in this job with plain gcc -- diffed against the interpreted
+  # output too, so a regression in either cob_interp's dlopen/dlsym path
+  # or popcorn_comp's static-link codegen fails this job.
+  # ---------------------------------------------------------------------
+  test_ffi:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true
+
+    - name: Install Zig (popcorn_comp's default compiler backend)
+      uses: mlugg/setup-zig@v2
+      with:
+        version: latest
+
+    - name: Build cob_interp and popcorn_comp
+      run: make cob_interp popcorn_comp
+
+    - name: Build a tiny native extension with plain gcc
+      run: |
+        cat > math_ext.c << 'EOF'
+        #include <stdio.h>
+        #include "cob.h"
+        COB_EXPORT CobValue calculate_fast(CobValue *argv, int argc) {
+            if (argc < 1 || argv[0].kind != COB_INT) return cob_int(0);
+            return cob_int(argv[0].as.i * argv[0].as.i + 1);
+        }
+        COB_EXPORT CobValue greet(CobValue *argv, int argc) {
+            static char buf[256];
+            const char *who = (argc >= 1 && argv[0].kind == COB_STR) ? argv[0].as.s : "stranger";
+            snprintf(buf, sizeof(buf), "Hello, %s!", who);
+            return cob_str(buf);
+        }
+        EOF
+        gcc -shared -fPIC -Iinclude -o math_ext.so math_ext.c
+
+    - name: Smoke test -- extern calls a real native library through cob_interp
+      run: |
+        set -euo pipefail
+        cat > ffi.cob << 'EOF'
+        extern calculate_fast(x) from "math_ext.so"
+        extern greet(name) from "math_ext.so"
+        pop("sq=" + calculate_fast(6))
+        pop(greet("CI"))
+        EOF
+        ./bin/cob_interp ffi.cob | tee ffi_run1.txt
+        test -f ffi.strawberry
+        grep -qx "sq=37" ffi_run1.txt
+        grep -qx "Hello, CI!" ffi_run1.txt
+
+    - name: Smoke test -- .strawberry cache round-trips extern/EXPR_EXTERN_CALL
+      run: |
+        set -euo pipefail
+        ./bin/cob_interp ffi.cob | tee ffi_run2.txt
+        diff ffi_run1.txt ffi_run2.txt
+        echo "cache round-trip OK: extern decodes identically from a cached AST"
+
+    - name: Smoke test -- popcorn_comp links the same extension statically
+      run: |
+        set -euo pipefail
+        ./bin/popcorn_comp ffi.strawberry -o ffi_native --cc gcc
+        ./ffi_native | tee ffi_native_out.txt
+        diff ffi_run1.txt ffi_native_out.txt
+        echo "popcorn_comp output matches cob_interp for a script using extern: OK"
+
+    - name: Smoke test -- plain cob_interp sandboxes extern with no library present
+      run: |
+        set -euo pipefail
+        cat > ffi_missing.cob << 'EOF'
+        _MakeCache = False
+        extern nope(x) from "does_not_exist.so"
+        pop("after=" + nope(1))
+        EOF
+        ./bin/cob_interp ffi_missing.cob 2> ffi_missing_err.txt | tee ffi_missing_out.txt
+        grep -qx "after=0" ffi_missing_out.txt
+        grep -q "could not load library" ffi_missing_err.txt
+
+  # ---------------------------------------------------------------------
+  # Browser sandbox build: cob_interp compiled to WebAssembly (`make
+  # wasm`/`make play`) with a REAL, version-matched emsdk toolchain, not
+  # a distro package -- see the long comment on the `wasm:` target in
+  # the Makefile for exactly why that distinction matters (a Debian-
+  # packaged `emscripten` paired with the distro's own vanilla clang/lld
+  # was found to silently strip the compiled program's entire call graph
+  # during link, succeeding with exit 0 and a near-empty, non-functional
+  # .wasm -- a real, matched emsdk does not have this problem).
+  #
+  # Exercises the sandbox the same way test_ffi does for the native
+  # build above: a plain script runs correctly, and a script that uses
+  # a desktop-only keyword (_cobwindow/SQLite/extern) gets the one-time
+  # browser-sandbox warning and keeps running instead of crashing --
+  # the "No-Op Stub" pattern this build exists to prove out.
+  # ---------------------------------------------------------------------
+  test_wasm:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true
+
+    - name: Install Emscripten
+      uses: emscripten-core/setup-emsdk@v16
+      with:
+        # Pinned, not "latest" -- see the matching comment in pages.yml
+        # (keep both in sync). A brand-new Emscripten release shouldn't
+        # be able to break this job without a deliberate version bump
+        # here; verify a newer pin still builds before raising it.
+        version: 4.0.17
+
+    # WASM_ENV=node, not the Makefile's own default (web,worker): this
+    # job needs to actually RUN the module to test it, and Node is the
+    # one non-browser environment Emscripten can target that a CI
+    # runner can execute directly. The real site (pages.yml) builds
+    # with the default web,worker instead -- this override must never
+    # leak into what gets deployed.
+    - name: Build the WASM sandbox for Node
+      run: make wasm WASM_ENV=node
+
+    - name: Write a small Node driver for the MODULARIZE'd module
+      run: |
+        cat > /tmp/cob_wasm_run.cjs << 'EOF'
+        // Minimal driver matching exactly what docs/play/index.html's
+        // browser JS does against the real Emscripten MODULARIZE API:
+        // one fresh module instance per run, write the script to the
+        // in-memory FS, call main, capture stdout/stderr via print/
+        // printErr. See docs/play/index.html for the browser version.
+        const createCobModule = require(process.argv[2]);
+        const fs = require('fs');
+
+        async function runScript(scriptPath, extraArgs) {
+          let out = '', err = '';
+          const Module = await createCobModule({
+            print: (line) => { out += line + "\n"; },
+            printErr: (line) => { err += line + "\n"; },
+          });
+          Module.FS.writeFile('/program.cob', fs.readFileSync(scriptPath, 'utf8'));
+          try {
+            Module.callMain(['/program.cob'].concat(extraArgs || []));
+          } catch (e) {
+            if (!(e && typeof e.status === 'number')) throw e; // real crash, not just exit()
+          }
+          return { out, err };
+        }
+
+        (async () => {
+          const scriptPath = process.argv[3];
+          const extraArgs = process.argv.slice(4);
+          const { out, err } = await runScript(scriptPath, extraArgs);
+          process.stdout.write(out);
+          process.stderr.write(err);
+        })();
+        EOF
+
+    - name: Smoke test -- a plain script runs correctly under the WASM sandbox
+      run: |
+        set -euo pipefail
+        cat > plain.cob << 'EOF'
+        set i = 0
+        while i < 3:
+            pop("counting: " + i)
+            set i = i + 1
+        pop("done")
+        EOF
+        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" plain.cob --no-cache | tee plain_out.txt
+        grep -qx "counting: 0" plain_out.txt
+        grep -qx "counting: 2" plain_out.txt
+        grep -qx "done" plain_out.txt
+
+    - name: Smoke test -- desktop-only keywords no-op with the sandbox warning, script keeps running
+      run: |
+        set -euo pipefail
+        cat > sandboxed.cob << 'EOF'
+        set h = sql_open(":memory:")
+        pop("after sql_open, h=" + h)
+        extern calculate_fast(x) from "math_ext.so"
+        pop("after extern call=" + calculate_fast(6))
+        pop("still running")
+        EOF
+        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" sandboxed.cob --no-cache \
+          > sandboxed_out.txt 2> /dev/null
+        cat sandboxed_out.txt
+        grep -qx "after sql_open, h=0" sandboxed_out.txt
+        grep -qx "after extern call=0" sandboxed_out.txt
+        grep -qx "still running" sandboxed_out.txt
+        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" sandboxed.cob --no-cache \
+          2>&1 1>/dev/null | tee sandboxed_err.txt
+        grep -q "COB Warning" sandboxed_err.txt
+        grep -q "bypassed in the web sandbox" sandboxed_err.txt
+        echo "sandbox no-op path OK: desktop-only keywords warn and continue, never crash"
+
+  # ---------------------------------------------------------------------
   # v0.0.5 extensions: SQLite3/Tcl/Tk bindings (cob_interp_db) and the
   # native-GUI _cobwindow bindings (cob_interp_window). Linux-only and
   # real X11/Tcl/Tk builds here -- this is exactly the job that would
@@ -726,7 +928,7 @@ jobs:
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
   release:
-    needs: build
+    needs: [build, test_ffi, test_wasm]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

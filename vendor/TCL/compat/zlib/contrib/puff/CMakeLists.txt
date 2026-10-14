@@ -1,154 +1,262 @@
-cmake_minimum_required(VERSION 3.12...3.31)
+# if we are built from with zlib, use this path's)
+if(DEFINED ZLIB_BUILD_PUFF)
+    set(WORK_DIR ${zlib_BINARY_DIR})
+    set(inst_setup zlib_install)
+else(DEFINED ZLIB_BUILD_PUFF)
+    set(WORK_DIR ${puff_BINARY_DIR})
+    set(inst_setup zlib_puff_install)
+    set(ZLIB_ARG "-DZLIB_DIR=${ZLIB_DIR}")
 
-project(
-    puff
-    VERSION 2.3.0
-    LANGUAGES C
-    DESCRIPTION "A library for decompressing deflate with very little footprint"
-    HOMEPAGE_URL "https://www.zlib.net")
+    add_test(
+        NAME zlib_puff_install
+        COMMAND ${CMAKE_COMMAND} --install ${puff_BINARY_DIR} --prefix
+                ${CMAKE_CURRENT_BINARY_DIR}/test_install --config $<CONFIG>
+        WORKING_DIRECTORY ${puff_BINARY_DIR})
 
-option(ZLIB_PUFF_BUILD_SHARED "Enable building blast shared library" ON)
-option(ZLIB_PUFF_BUILD_STATIC "Enable building blast static library" ON)
-option(ZLIB_PUFF_BUILD_TESTING "Enable building tests for blast" ON)
-option(ZLIB_PUFF_INSTALL "Enable installation of puff" ON)
-
-include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
-
-if(NOT DEFINED ZLIB_BUILD_PUFF)
-    if(ZLIB_PUFF_BUILD_SHARED)
-        list(APPEND REQUIRED_COMPONENTS "shared")
-    endif(ZLIB_PUFF_BUILD_SHARED)
-
-    if(ZLIB_PUFF_BUILD_STATIC)
-        list(APPEND REQUIRED_COMPONENTS "static")
-    endif(ZLIB_PUFF_BUILD_STATIC)
-
-    find_package(ZLIB REQUIRED COMPONENTS ${REQUIRED_COMPONENTS} CONFIG)
-endif(NOT DEFINED ZLIB_BUILD_PUFF)
-
-if(WIN32 OR CYGWIN)
-    set(zlibpuff_static_suffix "s")
-    set(CMAKE_DEBUG_POSTFIX "d")
-endif(WIN32 OR CYGWIN)
-
-if(ZLIB_PUFF_BUILD_TESTING)
-    add_executable(zlib_puff_bin-writer bin-writer.c)
-
-    if(${CMAKE_C_COMPILER_ID} STREQUAL "GNU" OR
-       ${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
-        set(CFLAGS_OLD ${CMAKE_C_FLAGS})
-        set(CMAKE_C_FLAGS
-            ""
-            CACHE STRING "" FORCE)
-
-        if(${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
-            find_program(GCOV_EXECUTABLE gcov)
-        endif(${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
-
-        if(${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
-            set(llvm_names llvm_cov)
-            list(APPEND llvm_names llvm-cov)
-
-            foreach(ver RANGE 11 99)
-                list(APPEND llvm_names llvm-cov-${ver})
-            endforeach(ver RANGE 11 99)
-
-            find_program(GCOV_EXECUTABLE NAMES ${llvm_names})
-            set(llvm_option "gcov")
-        endif(${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
-    endif(${CMAKE_C_COMPILER_ID} STREQUAL "GNU" OR
-          ${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
-
-      add_subdirectory(test)
-endif(ZLIB_PUFF_BUILD_TESTING)
-
-if(ZLIB_PUFF_BUILD_SHARED)
-    add_library(zlib_puff_puff SHARED
-                puff.c
-                puff.h)
-
-    add_library(PUFF::PUFF ALIAS zlib_puff_puff)
-
-    if(NOT CYGWIN)
-        set_target_properties(zlib_puff_puff
-            PROPERTIES
-                SOVERSION ${puff_VERSION_MAJOR}
-                VERSION ${puff_VERSION})
-    endif(NOT CYGWIN)
-
-    set_target_properties(
-        zlib_puff_puff
-            PROPERTIES
-                EXPORT_NAME PUFF
-                OUTPUT_NAME puff)
-endif(ZLIB_PUFF_BUILD_SHARED)
-
-if(ZLIB_PUFF_BUILD_STATIC)
-    add_library(zlib_puff_puffStatic STATIC
-                puff.c
-                puff.h)
-
-    add_library(PUFF::PUFFSTATIC ALIAS zlib_puff_puffStatic)
-
-    set_target_properties(zlib_puff_puffStatic
+    set_tests_properties(zlib_puff_install
         PROPERTIES
-            EXPORT_NAME PUFFSTATIC
-            OUTPUT_NAME puff${zlib_puff_static_suffix})
-endif(ZLIB_PUFF_BUILD_STATIC)
+            FIXTURES_SETUP zlib_puff_install)
+endif(DEFINED ZLIB_BUILD_PUFF)
 
-if(ZLIB_PUFF_INSTALL)
-    if(ZLIB_PUFF_BUILD_SHARED)
-        install(
-            TARGETS zlib_puff_puff
-            COMPONENT Runtime
-            EXPORT puffSharedExport
-            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-            ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-        install(
-            EXPORT puffSharedExport
-            FILE puff-shared.cmake
-            NAMESPACE PUFF::
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/puff)
+if(ZLIB_PUFF_BUILD_SHARED AND NOT WIN32)
+    add_executable(zlib_puff_test
+        ${puff_SOURCE_DIR}/pufftest.c
+        ${puff_SOURCE_DIR}/puff.h)
 
-        if(MSVC)
-            install(
-                FILES $<TARGET_PDB_FILE:zlib_puff_puff>
-                COMPONENT Development
-                DESTINATION ${CMAKE_INSTALL_BINDIR}
-                CONFIGURATIONS Debug OR RelWithDebInfo
-                OPTIONAL)
-        endif(MSVC)
-    endif(ZLIB_PUFF_BUILD_SHARED)
+    target_link_libraries(zlib_puff_test
+        PRIVATE zlib_puff_puff)
 
-    if(ZLIB_PUFF_BUILD_STATIC)
-        install(
-            TARGETS zlib_puff_puffStatic
-            COMPONENT Development
-            EXPORT puffStaticExport
-            ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-        install(
-            EXPORT puffStaticExport
-            FILE puff-static.cmake
-            NAMESPACE PUFF::
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/puff)
-    endif(ZLIB_PUFF_BUILD_STATIC)
+    add_test(NAME zlib_puff_test
+        COMMAND ${CMAKE_COMMAND} -P
+                ${CMAKE_CURRENT_SOURCE_DIR}/tester.cmake
+                "$<TARGET_FILE:zlib_puff_test>"
+                "${puff_SOURCE_DIR}")
 
-    configure_package_config_file(
-        ${puff_SOURCE_DIR}/puffConfig.cmake.in
-        ${puff_BINARY_DIR}/puffConfig.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/puff)
+    if(GCOV_EXECUTABLE)
+        add_executable(zlib_puff_test-coverage
+            ${puff_SOURCE_DIR}/pufftest.c
+            ${puff_SOURCE_DIR}/puff.c
+            ${puff_SOURCE_DIR}/puff.h)
 
-    write_basic_package_version_file(
-        "${puff_BINARY_DIR}/puffConfigVersion.cmake"
-        VERSION "${puff_VERSION}"
-        COMPATIBILITY AnyNewerVersion)
+        target_compile_options(zlib_puff_test-coverage PRIVATE -coverage)
 
-    install(FILES ${puff_BINARY_DIR}/puffConfig.cmake
-                  ${puff_BINARY_DIR}/puffConfigVersion.cmake
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/puff)
-    install(
-        FILES puff.h
-        COMPONENT Development
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-endif(ZLIB_PUFF_INSTALL)
+        target_link_options(zlib_puff_test-coverage PRIVATE -coverage)
+
+        add_test(NAME zlib_puff_test-coverage
+            COMMAND ${CMAKE_COMMAND} -P
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tester-cov.cmake
+                    "$<TARGET_FILE:zlib_puff_test-coverage>"
+                    "${puff_SOURCE_DIR}"
+                    "$<TARGET_FILE:zlib_puff_bin-writer>"
+                    ${GCOV_EXECUTABLE}
+                    ${llvm_option})
+    endif(GCOV_EXECUTABLE)
+endif(ZLIB_PUFF_BUILD_SHARED AND NOT WIN32)
+
+if(ZLIB_PUFF_BUILD_STATIC AND NOT WIN32)
+    add_executable(zlib_puff_testStatic
+        ${puff_SOURCE_DIR}/pufftest.c
+        ${puff_SOURCE_DIR}/puff.h)
+
+    target_link_libraries(zlib_puff_testStatic
+        PRIVATE zlib_puff_puffStatic)
+    add_test(NAME zlib_puff_testStatic
+        COMMAND ${CMAKE_COMMAND} -P
+                ${CMAKE_CURRENT_SOURCE_DIR}/tester.cmake
+                "$<TARGET_FILE:zlib_puff_testStatic>"
+                "${puff_SOURCE_DIR}")
+
+    if(GCOV_EXECUTABLE)
+        add_executable(zlib_puff_testStatic-coverage
+            ${puff_SOURCE_DIR}/pufftest.c
+            ${puff_SOURCE_DIR}/puff.c
+            ${puff_SOURCE_DIR}/puff.h)
+
+        target_compile_options(zlib_puff_testStatic-coverage
+            PRIVATE -coverage)
+
+        target_link_options(zlib_puff_testStatic-coverage
+            PRIVATE -coverage)
+
+        add_test(NAME zlib_puff_testStatic-coverage
+            COMMAND ${CMAKE_COMMAND} -P
+                ${CMAKE_CURRENT_SOURCE_DIR}/tester-cov.cmake
+                "$<TARGET_FILE:zlib_puff_testStatic-coverage>"
+                "${puff_SOURCE_DIR}"
+                "$<TARGET_FILE:zlib_puff_bin-writer>"
+                ${GCOV_EXECUTABLE}
+                ${llvm_option})
+    endif(GCOV_EXECUTABLE)
+endif(ZLIB_PUFF_BUILD_STATIC AND NOT WIN32)
+
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test/CMakeLists.txt @ONLY)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_subdirectory_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test/CMakeLists.txt @ONLY)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_subdirectory_exclude_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test/CMakeLists.txt
+    @ONLY)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_no_components_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test/CMakeLists.txt
+    @ONLY)
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/find_package_wrong_components_test.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test/CMakeLists.txt
+    @ONLY)
+
+# CMAKE_GENERATOR_PLATFORM doesn't work in the if
+set(GENERATOR ${CMAKE_GENERATOR_PLATFORM})
+
+if(GENERATOR)
+    set(PLATFORM "-A ${GENERATOR}")
+endif(GENERATOR)
+
+#
+# findpackage_test
+#
+add_test(
+    NAME zlib_puff_find_package_configure
+    COMMAND
+        ${CMAKE_COMMAND}
+        ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG>
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${WORK_DIR}/test/test_install
+        ${ZLIB_ARG}
+        --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_test)
+
+add_test(
+    NAME zlib_puff_find_package_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/findpackage_test_build)
+
+set_tests_properties(zlib_puff_find_package_configure
+    PROPERTIES
+        FIXTURES_REQUIRED ${inst_setup}
+        FIXTURES_SETUP puff_fp_config)
+
+set_tests_properties(zlib_puff_find_package_build
+    PROPERTIES
+        FIXTURES_REQUIRED puff_fp_config)
+
+#
+# add_subdirectory_test
+#
+add_test(
+    NAME zlib_puff_add_subdirectory_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG>
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${WORK_DIR}/test/test_install ${ZLIB_ARG}
+        --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test)
+
+add_test(
+    NAME zlib_puff_add_subdirectory_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_test_build)
+
+set_tests_properties(zlib_puff_add_subdirectory_configure
+    PROPERTIES
+        FIXTURES_REQUIRED ${inst_setup}
+        FIXTURES_SETUP puiff_as_config)
+
+set_tests_properties(zlib_puff_add_subdirectory_build
+    PROPERTIES
+        FIXTURES_REQUIRED puff_as_config)
+
+#
+# add_subdirectory_exclude_test
+#
+add_test(
+    NAME zlib_puff_add_subdirectory_exclude_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${WORK_DIR}/test/test_install ${ZLIB_ARG}
+        --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test)
+
+add_test(
+    NAME zlib_puff_add_subdirectory_exclude_build
+    COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+    WORKING_DIRECTORY
+        ${CMAKE_CURRENT_BINARY_DIR}/add_subdirectory_exclude_test_build)
+
+set_tests_properties(zlib_puff_add_subdirectory_exclude_configure
+    PROPERTIES
+        FIXTURES_REQUIRED ${inst_setup}
+        FIXTURES_SETUP puff_asx_config)
+
+set_tests_properties(zlib_puff_add_subdirectory_exclude_build
+    PROPERTIES
+        FIXTURES_REQUIRED puff_asx_config)
+
+#
+# findpackage_no_components_test
+#
+add_test(
+    NAME zlib_puff_find_package_no_components_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${WORK_DIR}/test/test_install ${ZLIB_ARG}
+        --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_no_components_test)
+
+set_tests_properties(
+    zlib_puff_find_package_no_components_configure
+        PROPERTIES
+            FIXTURES_REQUIRED ${inst_setup})
+
+if(NOT ZLIB_PUFF_BUILD_SHARED OR NOT ZLIB_PUFF_BUILD_STATIC)
+    set_tests_properties(zlib_puff_find_package_no_components_configure
+        PROPERTIES
+            WILL_FAIL TRUE)
+endif(NOT ZLIB_PUFF_BUILD_SHARED OR NOT ZLIB_PUFF_BUILD_STATIC)
+
+#
+# findpackage_no_components_test
+#
+add_test(
+    NAME zlib_puff_find_package_wrong_components_configure
+    COMMAND
+        ${CMAKE_COMMAND} ${PLATFORM}
+        -B${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test_build
+        -DCMAKE_BUILD_TYPE=$<CONFIG> -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+        -DCMAKE_INSTALL_PREFIX=${WORK_DIR}/test/test_install ${ZLIB_ARG}
+        --fresh
+        -G "${CMAKE_GENERATOR}"
+        -S${CMAKE_CURRENT_BINARY_DIR}/findpackage_wrong_components_test)
+
+set_tests_properties(zlib_puff_find_package_wrong_components_configure
+    PROPERTIES
+        FIXTURES_REQUIRED ${inst_setup}
+        WILL_FAIL TRUE)

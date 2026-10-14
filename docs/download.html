@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Download Cob — Cob</title>
-<meta name="description" content="Download Cob 0.0.5 for Windows, macOS, or Linux, or build from source.">
+<meta name="description" content="Download Cob 0.0.6 for Windows, macOS, or Linux, or build from source.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -73,7 +73,8 @@
     <nav class="links">
       <a href="about.html">About</a>
       <a href="download.html" aria-current="page">Downloads</a>
-      <a href="https://docs.cob.pixel-pulse.work.gd/">Docs</a>
+      <a href="https://docs.cob.pixel-pulse.dev/">Docs</a>
+      <a href="play/index.html">Play</a>
       <a href="community.html">Community</a>
       <a class="nav-cta" href="#windows">Get Cob</a>
     </nav>
@@ -84,7 +85,7 @@
 
   <section class="page-head">
     <div class="wrap">
-      <div class="eyebrow-plain">Version 0.0.5</div>
+      <div class="eyebrow-plain">Version 0.0.6</div>
       <h1>Download Cob</h1>
       <p class="lede">Grab the interpreter, compiler, and package manager for your platform, or build from source. All three tools ship together in every release.</p>
     </div>
@@ -178,6 +179,11 @@ $ grep cob-linux-amd64 checksums.txt<br>
         <thead><tr><th>Version</th><th>Notes</th><th></th></tr></thead>
         <tbody>
           <tr>
+            <td class="ver">0.0.6</td>
+            <td class="note">A C API / FFI (<code>extern &lt;name&gt;(...) from "&lt;lib&gt;"</code>): call a real exported C function from a Cob script, with the same fixed <code>CobValue</code> signature in both cob_interp (dlopen/dlsym, resolved eagerly) and popcorn_comp (a real static link, no dlopen in the compiled binary at all). Also new: a WebAssembly build of the pure-language core powers the in-browser <a href="play/index.html">playground</a> — desktop-only keywords (SQLite, _cobwindow, and now extern) no-op there with a one-time notice instead of crashing.</td>
+            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.6">Release page →</a></td>
+          </tr>
+          <tr>
             <td class="ver">0.0.5</td>
             <td class="note">Plain `make` now builds SQLite + a native raylib-backed window by default, with raygui-backed window_button/window_slider/window_textbox for real interactive widgets. Tcl/Tk moved to the separate cob_interp_db build. Zero configure/autoconf anywhere in the default build's dependency chain.</td>
             <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.5">Release page →</a></td>
@@ -189,7 +195,7 @@ $ grep cob-linux-amd64 checksums.txt<br>
           </tr>
           <tr>
             <td class="ver">0.0.3-bug-fix-2</td>
-            <td class="note">Project moved from pixel-pulse-labs to the Cob-Software-Foundation org on GitHub. Every hardcoded repo/registry URL updated, including farmer's default package registry (now cpi.cob.pixel-pulse.work.gd).</td>
+            <td class="note">Project moved from pixel-pulse-labs to the Cob-Software-Foundation org on GitHub. Every hardcoded repo/registry URL updated, including farmer's default package registry (now cpi.cob.pixel-pulse.dev).</td>
             <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.3-bug-fix-2">Release page →</a></td>
           </tr>
           <tr>
@@ -225,7 +231,7 @@ $ grep cob-linux-amd64 checksums.txt<br>
         <h4>Project</h4>
         <ul>
           <li><a href="download.html">Downloads</a></li>
-          <li><a href="https://docs.cob.pixel-pulse.work.gd/">Documentation</a></li>
+          <li><a href="https://docs.cob.pixel-pulse.dev/">Documentation</a></li>
           <li><a href="about.html">About</a></li>
         </ul>
       </div>
@@ -247,7 +253,7 @@ $ grep cob-linux-amd64 checksums.txt<br>
     </div>
     <div class="foot-bottom">
       <span>© 2026 Pixel Pulse Labs.</span>
-      <span>cob.pixel-pulse.work.gd</span>
+      <span>cob.pixel-pulse.dev</span>
     </div>
   </div>
 </footer>

@@ -54,6 +54,12 @@ AR      ?= ar
 BIN_DIR    = bin
 VENDOR_DIR = vendor
 
+# C API / FFI (CEP-2): `extern` uses dlopen()/dlsym() on POSIX, so Linux
+# needs -ldl (a no-op on current glibc, still required on older glibc/musl
+# setups); macOS keeps dlopen in libSystem; Windows uses LoadLibraryA /
+# GetProcAddress from kernel32, already linked by default.
+FFI_LIBS =
+
 ifeq ($(OS),Windows_NT)
     EXE_SUF = .exe
     SLEEP_CMD = timeout /t 1 >nul
@@ -187,10 +193,11 @@ else
     # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
     SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
     SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
+    FFI_LIBS       = -ldl
     endif
 endif
 
-.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass
+.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass wasm play
 
 all: cob_interp_full popcorn_comp farmer
 
@@ -215,7 +222,7 @@ smartpass:
 
 cob_interp: $(BIN_DIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c
+		src/file_io.c src/cob_interp.c $(FFI_LIBS)
 # ^ The lightweight, dependency-free interpreter: no SQLite/Tcl/Tk,
 # no _cobwindow, no vendor build, no X11 dependency, builds in under a
 # second. Plain `make` builds `cob_interp_full` instead (see below) --
@@ -321,6 +328,63 @@ farmer: $(BIN_DIR)
 		vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c \
 		vendor/miniz/miniz_tinfl.c vendor/miniz/miniz_zip.c \
 		-lm
+
+# =========================================================================
+# WEBASSEMBLY SANDBOX BUILD  (`make wasm`, `make play`)
+# =========================================================================
+# The in-browser playground (docs/play/) runs the *pure-language core* of
+# cob_interp compiled to WebAssembly with Emscripten. Deliberately the
+# stripped-down build: only src/file_io.c + src/cob_interp.c, with
+# -DCOB_WASM and NONE of COB_WITH_SQLITE / COB_WITH_TCL / COB_WITH_TK /
+# COB_WITH_COBWINDOW. That means no vendor/ build at all -- no SQLite, no
+# Tcl/Tk (and therefore no autoconf), no raylib/raygui -- and the output
+# stays small. sql_* / window_* keywords still parse and become silent
+# no-op stubs that print one notice to stdout per run; `extern` (CEP-2)
+# binds to a no-op stub too, since a .wasm module has no dlopen().
+#
+#   make wasm   -> bin/wasm/cob_interp.js + cob_interp.wasm
+#   make play   -> same, copied into docs/play/ next to the playground page
+#
+# Needs the Emscripten SDK (https://emscripten.org/docs/getting_started/)
+# with `emcc` on PATH, or EMCC=/path/to/emcc. Knobs:
+#   WASM_OPT    optimization level                  (default -Oz: size first)
+#   WASM_ENV    Emscripten ENVIRONMENT              (default web,worker; use
+#               `node` to run the module under Node for tests)
+#   WASM_STACK  stack-size flag                     (default 1 MiB via
+#               -sSTACK_SIZE; very old emsdk (< 3.1.27) spells it
+#               -sTOTAL_STACK=1048576). Newer emsdk defaults to 64 KiB,
+#               too small for deeply nested expressions/blocks in the
+#               recursive-descent parser -- an overflow in wasm is a trap,
+#               not a clean error, so it is set explicitly.
+#
+# One fresh module instance per run (MODULARIZE + EXIT_RUNTIME): script
+# state, the once-per-run warning flag, and the extern table all start
+# clean, and the page's Web Worker can simply be terminated to stop a
+# runaway script.
+EMCC       ?= emcc
+WASM_DIR    = $(BIN_DIR)/wasm
+WASM_OPT   ?= -Oz
+WASM_ENV   ?= web,worker
+WASM_STACK ?= -sSTACK_SIZE=1048576
+PLAY_DIR    = docs/play
+
+wasm: $(BIN_DIR)
+	mkdir -p $(WASM_DIR)
+	$(EMCC) -std=c99 $(WASM_OPT) -Wall -Wextra $(INCLUDE) -DCOB_WASM \
+		src/file_io.c src/cob_interp.c \
+		-o $(WASM_DIR)/cob_interp.js \
+		-sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createCobModule \
+		-sENVIRONMENT=$(WASM_ENV) $(WASM_STACK) \
+		-sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=1 \
+		-sEXIT_RUNTIME=1 -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=FS,callMain
+	@echo ""
+	@echo "Built $(WASM_DIR)/cob_interp.js + cob_interp.wasm (COB_WASM sandbox build)."
+
+play: wasm
+	mkdir -p $(PLAY_DIR)
+	cp $(WASM_DIR)/cob_interp.js $(WASM_DIR)/cob_interp.wasm $(PLAY_DIR)/
+	cp VERSION $(PLAY_DIR)/version.txt
+	@echo "Copied the sandbox build into $(PLAY_DIR)/ -- open docs/play/index.html via a local web server."
 
 # =========================================================================
 # EMBEDDABLE PACKAGE

@@ -127,7 +127,7 @@ version, not a substitute for actually reading `LICENSE.md`:
   you must also receive a copy of the license terms (i.e. keep
   `LICENSE.md` in the package) and this notice:
 
-  > Required Notice: Copyright Pixel-Pulse (pixel-pulse.duckdns.org)
+  > Required Notice: Copyright Pixel-Pulse (pixel-pulse.dev)
 
 - This package also carries **raylib** and **raygui** (both zlib
   License, text in `legal/`) as statically-linked third-party
