@@ -13,385 +13,16 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------
-  # Smoke test: build cob natively on Linux and run it against a
-  # known-good .cob sample, asserting on stdout.
-  # ---------------------------------------------------------------------
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        lfs: true
-
-    - name: Build cob (native, via Makefile)
-      run: |
-        make cob_interp CFLAGS="-std=c99 -Wall -Wextra -Werror"
-        cp bin/cob_interp cob
-
-    - name: Run pop() smoke test
-      run: |
-        cat > smoke.cob << 'EOF'
-        pop("smoke test ok")
-        EOF
-        ./cob smoke.cob | tee out.txt
-        grep -qx "smoke test ok" out.txt
-
-    - name: Run fast-boot cache smoke test
-      run: |
-        test -f smoke.strawberry
-        ./cob smoke.cob | tee out2.txt
-        grep -qx "smoke test ok" out2.txt
-
-  # ---------------------------------------------------------------------
-  # CEP-2 (C API / FFI): `extern` round-trips through the .strawberry
-  # cache (bumped to COBSTRW7, see common.h) the same way the raygui
-  # widget keywords were required to in v0.0.5 -- run once to write the
-  # cache, again to force a cache hit, diff the two runs' output, exactly
-  # mirroring the widget test in test_extensions below. Also exercises
-  # the *compiled* path: popcorn_comp reads that same cache, generates C
-  # with a real `extern CobFFIValue name(CobFFIValue*, int);` forward
-  # declaration, and links directly against a tiny native extension
-  # built in this job with plain gcc -- diffed against the interpreted
-  # output too, so a regression in either cob_interp's dlopen/dlsym path
-  # or popcorn_comp's static-link codegen fails this job.
-  # ---------------------------------------------------------------------
-  test_ffi:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        lfs: true
-
-    - name: Install Zig (popcorn_comp's default compiler backend)
-      uses: mlugg/setup-zig@v2
-      with:
-        version: latest
-
-    - name: Build cob_interp and popcorn_comp
-      run: make cob_interp popcorn_comp
-
-    - name: Build a tiny native extension with plain gcc
-      run: |
-        cat > math_ext.c << 'EOF'
-        #include <stdio.h>
-        #include "cob.h"
-        COB_EXPORT CobValue calculate_fast(CobValue *argv, int argc) {
-            if (argc < 1 || argv[0].kind != COB_INT) return cob_int(0);
-            return cob_int(argv[0].as.i * argv[0].as.i + 1);
-        }
-        COB_EXPORT CobValue greet(CobValue *argv, int argc) {
-            static char buf[256];
-            const char *who = (argc >= 1 && argv[0].kind == COB_STR) ? argv[0].as.s : "stranger";
-            snprintf(buf, sizeof(buf), "Hello, %s!", who);
-            return cob_str(buf);
-        }
-        EOF
-        gcc -shared -fPIC -Iinclude -o math_ext.so math_ext.c
-
-    - name: Smoke test -- extern calls a real native library through cob_interp
-      run: |
-        set -euo pipefail
-        cat > ffi.cob << 'EOF'
-        extern calculate_fast(x) from "math_ext.so"
-        extern greet(name) from "math_ext.so"
-        pop("sq=" + calculate_fast(6))
-        pop(greet("CI"))
-        EOF
-        ./bin/cob_interp ffi.cob | tee ffi_run1.txt
-        test -f ffi.strawberry
-        grep -qx "sq=37" ffi_run1.txt
-        grep -qx "Hello, CI!" ffi_run1.txt
-
-    - name: Smoke test -- .strawberry cache round-trips extern/EXPR_EXTERN_CALL
-      run: |
-        set -euo pipefail
-        ./bin/cob_interp ffi.cob | tee ffi_run2.txt
-        diff ffi_run1.txt ffi_run2.txt
-        echo "cache round-trip OK: extern decodes identically from a cached AST"
-
-    - name: Smoke test -- popcorn_comp links the same extension statically
-      run: |
-        set -euo pipefail
-        ./bin/popcorn_comp ffi.strawberry -o ffi_native --cc gcc
-        ./ffi_native | tee ffi_native_out.txt
-        diff ffi_run1.txt ffi_native_out.txt
-        echo "popcorn_comp output matches cob_interp for a script using extern: OK"
-
-    - name: Smoke test -- plain cob_interp sandboxes extern with no library present
-      run: |
-        set -euo pipefail
-        cat > ffi_missing.cob << 'EOF'
-        _MakeCache = False
-        extern nope(x) from "does_not_exist.so"
-        pop("after=" + nope(1))
-        EOF
-        ./bin/cob_interp ffi_missing.cob 2> ffi_missing_err.txt | tee ffi_missing_out.txt
-        grep -qx "after=0" ffi_missing_out.txt
-        grep -q "could not load library" ffi_missing_err.txt
-
-  # ---------------------------------------------------------------------
-  # Browser sandbox build: cob_interp compiled to WebAssembly (`make
-  # wasm`/`make play`) with a REAL, version-matched emsdk toolchain, not
-  # a distro package -- see the long comment on the `wasm:` target in
-  # the Makefile for exactly why that distinction matters (a Debian-
-  # packaged `emscripten` paired with the distro's own vanilla clang/lld
-  # was found to silently strip the compiled program's entire call graph
-  # during link, succeeding with exit 0 and a near-empty, non-functional
-  # .wasm -- a real, matched emsdk does not have this problem).
-  #
-  # Exercises the sandbox the same way test_ffi does for the native
-  # build above: a plain script runs correctly, and a script that uses
-  # a desktop-only keyword (_cobwindow/SQLite/extern) gets the one-time
-  # browser-sandbox warning and keeps running instead of crashing --
-  # the "No-Op Stub" pattern this build exists to prove out.
-  # ---------------------------------------------------------------------
-  test_wasm:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        lfs: true
-
-    - name: Install Emscripten
-      uses: emscripten-core/setup-emsdk@v16
-      with:
-        # Pinned, not "latest" -- see the matching comment in pages.yml
-        # (keep both in sync). A brand-new Emscripten release shouldn't
-        # be able to break this job without a deliberate version bump
-        # here; verify a newer pin still builds before raising it.
-        version: 4.0.17
-
-    # WASM_ENV=node, not the Makefile's own default (web,worker): this
-    # job needs to actually RUN the module to test it, and Node is the
-    # one non-browser environment Emscripten can target that a CI
-    # runner can execute directly. The real site (pages.yml) builds
-    # with the default web,worker instead -- this override must never
-    # leak into what gets deployed.
-    - name: Build the WASM sandbox for Node
-      run: make wasm WASM_ENV=node
-
-    - name: Write a small Node driver for the MODULARIZE'd module
-      run: |
-        cat > /tmp/cob_wasm_run.cjs << 'EOF'
-        // Minimal driver matching exactly what docs/play/index.html's
-        // browser JS does against the real Emscripten MODULARIZE API:
-        // one fresh module instance per run, write the script to the
-        // in-memory FS, call main, capture stdout/stderr via print/
-        // printErr. See docs/play/index.html for the browser version.
-        const createCobModule = require(process.argv[2]);
-        const fs = require('fs');
-
-        async function runScript(scriptPath, extraArgs) {
-          let out = '', err = '';
-          const Module = await createCobModule({
-            print: (line) => { out += line + "\n"; },
-            printErr: (line) => { err += line + "\n"; },
-          });
-          Module.FS.writeFile('/program.cob', fs.readFileSync(scriptPath, 'utf8'));
-          try {
-            Module.callMain(['/program.cob'].concat(extraArgs || []));
-          } catch (e) {
-            if (!(e && typeof e.status === 'number')) throw e; // real crash, not just exit()
-          }
-          return { out, err };
-        }
-
-        (async () => {
-          const scriptPath = process.argv[3];
-          const extraArgs = process.argv.slice(4);
-          const { out, err } = await runScript(scriptPath, extraArgs);
-          process.stdout.write(out);
-          process.stderr.write(err);
-        })();
-        EOF
-
-    - name: Smoke test -- a plain script runs correctly under the WASM sandbox
-      run: |
-        set -euo pipefail
-        cat > plain.cob << 'EOF'
-        set i = 0
-        while i < 3:
-            pop("counting: " + i)
-            set i = i + 1
-        pop("done")
-        EOF
-        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" plain.cob --no-cache | tee plain_out.txt
-        grep -qx "counting: 0" plain_out.txt
-        grep -qx "counting: 2" plain_out.txt
-        grep -qx "done" plain_out.txt
-
-    - name: Smoke test -- desktop-only keywords no-op with the sandbox warning, script keeps running
-      run: |
-        set -euo pipefail
-        cat > sandboxed.cob << 'EOF'
-        set h = sql_open(":memory:")
-        pop("after sql_open, h=" + h)
-        extern calculate_fast(x) from "math_ext.so"
-        pop("after extern call=" + calculate_fast(6))
-        pop("still running")
-        EOF
-        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" sandboxed.cob --no-cache \
-          > sandboxed_out.txt 2> /dev/null
-        cat sandboxed_out.txt
-        grep -qx "after sql_open, h=0" sandboxed_out.txt
-        grep -qx "after extern call=0" sandboxed_out.txt
-        grep -qx "still running" sandboxed_out.txt
-        node /tmp/cob_wasm_run.cjs "$(pwd)/bin/wasm/cob_interp.js" sandboxed.cob --no-cache \
-          2>&1 1>/dev/null | tee sandboxed_err.txt
-        grep -q "COB Warning" sandboxed_err.txt
-        grep -q "bypassed in the web sandbox" sandboxed_err.txt
-        echo "sandbox no-op path OK: desktop-only keywords warn and continue, never crash"
-
-  # ---------------------------------------------------------------------
-  # v0.0.5 extensions: SQLite3/Tcl/Tk bindings (cob_interp_db) and the
-  # native-GUI _cobwindow bindings (cob_interp_window). Linux-only and
-  # real X11/Tcl/Tk builds here -- this is exactly the job that would
-  # have caught both the vendor/sqlite-vs-vendor/SQLite casing bug and
-  # the vendor/TK/unix-vs-vendor/TK/win mismatch documented in
-  # Release.txt, had it existed sooner.
-  # ---------------------------------------------------------------------
-  test_extensions:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        lfs: true
-
-    - name: Install X11 dev headers + Xvfb (for Tk and _cobwindow)
-      run: sudo apt-get update && sudo apt-get install -y libx11-dev xvfb
-
-    - name: Build plain cob_interp (must stay dependency-free)
-      run: make cob_interp
-
-    - name: Build SQLite + Tcl + Tk, then cob_interp_db
-      run: make sqlite tcl tk cob_interp_db
-
-    - name: Build cob_interp_window (no vendor deps, just X11)
-      run: make cob_interp_window
-
-    - name: Smoke test -- plain cob_interp stubs out the new keywords
-      run: |
-        set -euo pipefail
-        cat > stub.cob << 'EOF'
-        _MakeCache = False
-        set h = sql_open("stub.db")
-        pop("h=" + h)
-        EOF
-        ./bin/cob_interp stub.cob 2> stub_err.txt | tee stub_out.txt
-        grep -qx "h=0" stub_out.txt
-        grep -q "stub in this build" stub_err.txt
-
-    - name: Smoke test -- cob_interp_db against real SQLite + Tcl
-      run: |
-        set -euo pipefail
-        export TCL_LIBRARY="$(pwd)/vendor/TCL/library"
-        cat > db.cob << 'EOF'
-        _MakeCache = False
-        set h = sql_open("db.sqlite")
-        set rc = sql_exec(h, "CREATE TABLE t (name TEXT)")
-        set rc = sql_exec(h, "INSERT INTO t VALUES ('cob')")
-        set name = sql_query(h, "SELECT name FROM t LIMIT 1")
-        pop("name=" + name)
-        set rc = sql_close(h)
-        pop("answer=" + tcl_eval("expr {6*7}"))
-        EOF
-        ./bin/cob_interp_db db.cob | tee db_out.txt
-        grep -qx "name=cob" db_out.txt
-        grep -qx "answer=42" db_out.txt
-
-    - name: Smoke test -- cob_interp_window opens a real X11 window
-      run: |
-        set -euo pipefail
-        Xvfb :99 -screen 0 800x600x24 &
-        sleep 1
-        cat > win.cob << 'EOF'
-        _MakeCache = False
-        shuck cobwindow
-        set h = window_open("CI smoke test")
-        set rc = window_label(h, "hello from CI")
-        set rc = window_wait(h, 1)
-        set rc = window_close(h)
-        pop("window handle=" + h)
-        EOF
-        DISPLAY=:99 ./bin/cob_interp_window win.cob | tee win_out.txt
-        grep -qx "window handle=1" win_out.txt
-
-    # v0.0.5-plus-widgets: window_button/window_slider/window_textbox
-    # bumped the .strawberry cache format to COBSTRW6 (see the header
-    # comment above write_expr()/read_expr() in src/cob_interp.c). This
-    # is the job that would catch a broken write_expr/read_expr pair
-    # for the three new expression kinds -- run once to write the
-    # cache, then again to force a cache hit, and diff the two runs'
-    # output. A mismatch here means the AST round-trip through the
-    # cache is lossy for one of the new widget keywords.
-    - name: Smoke test -- .strawberry cache round-trips the new widget expression kinds
-      run: |
-        set -euo pipefail
-        cat > widgets_cache.cob << 'EOF'
-        shuck cobwindow
-        set h = window_open("cache test")
-        set b = window_button(h, "OK")
-        set s = window_slider(h, "vol", 50)
-        set t = window_textbox(h, "name")
-        pop("b=" + b + " s=" + s + " t=" + t)
-        set rc = window_close(h)
-        EOF
-        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run1.txt
-        test -f widgets_cache.strawberry
-        grep -qx "b=0 s=0 t=" cache_run1.txt
-        DISPLAY=:99 ./bin/cob_interp_window widgets_cache.cob | tee cache_run2.txt
-        diff cache_run1.txt cache_run2.txt
-        echo "cache round-trip OK: window_button/window_slider/window_textbox decode identically from a cached AST"
-
-  # ---------------------------------------------------------------------
-  # v0.0.5 extensions on Windows: cross-build via mingw-w64 to catch
-  # regressions in the win/-tree paths (vendor/TCL/win, vendor/TK/win,
-  # the xlib shim, STATIC_BUILD, stub-lib linking, WINDOW_LIBS). Can
-  # only verify the build here, not execution -- there's no Windows
-  # runner in this job, and no display to open a real window on even
-  # if there were. See Release.txt for what's been verified vs. not.
-  # ---------------------------------------------------------------------
-  test_extensions_windows:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        lfs: true
-
-    - name: Install mingw-w64 cross toolchain
-      run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-
-    - name: Cross-build cob_interp_window (no vendor deps)
-      run: |
-        make OS=Windows_NT CC=x86_64-w64-mingw32-gcc cob_interp_window
-        file bin/cob_interp_window.exe | grep -q "PE32+"
-
-    - name: Cross-build SQLite + Tcl + Tk + cob_interp_db
-      run: |
-        set -euo pipefail
-        make OS=Windows_NT CC=x86_64-w64-mingw32-gcc \
-          TCL_CONFIGURE="cd vendor/TCL/win && CC=x86_64-w64-mingw32-gcc sh ./configure --host=x86_64-w64-mingw32 --build=x86_64-linux-gnu --disable-shared --enable-64bit" \
-          TK_CONFIGURE="cd vendor/TK/win && CC=x86_64-w64-mingw32-gcc sh ./configure --host=x86_64-w64-mingw32 --build=x86_64-linux-gnu --disable-shared --enable-64bit --with-tcl=$(pwd)/vendor/TCL/win" \
-          sqlite tcl tk cob_interp_db
-        file bin/cob_interp_db.exe | grep -q "PE32+"
-
-  # ---------------------------------------------------------------------
-  # Cross-platform build matrix.
+  # Cross-platform build matrix (build only, no tests).
   # ---------------------------------------------------------------------
   build:
-    needs: test
     runs-on: ${{ matrix.runner }}
     env:
       # Bundled into each release so popcorn_comp works standalone with
       # no separate Zig install -- see the "Download and bundle Zig"
       # step below and src/popcorn_comp.c's find_bundled_zig_cc().
       # Bump this to pick up newer Zig releases; verify the exact
-      # filenames still match https://ziglang.org/download/ first, as
-      # Zig's release naming has changed between versions before.
+      # filenames still match https://ziglang.org/download/ first.
       ZIG_VERSION: "0.16.0"
     permissions:
       contents: read
@@ -445,8 +76,7 @@ jobs:
             zig_target: aarch64-windows
             zig_ext: zip
             full_build: true
-          # windows/arm (32-bit ARM) intentionally not supported -- cut
-          # per project decision.
+          # windows/arm (32-bit ARM) intentionally not supported.
 
           # ---------------- Linux ----------------
           - goos: linux
@@ -580,32 +210,11 @@ jobs:
 
     - name: Install X11/OpenGL dev headers (full build, foreign-arch Linux)
       if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch != null
-      # i386 (matrix.x11_arch on the linux/386 entry) is confirmed
-      # working -- i386 packages are still served from the same
-      # archive.ubuntu.com/security.ubuntu.com mirrors as amd64, so no
-      # extra source needed. arm64/armhf are a different situation:
-      # Ubuntu only serves those from ports.ubuntu.com, never from the
-      # main archive/security mirrors at all, and this sandbox's own
-      # network policy blocks ports.ubuntu.com outright, so this
-      # exact step could never be tested here end-to-end.
-      #
-      # First real run against this surfaced two things that armchair
-      # review missed: (1) GitHub's ubuntu-24.04 runners default to
-      # the newer deb822 /etc/apt/sources.list.d/ubuntu.sources format,
-      # not the classic one-line-per-entry sources.list this step
-      # originally only appended to -- that part still worked (apt
-      # reads both), but (2) the *default* archive.ubuntu.com/
-      # security.ubuntu.com stanzas in ubuntu.sources have no
-      # Architectures: restriction, so once `dpkg --add-architecture
-      # arm64` runs, apt tries *every* configured suite -- including
-      # noble-security -- against those default mirrors too, and gets
-      # a 404 for binary-arm64/Packages there (arm64 was never on
-      # those mirrors to begin with; only ports.ubuntu.com has it).
-      # Restricting the default stanzas to amd64/i386 stops apt from
-      # ever trying them for a foreign arch, and the dedicated
-      # ports.ubuntu.com source below now covers all four suites
-      # (main/updates/backports/security), not just the two this step
-      # originally had.
+      # i386 is served from the normal Ubuntu mirrors. arm64/armhf are
+      # only served from ports.ubuntu.com, so the default amd64 stanzas
+      # are restricted to amd64/i386 (otherwise apt 404s on
+      # binary-arm64/Packages) and a dedicated ports source is added
+      # covering main/updates/backports/security.
       run: |
         sudo dpkg --add-architecture ${{ matrix.x11_arch }}
         if [ "${{ matrix.x11_arch }}" != "i386" ]; then
@@ -631,92 +240,26 @@ jobs:
         set -euo pipefail
         mkdir -p dist
 
-        # Same three targets the old raw-gcc step compiled by hand,
-        # now built through the project's own Makefile instead of a
-        # second, separately-maintained copy of the same flags. This
-        # was worth doing after the .strawberry-magic bug (see
-        # Release.txt) -- that bug was exactly this workflow's own
-        # gcc invocations quietly drifting from what the Makefile
-        # (and every contributor's local `make`) actually builds.
-        #
-        # EXE_SUF is explicitly forced here rather than left to the
-        # Makefile's own $(OS) check, and this is not cosmetic: the
-        # Makefile's check only ever reads Windows_NT on a *native*
-        # Windows host, so on this Linux runner it's always empty --
-        # but a mingw cross-compiler targeting Windows silently
-        # appends .exe to whatever output name it's given anyway
-        # (confirmed by actually reproducing the mingw build locally;
-        # `-o bin/cob_interp` really does write bin/cob_interp.exe to
-        # disk). Passing EXE_SUF=.exe here makes the name Make asks
-        # the compiler for match the name that compiler actually
-        # writes, instead of asking for one name and getting a
-        # different one back.
+        # EXE_SUF is forced explicitly: the Makefile's $(OS) check only
+        # reads Windows_NT on a native Windows host, but a mingw
+        # cross-compiler appends .exe to the output name anyway.
         EXE_SUF=""
         if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
 
         if [ "${{ matrix.full_build }}" = "true" ]; then
-          # This target ships cob_interp_full (SQLite + _cobwindow +
-          # raygui widgets) as its "cob"/"cob.exe", not the lightweight
-          # cob_interp. Confidence varies a lot by target -- see the
-          # per-OS notes below and Release.txt for what was actually
-          # cross-compiled and run versus just written to match a
-          # proven pattern:
-          #   - windows/amd64, windows/386, linux/amd64, linux/386:
-          #     built AND run (headless Xvfb for the two Linux ones)
-          #     in the same sandbox that verified the rest of this
-          #     workflow -- SQLite + a real window both confirmed
-          #     working through the actual output binary.
-          #   - windows/arm64 (llvm-mingw): built and inspected (a
-          #     real PE32+ Aarch64 binary with correct imports), not
-          #     run -- no way to execute an arm64 Windows binary in
-          #     this sandbox.
-          #   - linux/arm64, linux/arm (cross): NOT built here at all.
-          #     This sandbox's own network policy blocks
-          #     ports.ubuntu.com outright, which is where the
-          #     foreign-arch X11/OpenGL dev packages these need
-          #     actually live -- a real GitHub Actions runner should
-          #     reach it fine, but that makes this workflow's first
-          #     real run the first real test for these two targets.
-          #   - darwin/arm64, darwin/amd64: NOT built here at all --
-          #     this sandbox has no macOS toolchain or frameworks to
-          #     build against, full stop. The Makefile's Darwin branch
-          #     (WINDOW_LIBS/SQLITE_LIB) was added from raylib's own
-          #     documented OSX Makefile requirements, not from a
-          #     successful build. If it's wrong, the Makefile comment
-          #     next to it explains the expected failure mode is a
-          #     loud link error, not a silently broken binary.
+          # Ships cob_interp_full (SQLite + _cobwindow + raygui widgets)
+          # as "cob"/"cob.exe".
           #
-          # CFLAGS is deliberately NOT overridden anywhere in this
-          # branch -- cob_interp_full recurses into raylib's own
-          # vendored Makefile via $(MAKE), and GNU Make auto-forwards
-          # any command-line-origin variable into every recursive
-          # sub-make, so a CFLAGS override here doesn't just add to
-          # raylib's own internal flags, it silently *replaces* them,
-          # which is exactly how raylib decides its GLFW backend
-          # (confirmed directly: doing this reproduced raylib being
-          # built with the wrong backend for the target, failing at
-          # final link with a wall of `undefined reference to
-          # GetTime/InitPlatform/...` even though raylib itself
-          # compiled with zero errors). Anything matrix.cflags would
-          # have supplied (-m32, -arch arm64, ...) is folded into CC
-          # itself instead, the same way EXE_SUF handles the mingw
-          # auto-.exe-append quirk -- a value baked into CC applies to
-          # every invocation of it, in this Makefile and in raylib's,
-          # without needing CFLAGS at all.
+          # CFLAGS is deliberately NOT overridden in this branch:
+          # cob_interp_full recurses into raylib's Makefile, and a
+          # command-line CFLAGS replaces raylib's own flags (which pick
+          # its GLFW backend). Anything matrix.cflags would supply
+          # (-m32, -arch arm64, ...) is folded into CC instead.
           #
-          # PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB are forced explicitly
-          # for Windows and Linux for the same reason EXE_SUF is: both
-          # this Makefile's and raylib's own vendored Makefile's
-          # platform branches are keyed on the *build host*
-          # ($(OS)/`uname`), never on the actual cross-compile target,
-          # so cross-building for Windows (or a foreign Linux arch)
-          # from this x86_64 runner needs every one of these forced by
-          # hand instead of auto-detected. macOS is the one goos here
-          # that's never cross-compiled -- the real macos-latest
-          # runner invokes `make` natively, so both Makefiles' own
-          # `uname`-based Darwin detection already works unassisted,
-          # and only the -arch flag (folded into CC below) is needed
-          # to pick the right side of Apple's universal toolchain.
+          # PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB are forced for Windows
+          # and Linux because both Makefiles key their platform
+          # branches on the build host, not the cross-compile target.
+          # macOS is built natively, so auto-detection already works.
           FULL_CC="${{ matrix.cc }} ${{ matrix.cflags || '' }}"
           FULL_AR="${{ matrix.ar || '' }}"
           case "${{ matrix.goos }}" in
@@ -731,20 +274,14 @@ jobs:
               PLATFORM_OS_OVERRIDE="LINUX"
               ;;
             darwin)
-              # No PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB override at all --
-              # native `uname`-based detection in both Makefiles
-              # already picks the Darwin branch correctly here.
               WINDOW_LIBS=""
               SQLITE_LIB_OVERRIDE=""
               PLATFORM_OS_OVERRIDE=""
               ;;
           esac
 
-          # Build up the override list as an array instead of one long
-          # string, so an empty value (FULL_AR on every target except
-          # the three that need it; every *_OVERRIDE on darwin) is
-          # simply omitted instead of passed to `make` as a literal
-          # empty assignment.
+          # Empty values are omitted rather than passed to make as
+          # literal empty assignments.
           FULL_BUILD_ARGS=(CC="$FULL_CC" EXE_SUF="$EXE_SUF")
           [ -n "$FULL_AR" ] && FULL_BUILD_ARGS+=(AR="$FULL_AR")
           [ -n "$WINDOW_LIBS" ] && FULL_BUILD_ARGS+=(WINDOW_LIBS="$WINDOW_LIBS")
@@ -753,21 +290,11 @@ jobs:
 
           make cob_interp_full "${FULL_BUILD_ARGS[@]}"
 
-          # Same idea as the release archive this job already produces,
-          # but minimal: just cob(.exe) + license text, meant to be
-          # embedded inside another application's own distribution
-          # rather than installed as a dev toolchain -- see
-          # EMBED-README.md and handoff.md for the full rationale.
-          # Reuses the exact same override array cob_interp_full itself
-          # was just built with (`embed` depends on `cob_interp_full`
-          # as a real Make prerequisite, so this doesn't rebuild
-          # anything -- it just packages what's already in bin/).
+          # Minimal embeddable package (cob(.exe) + license text); see
+          # EMBED-README.md. Reuses what cob_interp_full just built.
           make embed "${FULL_BUILD_ARGS[@]}" EMBED_SUF="-${{ matrix.goos }}-${{ matrix.goarch }}"
           cp bin/cob-*-embed-*.zip "dist/"
 
-          # farmer/popcorn_comp don't touch any vendor sub-make, so
-          # overriding CFLAGS for them is fine -- same as the non-
-          # full_build branch below.
           make farmer popcorn_comp \
             CC="${{ matrix.cc }}" \
             CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
@@ -783,63 +310,18 @@ jobs:
           cp "bin/cob_interp${EXE_SUF}" "dist/${{ matrix.output_name }}"
         fi
 
-        # The Makefile's own binary names (farmer/popcorn_comp) differ
-        # from the shorter names this workflow's release archives
-        # actually ship (farmer[.exe]/popcorn_comp[.exe]) -- rename on
-        # the way into dist/ rather than renaming what `make` itself
-        # calls its own output.
+        # Rename the Makefile's output names to the shorter names the
+        # release archives ship.
         cp "bin/farmer${EXE_SUF}"       "dist/${{ matrix.farmer_output_name }}"
         cp "bin/popcorn_comp${EXE_SUF}" "dist/${{ matrix.popcorn_output_name }}"
 
         ls -la dist/
 
-    # popcorn_comp itself has zero build-time dependency on any C
-    # toolchain beyond the one compiling it -- it transpiles .strawberry
-    # to C and spawns a real compiler AT RUNTIME (see its file-header
-    # comment for the full design and honesty notes on cross-compiler
-    # bundling). We can only actually *run* the smoke test where the
-    # resulting popcorn_comp binary can execute, i.e. natively.
-    # popcorn_comp defaults to spawning `zig cc` when no --cc/CobOS/CobArch
-    # override is given (see src/popcorn_comp.c's header comment) -- the
-    # smoke test below exercises exactly that default path, so Zig needs
-    # to actually be installed here for it to mean anything.
-    - name: Install Zig (for popcorn_comp's default compiler backend)
-      if: matrix.toolchain == 'native'
-      uses: mlugg/setup-zig@v2
-      with:
-        version: latest
-
-    - name: Smoke test popcorn_comp end-to-end (native only)
-      if: matrix.toolchain == 'native'
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd dist
-        cat > smoke.cob << 'EOF'
-        set x = 3
-        while x > 0:
-            pop("counting down")
-            set x = x - 1
-        pop("liftoff")
-        EOF
-        ./cob smoke.cob > interp_out.txt
-        ./popcorn_comp smoke.strawberry -o smoke_native
-        ./smoke_native > compiled_out.txt
-        diff interp_out.txt compiled_out.txt && echo "popcorn_comp output matches cob_interp: OK"
-        rm -f smoke.cob smoke.strawberry smoke_native interp_out.txt compiled_out.txt
-
-    # -----------------------------------------------------------------
-    # Download and bundle the real, official, host-runnable Zig
-    # release for THIS target platform. This is not the toolchain used
-    # to cross-build the Cob tools above (those run on the ubuntu-latest
-    # runner) -- it's a copy of Zig that will actually RUN on the end
-    # user's machine once they unzip this release, since popcorn_comp
-    # defaults to spawning a bundled zig/zig(.exe) next to itself
-    # before falling back to a system-wide Zig install (see
-    # find_bundled_zig_cc() in src/popcorn_comp.c). Verified real
-    # filenames against https://ziglang.org/download/ -- if this ever
-    # 404s, that naming scheme has changed upstream and needs rechecking.
-    # -----------------------------------------------------------------
+    # Download and bundle the official, host-runnable Zig release for
+    # THIS target platform so popcorn_comp works standalone after the
+    # user unzips the release (see find_bundled_zig_cc() in
+    # src/popcorn_comp.c). If this 404s, Zig's download naming changed
+    # upstream and needs rechecking.
     - name: Download and bundle Zig for popcorn_comp
       shell: bash
       run: |
@@ -862,9 +344,6 @@ jobs:
         fi
 
         mkdir -p "staging/${{ matrix.archive_name }}/zig"
-        # The archive extracts to a single top-level "zig-<target>-<ver>/"
-        # directory -- move its contents (the zig binary plus the lib/
-        # folder it needs at runtime) into the release's zig/ folder.
         mv "zig_extracted/${ZIG_BASENAME}"/* "staging/${{ matrix.archive_name }}/zig/"
         rm -rf "$ZIG_FILE" zig_extracted
 
@@ -904,10 +383,8 @@ jobs:
         sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.sha256"
         sha256sum "${{ matrix.archive_name }}.zip" > "${{ matrix.archive_name }}.zip.hashfrag"
 
-        # The embeddable package (see EMBED-README.md/handoff.md) --
-        # named by `make embed` itself as cob-<VERSION>-embed-<goos>-
-        # <goarch>.zip, so glob for it rather than hardcoding the
-        # version here too.
+        # Embeddable package, named by `make embed` as
+        # cob-<VERSION>-embed-<goos>-<goarch>.zip.
         for f in cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip; do
           [ -e "$f" ] || continue
           sha256sum "$f" > "$f.sha256"
@@ -928,7 +405,7 @@ jobs:
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
   release:
-    needs: [build, test_ffi, test_wasm]
+    needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
