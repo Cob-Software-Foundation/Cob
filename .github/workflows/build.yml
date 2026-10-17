@@ -404,8 +404,278 @@ jobs:
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.sha256
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
-  release:
+  # ---------------------------------------------------------------------
+  # Debian package. ONE signed .deb that carries every Linux architecture
+  # (amd64, i386, arm64, armhf), built from the Linux zips the matrix above
+  # already produced. On install, the postinst script keeps the build that
+  # matches `dpkg --print-architecture` and deletes the others.
+  #
+  # Signing: the repository secret GPG_PRIVATE_KEY (an ASCII-armored private
+  # key, i.e. `gpg --armor --export-secret-keys <id>`) signs the .deb with a
+  # detached signature (cob_<VERSION>_all.deb.asc). If the key has a
+  # passphrase, also add a GPG_PASSPHRASE secret. The matching public key is
+  # published as cob-gpg-public-key.asc so anyone can verify:
+  #     gpg --import cob-gpg-public-key.asc
+  #     gpg --verify cob_<VERSION>_all.deb.asc cob_<VERSION>_all.deb
+  # ---------------------------------------------------------------------
+  deb:
     needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Read version
+      run: echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+
+    - name: Download the Linux builds
+      uses: actions/download-artifact@v4
+      with:
+        path: linux-zips
+        pattern: artifact-cob-linux-*
+        merge-multiple: true
+
+    - name: Assemble the package tree
+      shell: bash
+      run: |
+        set -euo pipefail
+        PKG="pkg/cob_${VERSION}_all"
+        mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/cob" "$PKG/usr/bin" "$PKG/usr/share/doc/cob"
+
+        # matrix archive name : Debian architecture name
+        for pair in cob-linux-amd64:amd64 cob-linux-386:i386 cob-linux-arm64:arm64 cob-linux-arm32:armhf; do
+          archive="${pair%%:*}"
+          arch="${pair##*:}"
+          unzip -q "linux-zips/${archive}.zip" -d "unz"
+          src="unz/${archive}"
+          for f in cob farmer popcorn_comp; do
+            test -f "$src/$f" || { echo "::error::$f is missing from ${archive}.zip"; exit 1; }
+          done
+          test -f "$src/zig/zig" || { echo "::error::bundled zig is missing from ${archive}.zip"; exit 1; }
+
+          mkdir -p "$PKG/usr/lib/cob/$arch"
+          cp -a "$src/cob" "$src/farmer" "$src/popcorn_comp" "$src/zig" "$PKG/usr/lib/cob/$arch/"
+          chmod 755 "$PKG/usr/lib/cob/$arch/cob" "$PKG/usr/lib/cob/$arch/farmer" "$PKG/usr/lib/cob/$arch/popcorn_comp"
+
+          # Licenses and docs are architecture-independent: take them from one build.
+          if [ "$arch" = "amd64" ]; then
+            find "$src" -mindepth 1 -maxdepth 1 \
+              ! -name cob ! -name farmer ! -name popcorn_comp ! -name zig \
+              -exec cp -r {} "$PKG/usr/share/doc/cob/" \;
+          fi
+        done
+        cp LICENSE.md "$PKG/usr/share/doc/cob/copyright"
+        ls "$PKG/usr/lib/cob"
+
+        # Launchers. They exec the real binary by its full path, so
+        # popcorn_comp (which locates its bundled zig/ through
+        # /proc/self/exe) finds the zig that sits next to it.
+        for tool in cob farmer popcorn_comp; do
+          printf '#!/bin/sh\nexec /usr/lib/cob/current/%s "$@"\n' "$tool" > "$PKG/usr/bin/$tool"
+          chmod 755 "$PKG/usr/bin/$tool"
+        done
+
+        # "Architecture: all" lets this one file install on any machine;
+        # postinst then picks the right build.
+        cat > "$PKG/DEBIAN/control" <<EOF
+        Package: cob
+        Version: ${VERSION}
+        Section: devel
+        Priority: optional
+        Architecture: all
+        Maintainer: Cob Software Foundation <noreply@users.noreply.github.com>
+        Depends: libc6, libx11-6, libgl1, libxrandr2, libxinerama1, libxcursor1, libxi6
+        Homepage: https://github.com/Cob-Software-Foundation/Cob
+        Description: Cob programming language toolchain
+         Interpreter (cob), native compiler (popcorn_comp) and package
+         manager (farmer). This package contains builds for amd64, i386,
+         arm64 and armhf; the correct one is selected at install time.
+        EOF
+
+        cat > "$PKG/DEBIAN/postinst" <<'EOF'
+        #!/bin/sh
+        set -e
+        [ "$1" = "configure" ] || exit 0
+
+        LIB=/usr/lib/cob
+        ARCH=$(dpkg --print-architecture)
+
+        if [ ! -d "$LIB/$ARCH" ]; then
+            echo "cob: no build for architecture '$ARCH' in this package" >&2
+            echo "cob: available: $(ls $LIB | tr '\n' ' ')" >&2
+            exit 1
+        fi
+
+        ln -sfn "$ARCH" "$LIB/current"
+
+        # Remove the builds for other architectures to save disk space.
+        for d in "$LIB"/*/; do
+            name=$(basename "$d")
+            [ "$name" = "$ARCH" ] && continue
+            [ "$name" = "current" ] && continue
+            rm -rf "$d"
+        done
+        exit 0
+        EOF
+
+        cat > "$PKG/DEBIAN/postrm" <<'EOF'
+        #!/bin/sh
+        set -e
+        if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+            rm -f /usr/lib/cob/current
+            rmdir /usr/lib/cob 2>/dev/null || true
+        fi
+        exit 0
+        EOF
+        chmod 755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/postrm"
+
+    - name: Build the .deb
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+        dpkg-deb --root-owner-group -Zxz --build "pkg/cob_${VERSION}_all" "dist/cob_${VERSION}_all.deb"
+        dpkg-deb --info "dist/cob_${VERSION}_all.deb"
+        cd dist
+        sha256sum "cob_${VERSION}_all.deb" > "cob_${VERSION}_all.deb.sha256"
+        sha256sum "cob_${VERSION}_all.deb" > "cob_${VERSION}_all.deb.hashfrag"
+
+    # Install the package on this (amd64) runner and actually use it, so a
+    # broken package is never signed or released.
+    - name: Smoke-test the install
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y "./dist/cob_${VERSION}_all.deb"
+
+        ls -l /usr/lib/cob
+        test "$(readlink /usr/lib/cob/current)" = "amd64"
+        test "$(ls /usr/lib/cob | grep -v '^current$')" = "amd64"
+
+        cat > /tmp/smoke.cob <<'EOF'
+        pop("hello from the deb")
+        set n = 3
+        if n > 5:
+            pop("if is wrong")
+        elif n > 2:
+            pop("elif ok")
+        else:
+            pop("else is wrong")
+        EOF
+        EXPECTED="$(printf 'hello from the deb\nelif ok')"
+
+        # interpreter
+        OUT="$(cob /tmp/smoke.cob)"
+        echo "$OUT"
+        test "$OUT" = "$EXPECTED"
+
+        # native compile through the BUNDLED zig (proves zig/ is found
+        # next to the real binary, not next to the /usr/bin launcher)
+        popcorn_comp /tmp/smoke.strawberry -o /tmp/smoke_native
+        OUT="$(/tmp/smoke_native)"
+        echo "$OUT"
+        test "$OUT" = "$EXPECTED"
+
+        command -v farmer
+
+    - name: Import the GPG signing key
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::The GPG_PRIVATE_KEY repository secret is missing or empty, so the .deb cannot be signed. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "::warning::GPG_PRIVATE_KEY is not available to this run (for example a pull request from a fork). The .deb is built but NOT signed."
+          echo "SIGN=false" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        export GNUPGHOME="$RUNNER_TEMP/gnupg"
+        mkdir -p "$GNUPGHOME"
+        chmod 700 "$GNUPGHOME"
+        umask 077
+        printf '%s' "${GPG_PASSPHRASE:-}" > "$RUNNER_TEMP/gpg-passphrase"
+
+        printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --yes --pinentry-mode loopback \
+          --passphrase-file "$RUNNER_TEMP/gpg-passphrase" --import
+
+        # Fingerprint of the primary secret key (public information).
+        FPR="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="sec"{f=1;next} f&&$1=="fpr"{print $10; exit}')"
+        if [ -z "$FPR" ]; then
+          echo "::error::No secret key was found after importing GPG_PRIVATE_KEY. It must be an ASCII-armored private key (gpg --armor --export-secret-keys)."
+          exit 1
+        fi
+        echo "Signing key fingerprint: $FPR"
+
+        {
+          echo "SIGN=true"
+          echo "GNUPGHOME=$GNUPGHOME"
+          echo "GPG_PASSFILE=$RUNNER_TEMP/gpg-passphrase"
+          echo "GPG_FPR=$FPR"
+        } >> "$GITHUB_ENV"
+
+    - name: Sign the .deb
+      if: env.SIGN == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd dist
+        gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GPG_PASSFILE" \
+          --local-user "$GPG_FPR" --armor --detach-sign \
+          --output "cob_${VERSION}_all.deb.asc" "cob_${VERSION}_all.deb"
+        gpg --batch --armor --export "$GPG_FPR" > cob-gpg-public-key.asc
+
+        # Verify exactly like a user would: a brand-new keyring that contains
+        # ONLY the published public key.
+        VERIFY_HOME="$(mktemp -d)"
+        chmod 700 "$VERIFY_HOME"
+        gpg --homedir "$VERIFY_HOME" --batch --import cob-gpg-public-key.asc
+        gpg --homedir "$VERIFY_HOME" --batch --status-fd 1 \
+          --verify "cob_${VERSION}_all.deb.asc" "cob_${VERSION}_all.deb" \
+          | tee /tmp/verify.status
+        grep VALIDSIG /tmp/verify.status | grep -q "$GPG_FPR"
+        rm -rf "$VERIFY_HOME"
+        echo "Signature verified against the published public key ($GPG_FPR)."
+
+    - name: Remove the signing key from the runner
+      if: always()
+      shell: bash
+      run: |
+        if [ -n "${GNUPGHOME:-}" ]; then
+          gpgconf --kill gpg-agent || true
+          rm -rf "$GNUPGHOME"
+        fi
+        if [ -n "${GPG_PASSFILE:-}" ]; then rm -f "$GPG_PASSFILE"; fi
+
+    - name: Attest Build Provenance
+      if: github.event_name == 'push'
+      uses: actions/attest-build-provenance@v4.2.2
+      with:
+        subject-path: dist/cob_${{ env.VERSION }}_all.deb
+
+    - name: Upload the .deb artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifact-cob-deb
+        if-no-files-found: error
+        path: |
+          dist/*.deb
+          dist/*.deb.asc
+          dist/*.deb.sha256
+          dist/*.deb.hashfrag
+          dist/cob-gpg-public-key.asc
+
+  release:
+    needs: [build, deb]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

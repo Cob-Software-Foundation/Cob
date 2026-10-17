@@ -41,6 +41,25 @@ program:
   * `'elif' without a matching 'if' at the same indentation`
   * `malformed condition in if statement` (or `elif`)
   * `expected ':' to open if block` (or `elif`)
+* **A signed Debian package**, built by `build.yml` from the Linux
+  builds it already makes: `cob_0.0.7_all.deb`. It is a single file
+  that contains all four Linux builds (amd64, i386, arm64, armhf). On
+  install, the post-install script keeps the one that matches the
+  machine (`dpkg --print-architecture`) and deletes the other three;
+  `/usr/bin/cob`, `farmer` and `popcorn_comp` run that build, and
+  `popcorn_comp` still finds its bundled Zig. The package is signed with
+  a detached GPG signature. To verify it:
+
+  ```
+  gpg --import cob-gpg-public-key.asc
+  gpg --verify cob_0.0.7_all.deb.asc cob_0.0.7_all.deb
+  sha256sum -c cob_0.0.7_all.deb.sha256
+  ```
+
+  The release publishes the `.deb`, its `.asc` signature, the public
+  key, a SHA-256 file, and the package's checksum is added to
+  `checksums.txt`. The workflow refuses to publish a release if the
+  signing key is not configured, rather than shipping it unsigned.
 * An "if / else" example on the in-browser playground, and `if` on the
   website's release notes and download page.
 
@@ -73,6 +92,21 @@ program:
   `if`/`elif`/`else` chain (a bad `elif` condition, a bad statement
   inside an `else` body, a second `else`, a missing colon, an `else`
   with no `if`), which free a half-built chain.
+* The `.deb` packaging steps from `build.yml` were run end to end on an
+  amd64 machine against a package tree laid out like the real Linux
+  build artifacts. The package installed, kept only the `amd64` build,
+  linked `current` to it, ran an `if`/`elif`/`else` script with `cob`,
+  compiled and ran it with `popcorn_comp` through the launcher (which
+  found the Zig next to the real binary, not next to `/usr/bin`), and
+  then removed cleanly.
+* Signing was exercised with throwaway keys, both unprotected and
+  passphrase-protected: the signature verifies from an empty keyring
+  holding only the published public key, a one-byte change to the
+  `.deb` makes verification fail, no private key material appears in
+  any published file, and the key and passphrase file are removed from
+  the runner afterwards. A push with no key fails the job, a fork pull
+  request builds unsigned and skips signing, and a protected key with no
+  passphrase fails without producing a signature.
 * A `COBSTRW7` cache and a truncated `COBSTRW8` cache are both ignored
   with a note and the script is re-parsed correctly, rather than
   misread.
@@ -89,6 +123,17 @@ program:
   the first real `emcc` build will be whatever CI run triggers it.
   Pounce (the block-coding front end) builds from this source, so it
   inherits that gap.
+* The `deb` job has not run on GitHub Actions, and signing has not been
+  run with the real `GPG_PRIVATE_KEY`. In the local run the amd64 build
+  was real but the Zig was a stand-in that forwards to gcc, and the
+  i386, arm64 and armhf builds were placeholders, so those three were
+  packaged but never installed or run on matching hardware.
+* The `.deb` is one `Architecture: all` package holding binaries for
+  several architectures, which is not how Debian packaging is normally
+  done and which `lintian` will complain about. `dpkg --verify` reports
+  the deleted other-architecture files as missing, by design. `apt`
+  does not check detached `.asc` signatures on a loose `.deb`; the
+  signature is for manual verification, not for an `apt` repository.
 * `popcorn_comp`'s `-Wpedantic` build still emits one warning about an
   over-long string literal in the C runtime preamble. It was already
   there before this release and this release did not touch it.
