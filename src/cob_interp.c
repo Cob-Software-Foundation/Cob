@@ -25,6 +25,12 @@
  *                             (strcmp-based) or two numbers; comparing
  *                             a string to a number is a warning and
  *                             evaluates to false rather than guessing.
+ *   if <condition>:           conditional block, same condition grammar
+ *   [elif <condition>:]       as `while` (==, !=, <, >, <=, >=, or a bare
+ *   [else:]                   truthiness test). Bodies are indented.
+ *                             `elif`/`else` must sit at the same
+ *                             indentation as their `if`. `elif` is
+ *                             desugared to a nested if inside else.
  *   shuck <library_name>      loads <library_name>.cob (or
  *                             cob_modules/<library_name>/<library_name>.cob,
  *                             matching farmer's install layout) and
@@ -399,7 +405,10 @@ static void cond_free(Cond *c) {
  * ------------------------------------------------------------------- */
 /* STMT_EXTERN (CEP-2) is appended last so earlier kinds keep their numeric
  * values -- see the matching note on EXPR_EXTERN_CALL. */
-typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN } StmtKind;
+/* STMT_IF is appended after STMT_EXTERN for the same reason. `elif` is
+ * not its own kind: the parser desugars `elif` into an STMT_IF nested as
+ * the sole statement of the previous if's else_body. */
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF } StmtKind;
 
 typedef struct Program {
     struct Stmt *items;
@@ -413,6 +422,7 @@ typedef struct Stmt {
     Cond *while_cond; Program while_body;     /* STMT_WHILE */
     char *trash_name;                         /* STMT_TRASH */
     char *ext_name; char *ext_lib;            /* STMT_EXTERN: C symbol name, library path */
+    Cond *if_cond; Program if_body; Program else_body;  /* STMT_IF (else_body may be empty) */
 } Stmt;
 
 static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
@@ -426,6 +436,10 @@ static int program_uses_harvest_or_trash(const Program *p) {
             case STMT_TRASH: return 1;
             case STMT_WHILE:
                 if (program_uses_harvest_or_trash(&s->while_body)) return 1;
+                break;
+            case STMT_IF:
+                if (program_uses_harvest_or_trash(&s->if_body)) return 1;
+                if (program_uses_harvest_or_trash(&s->else_body)) return 1;
                 break;
             default: break;
         }
@@ -444,6 +458,15 @@ static void stmt_free_contents(Stmt *s) {
             size_t i;
             for (i = 0; i < s->while_body.count; i++) stmt_free_contents(&s->while_body.items[i]);
             free(s->while_body.items);
+            break;
+        }
+        case STMT_IF: {
+            size_t i;
+            cond_free(s->if_cond);
+            for (i = 0; i < s->if_body.count; i++) stmt_free_contents(&s->if_body.items[i]);
+            free(s->if_body.items);
+            for (i = 0; i < s->else_body.count; i++) stmt_free_contents(&s->else_body.items[i]);
+            free(s->else_body.items);
             break;
         }
     }
@@ -717,7 +740,7 @@ static void cob_extern_decl_free(void) {
 static int cob_is_reserved_word(const char *name) {
     static const char *const reserved[] = {
         COB_KW_WHILE, COB_KW_SET, COB_KW_POP, COB_KW_SHUCK, COB_KW_HARVEST,
-        COB_KW_TRASH, COB_KW_EXTERN,
+        COB_KW_TRASH, COB_KW_EXTERN, COB_KW_IF, COB_KW_ELIF, COB_KW_ELSE,
         COB_KW_SQL_OPEN, COB_KW_SQL_EXEC, COB_KW_SQL_QUERY, COB_KW_SQL_CLOSE,
         COB_KW_TCL_EVAL, COB_KW_TK_EVAL,
         COB_KW_WINDOW_OPEN, COB_KW_WINDOW_LABEL, COB_KW_WINDOW_WAIT, COB_KW_WINDOW_CLOSE,
@@ -2031,6 +2054,10 @@ static void execute(const Program *prog, EvalCtx *ctx) {
             case STMT_EXTERN:
                 cob_extern_bind(s->ext_name, s->ext_lib);
                 break;
+            case STMT_IF:
+                if (eval_cond(s->if_cond, ctx)) execute(&s->if_body, ctx);
+                else execute(&s->else_body, ctx);
+                break;
             case STMT_WHILE: {
                 unsigned long iterations = 0;
                 while (eval_cond(s->while_cond, ctx)) {
@@ -2113,6 +2140,23 @@ static int parse_while_header(const char *after_kw, int line_no, Cond **out_cond
     p = skip_blank(p);
     if (*p != COB_BLOCK_COLON) {
         fprintf(stderr, "[cob_interp] syntax error at line %d: expected ':' to open while block\n", line_no);
+        cond_free(cond);
+        return -1;
+    }
+    *out_cond = cond;
+    return 0;
+}
+
+static int parse_if_header(const char *after_kw, int line_no, const char *kw_name, Cond **out_cond) {
+    Cond *cond;
+    const char *p = parse_condition(after_kw, &cond);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: malformed condition in %s statement\n", line_no, kw_name);
+        return -1;
+    }
+    p = skip_blank(p);
+    if (*p != COB_BLOCK_COLON) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected ':' to open %s block\n", line_no, kw_name);
         cond_free(cond);
         return -1;
     }
@@ -2395,6 +2439,61 @@ static int cob_load_library(const char *name, int line_no, Program *out_prog) {
 /* ---------------------------------------------------------------------
  * RECURSIVE BLOCK PARSER
  * ------------------------------------------------------------------- */
+/* Parses one `if` or `elif` line (the caller has already matched the
+ * keyword, whose length is kw_len), its indented body, and any `elif` /
+ * `else` that follows at the SAME indent, into *out. `elif` becomes a
+ * nested STMT_IF stored as the only statement of else_body, so the
+ * interpreter, cache format and compiler only ever deal with if/else.
+ * On failure everything built so far is freed. */
+static int parse_if_chain(PhysLines *lines, size_t *pos, size_t kw_len, const char *kw_name, Stmt *out) {
+    PhysLine *pl = &lines->items[*pos];
+    int line_no = pl->line_no;
+    int this_indent = pl->indent;
+    Cond *cond;
+    Program body;
+
+    if (parse_if_header(pl->content + kw_len, line_no, kw_name, &cond) != 0) return -1;
+    (*pos)++;
+    if (parse_block(lines, pos, this_indent, &body) != 0) { cond_free(cond); return -1; }
+
+    memset(out, 0, sizeof(*out));
+    out->kind = STMT_IF;
+    out->if_cond = cond;
+    out->if_body = body;
+    program_init(&out->else_body);
+
+    if (*pos < lines->count && lines->items[*pos].indent == this_indent) {
+        const char *next = lines->items[*pos].content;
+        size_t elif_len = strlen(COB_KW_ELIF);
+        size_t else_len = strlen(COB_KW_ELSE);
+
+        if (strncmp(next, COB_KW_ELIF, elif_len) == 0 && next[elif_len] == ' ') {
+            Stmt nested;
+            if (parse_if_chain(lines, pos, elif_len, COB_KW_ELIF, &nested) != 0) {
+                stmt_free_contents(out);
+                return -1;
+            }
+            if (program_push(&out->else_body, nested) != 0) {
+                stmt_free_contents(&nested);
+                stmt_free_contents(out);
+                return -1;
+            }
+        } else if (strncmp(next, COB_KW_ELSE, else_len) == 0) {
+            const char *p = skip_blank(next + else_len);
+            if (*p == COB_BLOCK_COLON && *skip_blank(p + 1) == '\0') {
+                (*pos)++;
+                if (parse_block(lines, pos, this_indent, &out->else_body) != 0) {
+                    stmt_free_contents(out);
+                    return -1;
+                }
+            }
+            /* else: `else` not followed by ':' -- leave the line for
+             * parse_block's "unrecognized statement" error. */
+        }
+    }
+    return 0;
+}
+
 static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program *out_prog) {
     program_init(out_prog);
 
@@ -2441,6 +2540,23 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
             s.kind = STMT_WHILE; s.while_cond = cond; s.while_body = body;
             if (program_push(out_prog, s) != 0) { cond_free(cond); program_free(&body); program_free(out_prog); return -1; }
             continue;
+        }
+
+        kw_len = strlen(COB_KW_IF);
+        if (strncmp(trimmed, COB_KW_IF, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            Stmt s;
+            if (parse_if_chain(lines, pos, kw_len, COB_KW_IF, &s) != 0) { program_free(out_prog); return -1; }
+            if (program_push(out_prog, s) != 0) { stmt_free_contents(&s); program_free(out_prog); return -1; }
+            continue;
+        }
+
+        if ((strncmp(trimmed, COB_KW_ELSE, strlen(COB_KW_ELSE)) == 0 &&
+             (trimmed[strlen(COB_KW_ELSE)] == ':' || trimmed[strlen(COB_KW_ELSE)] == ' ' || trimmed[strlen(COB_KW_ELSE)] == '\0')) ||
+            (strncmp(trimmed, COB_KW_ELIF, strlen(COB_KW_ELIF)) == 0 && trimmed[strlen(COB_KW_ELIF)] == ' ')) {
+            fprintf(stderr, "[cob_interp] syntax error at line %d: '%s' without a matching 'if' at the same indentation\n",
+                    line_no, (trimmed[2] == 's') ? COB_KW_ELSE : COB_KW_ELIF);
+            program_free(out_prog);
+            return -1;
         }
 
         kw_len = strlen(COB_KW_TRASH);
@@ -2625,6 +2741,10 @@ static int write_stmt(ByteBuf *b, const Stmt *s) {
         case STMT_WHILE:
             if (write_cond(b, s->while_cond) != 0) return -1;
             return write_program(b, &s->while_body);
+        case STMT_IF:
+            if (write_cond(b, s->if_cond) != 0) return -1;
+            if (write_program(b, &s->if_body) != 0) return -1;
+            return write_program(b, &s->else_body);
     }
     return -1;
 }
@@ -2821,6 +2941,15 @@ static int read_stmt(ByteReader *r, Stmt *out) {
         case STMT_WHILE:
             if (read_cond(r, &out->while_cond) != 0) return -1;
             return read_program(r, &out->while_body);
+        case STMT_IF:
+            if (read_cond(r, &out->if_cond) != 0) return -1;
+            if (read_program(r, &out->if_body) != 0) { cond_free(out->if_cond); out->if_cond = NULL; return -1; }
+            if (read_program(r, &out->else_body) != 0) {
+                cond_free(out->if_cond); out->if_cond = NULL;
+                program_free(&out->if_body);
+                return -1;
+            }
+            return 0;
         default: return -1;
     }
 }

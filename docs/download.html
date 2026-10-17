@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Download Cob — Cob</title>
-<meta name="description" content="Download Cob 0.0.6 for Windows, macOS, or Linux, or build from source.">
+<meta name="description" content="Download Cob 0.0.7 for Windows, macOS, or Linux, or build from source.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -85,7 +85,7 @@
 
   <section class="page-head">
     <div class="wrap">
-      <div class="eyebrow-plain">Version 0.0.6</div>
+      <div class="eyebrow-plain">Version 0.0.7</div>
       <h1>Download Cob</h1>
       <p class="lede">Grab the interpreter, compiler, and package manager for your platform, or build from source. All three tools ship together in every release.</p>
     </div>
@@ -178,6 +178,11 @@ $ grep cob-linux-amd64 checksums.txt<br>
       <table class="rel">
         <thead><tr><th>Version</th><th>Notes</th><th></th></tr></thead>
         <tbody>
+          <tr>
+            <td class="ver">0.0.7</td>
+            <td class="note">Conditionals: <code>if &lt;condition&gt;:</code> with optional <code>elif</code> and <code>else:</code> blocks, using the same conditions as <code>while</code> and nesting freely. Works in both cob_interp and popcorn_comp, which produce identical output. The .strawberry cache format bumped to COBSTRW8 (old caches are rebuilt automatically).</td>
+            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.7">Release page →</a></td>
+          </tr>
           <tr>
             <td class="ver">0.0.6</td>
             <td class="note">A C API / FFI (<code>extern &lt;name&gt;(...) from "&lt;lib&gt;"</code>): call a real exported C function from a Cob script, with the same fixed <code>CobValue</code> signature in both cob_interp (dlopen/dlsym, resolved eagerly) and popcorn_comp (a real static link, no dlopen in the compiled binary at all). Also new: a WebAssembly build of the pure-language core powers the in-browser <a href="play/index.html">playground</a> — desktop-only keywords (SQLite, _cobwindow, and now extern) no-op there with a one-time notice instead of crashing.</td>

@@ -140,7 +140,9 @@ typedef struct { Expr *left; CondOp op; Expr *right; } Cond;
 
 /* STMT_EXTERN (CEP-2) is appended last, same as cob_interp.c -- no
  * numbering gap to bridge here, unlike ExprKind above. */
-typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN } StmtKind;
+/* STMT_IF mirrors cob_interp.c (appended last; `elif` is already desugared
+ * to a nested if in else_body by the interpreter's parser). */
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF } StmtKind;
 typedef struct Program { struct Stmt *items; size_t count, capacity; } Program;
 typedef struct Stmt {
     StmtKind kind;
@@ -149,6 +151,7 @@ typedef struct Stmt {
     Cond *while_cond; Program while_body;
     char *trash_name;
     char *ext_name; char *ext_lib;   /* STMT_EXTERN */
+    Cond *if_cond; Program if_body; Program else_body;   /* STMT_IF */
 } Stmt;
 
 static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
@@ -320,6 +323,10 @@ static int read_stmt(ByteReader *r, Stmt *out) {
         case STMT_WHILE:
             if (read_cond(r, &out->while_cond) != 0) return -1;
             return read_program(r, &out->while_body);
+        case STMT_IF:
+            if (read_cond(r, &out->if_cond) != 0) return -1;
+            if (read_program(r, &out->if_body) != 0) return -1;
+            return read_program(r, &out->else_body);
         default: return -1;
     }
 }
@@ -434,6 +441,11 @@ static void collect_program(const Program *p, NameSet *ns) {
             case STMT_SET: nameset_add(ns, s->set_name); collect_expr(s->set_expr, ns); break;
             case STMT_TRASH: nameset_add(ns, s->trash_name); break;
             case STMT_WHILE: collect_cond(s->while_cond, ns); collect_program(&s->while_body, ns); break;
+            case STMT_IF:
+                collect_cond(s->if_cond, ns);
+                collect_program(&s->if_body, ns);
+                collect_program(&s->else_body, ns);
+                break;
             default: break;
         }
     }
@@ -510,6 +522,9 @@ static int collect_externs(const Program *p, ExternSet *es) {
             if (externset_add(es, s->ext_name, s->ext_lib) != 0) return -1;
         } else if (s->kind == STMT_WHILE) {
             if (collect_externs(&s->while_body, es) != 0) return -1;
+        } else if (s->kind == STMT_IF) {
+            if (collect_externs(&s->if_body, es) != 0) return -1;
+            if (collect_externs(&s->else_body, es) != 0) return -1;
         }
     }
     return 0;
@@ -642,6 +657,17 @@ static int emit_program(StrBuf *b, const Program *p) {
                 if (emit_program(b, &s->while_body) != 0) return -1;
                 if (sb_append(b, "}\n") != 0) return -1;
                 break;
+            case STMT_IF:
+                if (sb_append(b, "if (") != 0) return -1;
+                if (emit_cond(b, s->if_cond) != 0) return -1;
+                if (sb_append(b, ") {\n") != 0) return -1;
+                if (emit_program(b, &s->if_body) != 0) return -1;
+                if (s->else_body.count > 0) {
+                    if (sb_append(b, "} else {\n") != 0) return -1;
+                    if (emit_program(b, &s->else_body) != 0) return -1;
+                }
+                if (sb_append(b, "}\n") != 0) return -1;
+                break;
             case STMT_EXTERN:
                 /* No-op here: unlike cob_interp's dlopen/dlsym, which
                  * genuinely happens at this point in execution, the
@@ -670,6 +696,8 @@ static int program_uses_harvest_or_trash(const Program *p) {
                 return 1;
         }
         if (s->kind == STMT_WHILE && program_uses_harvest_or_trash(&s->while_body)) return 1;
+        if (s->kind == STMT_IF && (program_uses_harvest_or_trash(&s->if_body) ||
+                                   program_uses_harvest_or_trash(&s->else_body))) return 1;
     }
     return 0;
 }

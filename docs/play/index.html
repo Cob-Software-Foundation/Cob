@@ -99,6 +99,7 @@
         <button data-ex="hello">Hello, world</button>
         <button data-ex="loop">A while loop</button>
         <button data-ex="strings">Strings</button>
+        <button data-ex="ifelse">if / else</button>
         <button data-ex="sandbox">Desktop-only keywords</button>
       </div>
     </div>
@@ -190,6 +191,14 @@
       'set name = "corn"\n' +
       'pop("hello, " + name + "!")\n' +
       'pop("1 + 1 == 2 is " + (1 + 1 == 2))\n',
+    ifelse:
+      'set score = 85\n' +
+      'if score >= 90:\n' +
+      '    pop("grade: A")\n' +
+      'elif score >= 80:\n' +
+      '    pop("grade: B")\n' +
+      'else:\n' +
+      '    pop("keep practicing")\n',
     sandbox:
       '# These are desktop-only features -- in this browser sandbox they\n' +
       '# quietly no-op (see the note below the playground) instead of\n' +

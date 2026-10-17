@@ -40,7 +40,7 @@ extern "C" {
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
 #define COB_VERSION_PATCH       2
-#define COB_VERSION_STRING      "0.0.6"
+#define COB_VERSION_STRING      "0.0.7"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
@@ -171,6 +171,9 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
 #define COB_KW_SHUCK          "shuck"    /* shuck <library_name>          */
 #define COB_KW_HARVEST        "harvest"  /* harvest(<bytes>) [--no-gc]     */
 #define COB_KW_TRASH          "trash"    /* trash(<variable>) [--no-gc]    */
+#define COB_KW_IF             "if"       /* if <condition>:               */
+#define COB_KW_ELIF           "elif"     /* elif <condition>:             */
+#define COB_KW_ELSE           "else"     /* else:                         */
 
 /* SQLite3 / Tcl / Tk bindings (v0.0.5). Each is a call-style builtin
  * expression, same shape as harvest(<bytes>): a keyword directly
@@ -332,6 +335,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  *   COBSTRW5 -- _cobwindow (window_open/label/wait/close)
  *   COBSTRW6 -- raygui widgets (window_button/slider/textbox)
  *   COBSTRW7 -- C API / FFI (CEP-2): STMT_EXTERN + EXPR_EXTERN_CALL
+ *   COBSTRW8 -- if/elif/else: STMT_IF (cond, then-program, else-program)
  * popcorn_comp.c does not implement codegen for the SQLite/_cobwindow/
  * Tcl-Tk/widget keywords added in v4-v6 -- those bumps only ever
  * *appended* new ExprKind values after EXPR_HARVEST, never changed the
@@ -341,7 +345,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  * file. That's what makes sharing one writer-side magic constant safe
  * for a reader that only ever implements a subset of it.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW7"
+#define STRAWBERRY_MAGIC      "COBSTRW8"
 #define STRAWBERRY_MAGIC_LEN  8
 
 #ifdef __cplusplus

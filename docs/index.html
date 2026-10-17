@@ -35,11 +35,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.6 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.7 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.6</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.7</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.dev/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -132,17 +132,21 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.6</div>
+        <div class="rv">0.0.7</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li>A C API / FFI: call a real exported C function from a Cob script with <code class="mono">extern &lt;name&gt;(...) from "&lt;lib&gt;"</code> — dlopen/dlsym in cob_interp, a real static link (no dlopen at all) in popcorn_comp</li>
-          <li>A WebAssembly build of the pure-language core powers an in-browser <a href="play/index.html">playground</a> — try Cob with zero install</li>
+          <li><code class="mono">if</code> / <code class="mono">elif</code> / <code class="mono">else</code>: real conditional blocks using the same conditions as <code class="mono">while</code>, in both cob_interp and popcorn_comp</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.7</span>
+          <strong>if / elif / else</strong>
+          <p>Cob finally has conditionals. <code class="mono">if &lt;condition&gt;:</code> runs an indented block when the condition is true; optional <code class="mono">elif &lt;condition&gt;:</code> and <code class="mono">else:</code> blocks follow at the same indentation. Conditions work exactly like <code class="mono">while</code> conditions (comparisons on two numbers or two strings, or a bare truthiness test), and blocks nest freely inside each other and inside loops. Shipped in both cob_interp and popcorn_comp, which print identical output for the same program. The .strawberry cache format bumped to COBSTRW8, so older caches are rebuilt automatically.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.6</span>
           <strong>A C API / FFI, and a WebAssembly playground</strong>

@@ -1,291 +1,103 @@
-# Cob Language v0.0.6
+# Cob Language v0.0.7
 
 ## Overview
 
-The headline feature is CEP-2: a C API / FFI for native Cob
-extensions. A Cob script can now call a real, exported C function:
+The headline feature is conditionals. Cob now has `if`, `elif` and
+`else`:
 
 ```
-extern calculate_fast(x) from "math_ext.so"
-pop("result=" + calculate_fast(42))
+set score = 85
+if score >= 90:
+    pop("grade: A")
+elif score >= 80:
+    pop("grade: B")
+else:
+    pop("keep practicing")
 ```
 
-and the native side is an ordinary C function against one fixed
-signature, with no Cob-specific build step of its own:
+Both tools support it, and they print identical output for the same
+program:
 
-```c
-#include "cob.h"
-COB_EXPORT CobValue calculate_fast(CobValue *argv, int argc) {
-    if (argc < 1 || argv[0].kind != COB_INT) return cob_int(0);
-    return cob_int(argv[0].as.i * argv[0].as.i + 1);
-}
-```
-
-Both tools support it, with two different, deliberately-matched
-strategies:
-
-* **`cob_interp`** resolves `extern` *eagerly*, right when the
-  statement runs -- not lazily on first call -- using `dlopen()`/
-  `dlsym()` on Linux/macOS and `LoadLibraryA()`/`GetProcAddress()` on
-  Windows. A missing library or symbol prints one warning and binds a
-  harmless stub that evaluates to `0`; it never aborts the script.
-* **`popcorn_comp`** links statically: it emits a real
-  `extern CobValue name(CobValue*, int);` forward declaration into the
-  generated C and passes the named library straight to the spawned
-  compiler's command line (`-lname`, or the literal path, matching
-  CEP-2's own examples) -- no `dlopen()` anywhere in the compiled
-  binary. Because that's a *static* link, the same extern name can't be
-  pointed at two different libraries anywhere in one program; doing so
-  is a clear compile-time error instead of silently picking one.
-
-Second: a WebAssembly build of the pure-language core now powers an
-in-browser playground at `/play` -- try Cob with zero install, no
-download, nothing sent anywhere. It's deliberately the stripped-down
-`cob_interp` core: no SQLite, no Tcl/Tk, no `_cobwindow`, and no
-`extern` (a browser tab can't `dlopen()` anything). All of those
-keywords still *parse* in that build; they just quietly no-op and
-print a one-time notice to the sandbox's own output instead of
-crashing, so the rest of the script keeps running:
-
-```
-WARNING [COB Warning]: Desktop graphics (_cobwindow) and storage (SQLite) are bypassed in the web sandbox.
--> Download the native compiler at cob.pixel-pulse.dev/download.html to launch full windows and databases on your desktop!
-```
-
-Also in this release: `--license` actually works now (see "Fixed"
-below), and the project finished moving off its old `*.work.gd`/
-`*.duckdns.org` hostnames onto `pixel-pulse.dev` everywhere -- the
-license notices, the security contact, the package-registry default
-URL, and the website.
+* **`cob_interp`** parses, caches and runs it.
+* **`popcorn_comp`** compiles it to a plain C `if (...) { ... } else
+  { ... }`.
 
 ## Added
 
-### C API / FFI (CEP-2)
+* **`if <condition>:`** runs its indented block when the condition is
+  true. The condition grammar is exactly `while`'s: `==`, `!=`, `<`,
+  `>`, `<=`, `>=` on two numbers or two strings, or a bare expression
+  as a truthiness test (non-zero for a number, non-empty for a string).
+  Comparing a string to a number still warns and evaluates to false.
+* **`elif <condition>:`** and **`else:`** may follow an `if` at the
+  SAME indentation. Any number of `elif`s, at most one `else`.
+* Blocks nest freely: `if` inside `if`, inside `while`, and `while`
+  inside `if`.
+* `if`, `elif` and `else` are now reserved words, so an `extern` can no
+  longer be declared with one of those names (same rule as `while`,
+  `set`, `pop`, ...).
+* Clear syntax errors, each with a line number:
+  * `'else' without a matching 'if' at the same indentation`
+  * `'elif' without a matching 'if' at the same indentation`
+  * `malformed condition in if statement` (or `elif`)
+  * `expected ':' to open if block` (or `elif`)
+* An "if / else" example on the in-browser playground, and `if` on the
+  website's release notes and download page.
 
-```
-extern <name>(<param>, ...) from "<library>"
-```
+## Changed
 
-* `include/cob.h` -- the one header a native extension needs: the
-  `CobValue` struct (an `int`/`string` tagged union, matching Cob's own
-  two value kinds exactly), the `CobFFIFunc` signature every native
-  function has regardless of how many arguments it takes, and
-  `cob_int()`/`cob_str()` constructors for building a return value.
-  `COB_EXPORT` makes the symbol visible to `dlsym()`/`GetProcAddress()`
-  (required on Windows; harmless elsewhere).
-* Parameter names in `extern name(x, y) from "lib"` are accepted for
-  readability but carry no type information and aren't stored --
-  arity is deliberately not checked against the native function,
-  matching how Cob already treats every other call.
-* An `extern` name can't reuse a keyword or a built-in call name
-  (`extern pop(x) from "lib"` is a syntax error) -- the built-in would
-  otherwise silently win at every call site, which is a worse failure
-  mode than refusing the declaration outright.
-* `.strawberry` cache format bumped to `COBSTRW7` (from `COBSTRW6`):
-  `STMT_EXTERN` and `EXPR_EXTERN_CALL` round-trip through the cache
-  the same way every other statement/expression kind does.
-* `popcorn_comp` link arguments: a library named with a path or
-  extension (`"math_ext.so"`, `"./a.so"`) is passed to the compiler as
-  a literal link input, matching CEP-2's own example; a bare name with
-  neither (`"m"`, for `libm`) becomes a conventional `-lm` flag. A
-  bare-filename native library (no directory component) also gets a
-  `-Wl,-rpath` pointed at the directory `popcorn_comp` ran from, so
-  "the `.so` sitting next to the script" resolves automatically at
-  run time without needing `$LD_LIBRARY_PATH` set by hand -- Windows
-  and macOS/Linux-without-a-path-like-library skip this; PE's DLL
-  search order already includes the executable's own directory.
-* `tools/ffi/` -- a worked example: `math_ext.c` (four native
-  functions covering int args/returns, string args/returns, variable
-  arity, and a zero-argument call) plus `ffi_test.cob` exercising all
-  of them, including a nested call (`calculate_fast(calculate_fast(2))`)
-  and a nonexistent symbol.
-
-### Browser sandbox / WebAssembly (`make wasm`, `make play`)
-
-* `make wasm` compiles `src/file_io.c` + `src/cob_interp.c` with
-  Emscripten and `-DCOB_WASM` -- deliberately just those two files,
-  with none of `COB_WITH_SQLITE`/`COB_WITH_TCL`/`COB_WITH_TK`/
-  `COB_WITH_COBWINDOW` defined, so there's no `vendor/` build at all:
-  no SQLite, no Tcl/Tk (and therefore no autoconf), no raylib/raygui.
-  `make play` does the same and copies the two output files
-  (`cob_interp.js`, `cob_interp.wasm`) into `docs/play/`, next to the
-  playground page.
-* `sql_open`/`sql_exec`/`sql_query`/`sql_close`, every `_cobwindow`
-  keyword, and `shuck cobwindow` all still parse under `-DCOB_WASM`
-  and become silent no-ops, printing the sandbox notice to stdout
-  once per run (not once per call) the first time any of them is hit.
-* `extern` gets its own tailored sandbox notice (there's genuinely no
-  `dlopen()` in a `.wasm` module, so this isn't the same "feature
-  compiled out" situation as SQLite/`_cobwindow` -- it's a hard
-  platform limit) and evaluates to `0`, same as a failed native bind.
-* `docs/play/index.html` -- the actual playground: a two-pane editor/
-  terminal page matching the rest of the site's design, four example
-  scripts (including one that deliberately exercises the sandbox
-  no-op path), Ctrl/Cmd+Enter to run, and a fresh WebAssembly module
-  instance per run (so script state, the once-per-run warning flag,
-  and the extern table all start clean every time).
-* `.github/workflows/pages.yml` now builds the WASM module (a real,
-  version-pinned `emsdk`, not a distro package -- see "Fixed" below
-  for why that distinction mattered) immediately before uploading
-  `docs/` as the Pages artifact, since the two generated files are
-  `.gitignore`'d on purpose rather than committed and left to drift
-  from `src/cob_interp.c`.
-* A `Play` link in the site nav on every page.
-
-### `--license`
-
-Every tool (`cob_interp`, `popcorn_comp`, `farmer`) now actually
-supports `--license`, printing the short PolyForm Noncommercial notice
-and exiting 0 -- and it's documented in each tool's own usage/`--help`
-text this time, not left as a hidden flag with a comment claiming it
-works. See "Fixed" below.
-
-### CI
-
-* `test_ffi` (`build.yml`): builds a tiny native extension with plain
-  `gcc`, then round-trips a script using `extern` three ways --
-  `cob_interp` cold, `cob_interp` against its own `.strawberry` cache,
-  and `popcorn_comp`'s statically-linked output -- diffing all three
-  against each other. Also confirms the missing-library path warns and
-  returns `0` instead of crashing.
-* `test_wasm` (`build.yml`): builds the WASM sandbox for Node
-  (`WASM_ENV=node`, not the default `web,worker` the real site ships),
-  runs a plain script and confirms its output, then runs a script
-  using `sql_open` and `extern` together and confirms both the
-  sandbox-warning text and that the script still finishes.
-
-## Fixed
-
-* **`--license` was dead code.** `cob_print_license()` existed in
-  `include/common.h` but nothing ever called it, and `--license`
-  wasn't recognized by any of the three tools' argument parsing --
-  `cob_interp --license` printed "unrecognized flag" and exited 1,
-  directly contradicting the comment sitting right above
-  `COB_LICENSE_NOTICE` that described it as a real, working flag.
-  Added a shared `cob_check_hidden_license_flag()` (mirroring the
-  existing `--version` helper) and wired it into all three tools'
-  `main()`, plus their usage text -- unlike `--version`, this one is
-  meant to be discoverable, not hidden.
-* **A real use-after-free in `popcorn_comp`'s generated FFI adapter.**
-  The first version of the generated C converted each argument to the
-  native `CobFFIValue` form by aliasing its string pointer, then
-  immediately freed the source `CobValue` -- before the native
-  function that still held the aliased pointer had actually been
-  called. `greet("corn")` compiled fine and ran, but printed garbage
-  instead of `"Hello, corn!"`. Fixed by moving the free to after the
-  native call returns, matching `cob_interp.c`'s own real evaluation
-  order (evaluate all arguments, call the function, free() them only
-  then) -- caught by actually running the compiled output and
-  comparing it against the interpreter's output for the same script,
-  not just by getting both to compile cleanly.
-* **`sb_appendf()`'s fixed internal buffer (512 bytes) was too small**
-  for the new FFI adapter's multi-line template and would have
-  silently truncated it via `vsnprintf()`, producing broken, half-written
-  C that would have failed far away, inside the spawned compiler, with
-  no indication why. Enlarged to 4096 bytes and added an explicit
-  check that now treats a would-be truncation as a hard error instead
-  of silently emitting partial output -- a correctness fix for every
-  other call site in the file, not just the new one.
-* **Old `*.work.gd`/`*.duckdns.org` hostnames**, replaced with
-  `pixel-pulse.dev` throughout: the security contact
-  (`.github/SECURITY.md`), every copyright notice's required-notice
-  URL (`LICENSE.md`, `legal/LICENSE.md`, `EMBED-README.md`,
-  `include/common.h`), the package-registry default base URL
-  (`COB_FARMER_DEFAULT_BASE_URL`), and five website pages' nav/footer
-  links and body copy. Left untouched on purpose: the one `*.work.gd`
-  mention in this file's own v0.0.5 entry (a dated historical record
-  of a past fix, not a live link) and the "moved from
-  pixel-pulse-labs to Cob-Software-Foundation" GitHub-org history
-  (a separate, still-true fact unrelated to the DNS migration).
+* **`.strawberry` cache format bumped from `COBSTRW7` to `COBSTRW8`.**
+  A new statement kind (`STMT_IF`) was appended, with the condition
+  followed by the then-block and the else-block. Existing caches are
+  detected as stale and rebuilt automatically the next time a script
+  runs (you will see one `cache ... unreadable, reparsing source` note
+  per script). Nothing needs to be deleted by hand.
+* `elif` is not a separate kind in the cache or the compiler: the
+  parser turns it into an `if` nested inside the previous `else`, so
+  the cache reader/writer and the code generator only ever deal with
+  if/else.
 
 ## Verified this session
 
-* `tools/ffi/ffi_test.cob` (int args/returns, string args/returns,
-  variable arity, a zero-argument call, a nested call, and a call to a
-  symbol that doesn't exist) produces byte-identical output three
-  ways: `cob_interp` run cold, `cob_interp` against its own
-  `.strawberry` cache, and `popcorn_comp`'s statically-linked native
-  output.
-* `cob_interp`'s native build (including the new `extern`/dlopen code
-  path) compiles clean under `-Wall -Wextra -Wpedantic` and runs clean
-  under AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer,
-  including an `extern` statement that re-runs inside a `while` loop
-  (confirming the previous library handle is closed, not leaked, on
-  rebind).
-* `popcorn_comp`'s extern-conflict detection (`extern f(x) from "a.so"`
-  then later `extern f(x) from "b.so"` for the same program) rejects
-  with a clear compile-time error rather than silently picking one;
-  a missing library at actual link time fails the spawned compiler
-  with a clear error and nonzero exit, same as any other bad input.
-* The `-DCOB_WASM` build's C-level correctness was verified
-  independently of Emscripten: compiled with Zig's bundled, genuinely
-  version-matched `wasm32-wasi` clang (installed via `pip install
-  ziglang`, since this environment's network policy blocks
-  `storage.googleapis.com`, which both the real `emsdk` installer and
-  a working Debian `emscripten` package ultimately depend on) and run
-  under Node's experimental WASI support. Confirmed: ordinary scripts
-  produce output identical to the native build; `sql_open` and every
-  `_cobwindow` keyword no-op with the documented notice printed
-  exactly once; `extern` no-ops with its own notice and evaluates to
-  `0`; nothing crashes; the full `tools/ffi/ffi_test.cob` suite runs
-  to completion with every extern call correctly evaluating to `0`.
-* Root-caused why `emcc` itself, installed via a force-assembled
-  Debian `emscripten` package (apt's own version has unresolvable
-  dependency conflicts with this environment's installed `nodejs` and
-  had to be forced in with mismatched `clang-15`/`lld-15`/`binaryen`
-  packages), silently stripped the *entire* compiled program during
-  link -- reporting success, exit 0, and producing a non-functional
-  ~1.7 KB `.wasm` with no user code in it at all, even for a one-line
-  `main()`. Confirmed by bisection (a single-file, single-translation-
-  unit build using the exact same mismatched toolchain showed the
-  identical symptom) that this is a toolchain-mismatch problem, not a
-  `cob_interp.c`/`-DCOB_WASM` bug: Emscripten expects its own patched
-  LLVM fork, and pairing its frontend with a vanilla distro
-  `clang`/`lld` is exactly the combination upstream's own documentation
-  warns against. `docs/play/index.html`'s JS driver logic (module
-  readiness detection, loading each example, running a script,
-  `print`/`printErr` capture and line-classification for the sandbox
-  warning text, Ctrl/Cmd+Enter, Tab-key indentation) was validated
-  against the real, documented Emscripten `MODULARIZE`/`FS`/`callMain`
-  API contract using `jsdom` plus a hand-written mock module matching
-  that contract, with correct browser script-execution ordering
-  (the mock `createCobModule` global defined before the page's own
-  inline script runs, matching how a real, successfully-loaded
-  `cob_interp.js` would behave).
-* `.github/workflows/build.yml`'s `test_ffi` and `test_wasm` jobs,
-  and `pages.yml`'s new `make play` step: YAML-parsed successfully
-  with `pyyaml`, and every shell step's *exact* extracted script
-  (parsed back out of the real YAML, not retyped by hand) was run
-  locally end-to-end -- `test_ffi` for real, against a `gcc`-built
-  native extension; `test_wasm`'s embedded Node driver against the
-  same `jsdom`/mock-module approach used for the playground page
-  above, since this environment can't run a real Emscripten-built
-  module any more than it can build one. This caught a real bug
-  before it shipped: an embedded JS string meant to contain the
-  literal two characters `\n` had an actual newline injected into it
-  instead (a Python string-escaping mistake while generating the
-  YAML), which broke the YAML's indentation -- `pyyaml` failed to
-  parse the file with a column-accurate error, pointing straight at
-  the bad line.
+* A test script (`tools/tests/if_statements.cob`, with its expected
+  output in `tools/tests/if_statements.expected`) covering if, if/else,
+  an if/elif/elif/else chain, an `if` nested inside an `elif` branch
+  inside a `while` loop, string equality and inequality, and the
+  truthiness of `0` and `""`, produces byte-identical output cold,
+  against its own `.strawberry` cache, and as a native binary built by
+  `popcorn_comp`.
+* `cob_interp` compiles clean under `-Wall -Wextra -Wpedantic` and runs
+  clean under AddressSanitizer + UndefinedBehaviorSanitizer +
+  LeakSanitizer on the valid program (cold and cached) and on seven
+  malformed programs, including errors in the middle of an
+  `if`/`elif`/`else` chain (a bad `elif` condition, a bad statement
+  inside an `else` body, a second `else`, a missing colon, an `else`
+  with no `if`), which free a half-built chain.
+* A `COBSTRW7` cache and a truncated `COBSTRW8` cache are both ignored
+  with a note and the script is re-parsed correctly, rather than
+  misread.
+* The existing arithmetic stress script still runs, and the widget
+  smoke script still runs in a plain `make cob_interp` build.
+* The `-DCOB_WASM` configuration (the same defines `make wasm` uses)
+  compiles natively and gives the same output on the test script.
 
 ## Not verified
 
-* `make wasm`/`make play` have not been run successfully end-to-end
-  with a real `emsdk` in this environment, for the network-policy
-  reason described above -- `test_wasm` and `pages.yml`'s new step are
-  believed correct (pinned to a specific, non-bleeding-edge Emscripten
-  version; built against the well-documented, stable `MODULARIZE` API)
-  but their first real execution will be whatever CI run first
-  triggers them.
+* `make wasm` has not been run here: Emscripten is not installed in
+  this environment. The code is plain C99 with no new dependencies and
+  the `-DCOB_WASM` flavor was compiled natively as described above, but
+  the first real `emcc` build will be whatever CI run triggers it.
+  Pounce (the block-coding front end) builds from this source, so it
+  inherits that gap.
+* `popcorn_comp`'s `-Wpedantic` build still emits one warning about an
+  over-long string literal in the C runtime preamble. It was already
+  there before this release and this release did not touch it.
 * Everything Windows/macOS/cross-compile-related that previous
-  releases already flagged as not verified on real hardware remains
-  not verified here either -- this release touched none of that code.
-* The rpath `popcorn_comp` now adds for a path-like `extern` library
-  has only been exercised on Linux (ELF, via `gcc`'s `-Wl,-rpath`);
-  the equivalent on macOS (Mach-O) uses the same linker flag spelling
-  via `clang`, which should work identically, but hasn't actually
-  been run on real macOS hardware.
-* The new website copy (`docs/index.html`, `docs/download.html`,
-  `docs/play/index.html`) has been checked for HTML tag balance and
-  the playground's JS logic simulated as described above, but neither
-  page has been opened in an actual browser.
+  releases flagged as not verified on real hardware remains not
+  verified; this release touched none of that code.
+* The website changes (`docs/index.html`, `docs/download.html`,
+  `docs/play/index.html`) were edited but not opened in a browser, and
+  the new playground example has not been run in the WebAssembly
+  playground.
+* The full CI suite (`ci.yml`, `build.yml`, the Docker stress image)
+  has not been run on this change.

@@ -1,0 +1,12 @@
+big
+lt5
+one
+two
+lt5
+lt5
+  four (nested)
+big
+big
+str eq ok
+zero is falsy
+done
