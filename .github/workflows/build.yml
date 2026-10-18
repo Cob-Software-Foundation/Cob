@@ -416,7 +416,10 @@ jobs:
   # passphrase, also add a GPG_PASSPHRASE secret. The matching public key is
   # published as cob-gpg-public-key.asc so anyone can verify:
   #     gpg --import cob-gpg-public-key.asc
-  #     gpg --verify cob_<VERSION>_all.deb.asc cob_<VERSION>_all.deb
+  #     gpg --verify csf-cob_<VERSION>_all.deb.asc csf-cob_<VERSION>_all.deb
+  # The package is named csf-cob (apt package names must be lowercase). The
+  # apt-repo job below publishes it as a signed apt repository, so users can
+  # run `sudo apt update && sudo apt install csf-cob` after adding the source.
   # ---------------------------------------------------------------------
   deb:
     needs: build
@@ -445,7 +448,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        PKG="pkg/cob_${VERSION}_all"
+        PKG="pkg/csf-cob_${VERSION}_all"
         mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/cob" "$PKG/usr/bin" "$PKG/usr/share/doc/cob"
 
         # matrix archive name : Debian architecture name
@@ -484,7 +487,9 @@ jobs:
         # "Architecture: all" lets this one file install on any machine;
         # postinst then picks the right build.
         cat > "$PKG/DEBIAN/control" <<EOF
-        Package: cob
+        Package: csf-cob
+        Conflicts: cob
+        Replaces: cob
         Version: ${VERSION}
         Section: devel
         Priority: optional
@@ -540,11 +545,11 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p dist
-        dpkg-deb --root-owner-group -Zxz --build "pkg/cob_${VERSION}_all" "dist/cob_${VERSION}_all.deb"
-        dpkg-deb --info "dist/cob_${VERSION}_all.deb"
+        dpkg-deb --root-owner-group -Zxz --build "pkg/csf-cob_${VERSION}_all" "dist/csf-cob_${VERSION}_all.deb"
+        dpkg-deb --info "dist/csf-cob_${VERSION}_all.deb"
         cd dist
-        sha256sum "cob_${VERSION}_all.deb" > "cob_${VERSION}_all.deb.sha256"
-        sha256sum "cob_${VERSION}_all.deb" > "cob_${VERSION}_all.deb.hashfrag"
+        sha256sum "csf-cob_${VERSION}_all.deb" > "csf-cob_${VERSION}_all.deb.sha256"
+        sha256sum "csf-cob_${VERSION}_all.deb" > "csf-cob_${VERSION}_all.deb.hashfrag"
 
     # Install the package on this (amd64) runner and actually use it, so a
     # broken package is never signed or released.
@@ -553,8 +558,9 @@ jobs:
       run: |
         set -euo pipefail
         sudo apt-get update -qq
-        sudo apt-get install -y "./dist/cob_${VERSION}_all.deb"
+        sudo apt-get install -y "./dist/csf-cob_${VERSION}_all.deb"
 
+        dpkg -s csf-cob | grep -q '^Status: install ok installed'
         ls -l /usr/lib/cob
         test "$(readlink /usr/lib/cob/current)" = "amd64"
         test "$(ls /usr/lib/cob | grep -v '^current$')" = "amd64"
@@ -631,7 +637,7 @@ jobs:
         cd dist
         gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GPG_PASSFILE" \
           --local-user "$GPG_FPR" --armor --detach-sign \
-          --output "cob_${VERSION}_all.deb.asc" "cob_${VERSION}_all.deb"
+          --output "csf-cob_${VERSION}_all.deb.asc" "csf-cob_${VERSION}_all.deb"
         gpg --batch --armor --export "$GPG_FPR" > cob-gpg-public-key.asc
 
         # Verify exactly like a user would: a brand-new keyring that contains
@@ -640,7 +646,7 @@ jobs:
         chmod 700 "$VERIFY_HOME"
         gpg --homedir "$VERIFY_HOME" --batch --import cob-gpg-public-key.asc
         gpg --homedir "$VERIFY_HOME" --batch --status-fd 1 \
-          --verify "cob_${VERSION}_all.deb.asc" "cob_${VERSION}_all.deb" \
+          --verify "csf-cob_${VERSION}_all.deb.asc" "csf-cob_${VERSION}_all.deb" \
           | tee /tmp/verify.status
         grep VALIDSIG /tmp/verify.status | grep -q "$GPG_FPR"
         rm -rf "$VERIFY_HOME"
@@ -660,7 +666,7 @@ jobs:
       if: github.event_name == 'push'
       uses: actions/attest-build-provenance@v4.2.2
       with:
-        subject-path: dist/cob_${{ env.VERSION }}_all.deb
+        subject-path: dist/csf-cob_${{ env.VERSION }}_all.deb
 
     - name: Upload the .deb artifacts
       uses: actions/upload-artifact@v4
@@ -673,6 +679,144 @@ jobs:
           dist/*.deb.sha256
           dist/*.deb.hashfrag
           dist/cob-gpg-public-key.asc
+
+  # ---------------------------------------------------------------------
+  # Signed apt repository. Publishes a "flat" apt repository as the assets of
+  # a release named apt-repo (kept separate from the versioned releases and
+  # never marked "latest"), so users can add one line to their apt sources:
+  #   https://github.com/<owner>/<repo>/releases/download/apt-repo
+  # The newest three .deb versions are kept. The package index and Release
+  # file are signed with GPG_PRIVATE_KEY (InRelease + Release.gpg).
+  # ---------------------------------------------------------------------
+  apt-repo:
+    needs: deb
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Read version
+      run: echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+
+    - name: Download the signed .deb
+      uses: actions/download-artifact@v4
+      with:
+        name: artifact-cob-deb
+        path: new
+
+    - name: Collect the existing repository files
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p repo
+        # Older versions stay installable. A missing release (first run) is fine.
+        gh release download apt-repo --repo "$GITHUB_REPOSITORY" --dir repo --pattern '*.deb' || echo "No apt-repo release yet; starting a new repository."
+        cp new/csf-cob_*_all.deb repo/
+        cp new/cob-gpg-public-key.asc repo/
+        # keep the newest three versions only
+        cd repo
+        ls -1 csf-cob_*_all.deb | sort -V | head -n -3 > ../removed.txt || true
+        xargs -r rm -f < ../removed.txt
+        echo "Versions in the repository:"; ls -1 csf-cob_*_all.deb
+
+    - name: Import the GPG signing key
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+          echo "::error::The GPG_PRIVATE_KEY repository secret is missing or empty, so the apt repository cannot be signed."
+          exit 1
+        fi
+        export GNUPGHOME="$RUNNER_TEMP/gnupg"
+        mkdir -p "$GNUPGHOME"
+        chmod 700 "$GNUPGHOME"
+        umask 077
+        printf '%s' "${GPG_PASSPHRASE:-}" > "$RUNNER_TEMP/gpg-passphrase"
+        printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --yes --pinentry-mode loopback \
+          --passphrase-file "$RUNNER_TEMP/gpg-passphrase" --import
+        FPR="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1=="sec"{f=1;next} f&&$1=="fpr"{print $10; exit}')"
+        if [ -z "$FPR" ]; then
+          echo "::error::No secret key was found after importing GPG_PRIVATE_KEY."
+          exit 1
+        fi
+        echo "Signing key fingerprint: $FPR"
+        {
+          echo "GNUPGHOME=$GNUPGHOME"
+          echo "GPG_PASSFILE=$RUNNER_TEMP/gpg-passphrase"
+          echo "GPG_FPR=$FPR"
+        } >> "$GITHUB_ENV"
+
+    - name: Build and sign the repository index
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -qq
+        sudo apt-get install -y apt-utils
+        cd repo
+        rm -f Packages Packages.gz Release InRelease Release.gpg
+        apt-ftparchive packages . > Packages
+        gzip -9kf Packages
+        apt-ftparchive \
+          -o APT::FTPArchive::Release::Origin="Cob Software Foundation" \
+          -o APT::FTPArchive::Release::Label="Cob" \
+          -o APT::FTPArchive::Release::Suite="stable" \
+          -o APT::FTPArchive::Release::Codename="stable" \
+          -o APT::FTPArchive::Release::Description="Cob apt repository" \
+          release . > Release
+        gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GPG_PASSFILE" \
+          --local-user "$GPG_FPR" --clearsign --output InRelease Release
+        gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GPG_PASSFILE" \
+          --local-user "$GPG_FPR" --armor --detach-sign --output Release.gpg Release
+        ls -l
+
+    # Use the repository exactly like a user would: a fresh apt source with
+    # ONLY the published public key must accept the signature and offer this version.
+    - name: Check the repository with apt
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo install -d -m 755 /etc/apt/keyrings
+        sudo cp "$PWD/repo/cob-gpg-public-key.asc" /etc/apt/keyrings/csf-cob-test.asc
+        echo "deb [signed-by=/etc/apt/keyrings/csf-cob-test.asc] file:$PWD/repo ./" | sudo tee /etc/apt/sources.list.d/csf-cob-test.list
+        sudo apt-get update \
+          -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/csf-cob-test.list \
+          -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+        apt-cache policy csf-cob | tee /tmp/policy.txt
+        grep -q "Candidate: ${VERSION}" /tmp/policy.txt
+        sudo rm -f /etc/apt/sources.list.d/csf-cob-test.list /etc/apt/keyrings/csf-cob-test.asc
+
+    - name: Publish the repository
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! gh release view apt-repo --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          gh release create apt-repo --repo "$GITHUB_REPOSITORY" \
+            --title "Cob apt repository" --latest=false \
+            --notes "Signed apt repository for the csf-cob package. Not meant to be downloaded by hand; see the install instructions in the latest Cob release."
+        fi
+        # delete the versions that were pruned, then upload everything
+        if [ -s removed.txt ]; then
+          while read -r f; do gh release delete-asset apt-repo "$f" --repo "$GITHUB_REPOSITORY" --yes || true; done < removed.txt
+        fi
+        cd repo
+        gh release upload apt-repo --repo "$GITHUB_REPOSITORY" --clobber \
+          Packages Packages.gz Release InRelease Release.gpg cob-gpg-public-key.asc csf-cob_*_all.deb
+
+    - name: Remove the signing key from the runner
+      if: always()
+      shell: bash
+      run: |
+        if [ -n "${GNUPGHOME:-}" ]; then
+          gpgconf --kill gpg-agent || true
+          rm -rf "$GNUPGHOME"
+        fi
+        if [ -n "${GPG_PASSFILE:-}" ]; then rm -f "$GPG_PASSFILE"; fi
 
   release:
     needs: [build, deb]

@@ -41,25 +41,28 @@ program:
   * `'elif' without a matching 'if' at the same indentation`
   * `malformed condition in if statement` (or `elif`)
   * `expected ':' to open if block` (or `elif`)
-* **A signed Debian package**, built by `build.yml` from the Linux
-  builds it already makes: `cob_0.0.7_all.deb`. It is a single file
-  that contains all four Linux builds (amd64, i386, arm64, armhf). On
-  install, the post-install script keeps the one that matches the
-  machine (`dpkg --print-architecture`) and deletes the other three;
-  `/usr/bin/cob`, `farmer` and `popcorn_comp` run that build, and
-  `popcorn_comp` still finds its bundled Zig. The package is signed with
-  a detached GPG signature. To verify it:
+* **A signed Debian package and apt repository.** One package,
+  `csf-cob` (apt package names must be lowercase, so `apt install
+  CSF-COB` cannot work; it is `csf-cob`), carries all four Linux builds
+  (amd64, i386, arm64, armhf). On install, the post-install script keeps
+  the one that matches the machine (`dpkg --print-architecture`) and
+  deletes the other three; `/usr/bin/cob`, `farmer` and `popcorn_comp`
+  run that build, and `popcorn_comp` still finds its bundled Zig. It
+  replaces the old `cob` package name. To install and keep it updated:
 
   ```
-  gpg --import cob-gpg-public-key.asc
-  gpg --verify cob_0.0.7_all.deb.asc cob_0.0.7_all.deb
-  sha256sum -c cob_0.0.7_all.deb.sha256
+  sudo mkdir -p /etc/apt/keyrings
+  curl -fsSL https://github.com/Cob-Software-Foundation/Cob/releases/download/apt-repo/cob-gpg-public-key.asc | sudo tee /etc/apt/keyrings/csf-cob.asc > /dev/null
+  echo "deb [signed-by=/etc/apt/keyrings/csf-cob.asc] https://github.com/Cob-Software-Foundation/Cob/releases/download/apt-repo ./" | sudo tee /etc/apt/sources.list.d/csf-cob.list
+  sudo apt update && sudo apt install csf-cob
   ```
 
-  The release publishes the `.deb`, its `.asc` signature, the public
-  key, a SHA-256 file, and the package's checksum is added to
-  `checksums.txt`. The workflow refuses to publish a release if the
-  signing key is not configured, rather than shipping it unsigned.
+  The repository index (`InRelease`, `Release.gpg`) is signed with the
+  project's GPG key, and the `.deb` itself also has a detached signature
+  (`csf-cob_<version>_all.deb.asc`) plus a SHA-256 file, so it can be
+  checked by hand with `gpg --verify`. The repository lives on a
+  release named `apt-repo` and keeps the newest three versions.
+  The workflow refuses to publish if the signing key is not configured.
 * An "if / else" example on the in-browser playground, and `if` on the
   website's release notes and download page.
 
@@ -92,6 +95,15 @@ program:
   `if`/`elif`/`else` chain (a bad `elif` condition, a bad statement
   inside an `else` body, a second `else`, a missing colon, an `else`
   with no `if`), which free a half-built chain.
+* The package and the signed apt repository were exercised with the
+  workflow's own scripts, serving the repository over HTTP to real apt
+  with throwaway keys: `apt update` accepts the signature, `apt install
+  csf-cob` resolves its dependencies and installs, `cob` runs an
+  `if`/`else` script, an upgrade from one version to the next works and
+  leaves only the matching build, a package list changed after signing
+  is refused, an index signed by a different key is refused, and the
+  oldest of four published versions is pruned. `apt install CSF-COB`
+  fails with `Unable to locate package`, as expected.
 * The `.deb` packaging steps from `build.yml` were run end to end on an
   amd64 machine against a package tree laid out like the real Linux
   build artifacts. The package installed, kept only the `amd64` build,
@@ -123,8 +135,11 @@ program:
   the first real `emcc` build will be whatever CI run triggers it.
   Pounce (the block-coding front end) builds from this source, so it
   inherits that gap.
-* The `deb` job has not run on GitHub Actions, and signing has not been
-  run with the real `GPG_PRIVATE_KEY`. In the local run the amd64 build
+* The `deb` and `apt-repo` jobs have not run on GitHub Actions, signing
+  has not been run with the real `GPG_PRIVATE_KEY`, and the repository has
+  not yet been fetched through GitHub's release-asset URLs (which redirect
+  to a CDN; apt follows redirects, but this was not tried against GitHub
+  itself). In the local run the amd64 build
   was real but the Zig was a stand-in that forwards to gcc, and the
   i386, arm64 and armhf builds were placeholders, so those three were
   packaged but never installed or run on matching hardware.

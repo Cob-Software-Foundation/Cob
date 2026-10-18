@@ -134,6 +134,14 @@
     </div>
 
     <div class="downloads-foot" style="margin-top:20px; border-radius:10px; border:1px solid var(--line);">
+      <strong>Debian or Ubuntu?</strong> Install and update Cob with apt. One package, <code class="mono">csf-cob</code> (apt names are lowercase), carries all four Linux builds and keeps the one that matches your machine. The repository is signed, so apt checks every download against the key you add in the first two steps.<br><br>
+      <code class="mono">sudo mkdir -p /etc/apt/keyrings<br>
+      curl -fsSL https://github.com/Cob-Software-Foundation/Cob/releases/download/apt-repo/cob-gpg-public-key.asc | sudo tee /etc/apt/keyrings/csf-cob.asc &gt; /dev/null<br>
+      echo "deb [signed-by=/etc/apt/keyrings/csf-cob.asc] https://github.com/Cob-Software-Foundation/Cob/releases/download/apt-repo ./" | sudo tee /etc/apt/sources.list.d/csf-cob.list<br>
+      sudo apt update &amp;&amp; sudo apt install csf-cob</code>
+    </div>
+
+    <div class="downloads-foot" style="margin-top:20px; border-radius:10px; border:1px solid var(--line);">
       Prefer to build it yourself? <a href="https://github.com/Cob-Software-Foundation/Cob/archive/refs/heads/main.zip">Download the source</a> and run <code class="mono">make</code> — requires a C99 compiler and, on Linux, X11/OpenGL dev headers for the default SQLite + native-window build (e.g. <code class="mono">libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev</code> on Debian/Ubuntu). For popcorn_comp's default backend, also put <a href="https://ziglang.org/">Zig</a> on your PATH.
     </div>
   </section>
