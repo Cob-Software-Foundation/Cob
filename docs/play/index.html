@@ -100,6 +100,8 @@
         <button data-ex="loop">A while loop</button>
         <button data-ex="strings">Strings</button>
         <button data-ex="ifelse">if / else</button>
+        <button data-ex="ask">Ask a question</button>
+        <button data-ex="add">Add two numbers</button>
         <button data-ex="sandbox">Desktop-only keywords</button>
       </div>
     </div>
@@ -125,6 +127,8 @@
       <code>_cobwindow</code>, and no native <code>extern</code> libraries (a browser tab can't
       <code>dlopen()</code> anything). A script that uses any of those keywords still runs: they
       quietly do nothing and print a one-time notice, so the rest of your script keeps going.
+      <code>input()</code> and <code>input_int()</code> ask with a browser dialog (a tab has no
+      keyboard to read); press Cancel and the program sees the end of its input.
       Want the full thing? <a href="../download.html">Download the native build</a> for real
       windows, databases, and C extensions.
     </p>
@@ -199,6 +203,15 @@
       '    pop("grade: B")\n' +
       'else:\n' +
       '    pop("keep practicing")\n',
+    ask:
+      'set name = input("What is your name? ")\n' +
+      'pop("Nice to meet you, " + name + "!")\n',
+    add:
+      '# input_int turns what you type into a number\n' +
+      'set a = input_int("First number? ")\n' +
+      'set b = input_int("Second number? ")\n' +
+      'set total = a + b\n' +
+      'pop("Total: " + total)\n',
     sandbox:
       '# These are desktop-only features -- in this browser sandbox they\n' +
       '# quietly no-op (see the note below the playground) instead of\n' +
@@ -265,16 +278,57 @@
     function onOut(line) { sawOutput = true; appendLine(line, lineClassFor(line)); }
     function onErr(line) { sawOutput = true; appendLine(line, lineClassFor(line) || "err"); }
 
+    // Console input. input()/input_int() read stdin, and a browser tab has no keyboard, so each
+    // read asks with a browser dialog that shows the program's own prompt text, then echoes the
+    // question and answer into the output like a terminal would. Cancel means "end of input".
+    // Output arrives byte by byte so a prompt with no newline ("Name? ") is visible when asked.
+    var dec = new TextDecoder(), enc = new TextEncoder();
+    function lineSink(onLine) {
+      var bytes = [];
+      function take() { var t = dec.decode(new Uint8Array(bytes)); bytes = []; return t; }
+      return { take: take, put: function (c) {
+        if (c === null || c === undefined) return;
+        c &= 255;
+        if (c === 10) onLine(take()); else bytes.push(c);
+      } };
+    }
+    var so = lineSink(onOut), se = lineSink(onErr);
+    var cur = null, at = 0, eol = false, cancelled = false;
+    function stdin() {
+      if (eol) { eol = false; return null; }          // one line per read, like a terminal
+      if (!cur) {
+        if (cancelled) { var lost = so.take(); if (lost) onOut(lost); return null; }   // already cancelled: don't nag again
+        var asked = so.take();                        // e.g. "What is your name? "
+        var answer = window.prompt(asked || "Input:", "");
+        if (answer === null) {
+          cancelled = true;
+          onOut(asked);
+          appendLine("(input cancelled \u2014 the program now sees the end of its input)", "sys");
+          return null;
+        }
+        answer = answer.replace(/[\r\n]+/g, " ");
+        onOut(asked + answer);                        // echo the question and the answer
+        cur = enc.encode(answer + "\n"); at = 0;
+      }
+      var c = cur[at++];
+      if (at >= cur.length) { cur = null; eol = true; }
+      return c;
+    }
+
     try {
       // One fresh module instance per run, matching the Makefile's
       // MODULARIZE+EXIT_RUNTIME design: script state, the once-per-run
       // sandbox-warning flag, and the extern table all start clean every
       // time, with nothing left over from a previous run.
-      var Module = await createCobModule({ print: onOut, printErr: onErr });
+      var Module = await createCobModule({
+        stdin: stdin, stdout: so.put, stderr: se.put,
+        print: onOut, printErr: onErr   // fallbacks if a build ignores stdout/stderr
+      });
       Module.FS.writeFile("/program.cob", editor.value);
       // --no-cache: a fresh in-memory FS every run makes a .strawberry
       // cache pointless, and skipping it avoids ever reading a stale one.
       Module.callMain(["/program.cob", "--no-cache"]);
+      var rest = so.take(); if (rest) onOut(rest);
     } catch (e) {
       // callMain throws on a nonzero exit() (an ExitStatus object) as
       // well as on a real crash -- only the latter is unexpected here.

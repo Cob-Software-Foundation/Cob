@@ -35,11 +35,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.7 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.8 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.7</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.8</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.dev/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -132,16 +132,22 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.7</div>
+        <div class="rv">0.0.8</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li><code class="mono">if</code> / <code class="mono">elif</code> / <code class="mono">else</code>: real conditional blocks using the same conditions as <code class="mono">while</code>, in both cob_interp and popcorn_comp</li>
+          <li><code class="mono">input(&lt;prompt&gt;)</code> and <code class="mono">input_int(&lt;prompt&gt;)</code>: ask the person running a program a question and use the answer, in both cob_interp and popcorn_comp</li>
+          <li>The <a href="play/index.html">playground</a> can ask questions too</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.8</span>
+          <strong>Programs can finally ask questions</strong>
+          <p>Until now a Cob program could only talk. <code class="mono">set name = input("What is your name? ")</code> prints the prompt, waits for a line of typing, and hands it back as a string; <code class="mono">input_int(&lt;prompt&gt;)</code> does the same and parses the line as a whole number (a non-number, or the end of the input, gives 0, with a warning for the first). The prompt is optional &mdash; <code class="mono">input()</code> is fine &mdash; and at the end of the input <code class="mono">input()</code> returns an empty string, so piping a file into a program just works. Shipped in both cob_interp and popcorn_comp, which behave identically, and in the <a href="play/index.html">playground</a>. The .strawberry cache format bumped to COBSTRW9, so older caches are rebuilt automatically. Also fixed: a small leak in compiled programs that tested a string for truthiness (<code class="mono">if name:</code>).</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.7</span>
           <strong>if / elif / else</strong>

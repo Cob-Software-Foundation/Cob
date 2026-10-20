@@ -41,10 +41,17 @@ pop(age + 1)
 * In the WebAssembly build only (`-DCOB_WASM`), `pop` now flushes stdout
   after each line, so a host that captures output byte by byte sees it
   as it is printed instead of when libc's buffer fills.
-* The `.strawberry` cache format is unchanged (`COBSTRW8`). Two
-  expression kinds (tags 19 and 20) were appended after the existing
-  ones, in both `cob_interp` and `popcorn_comp`, so older caches stay
-  valid.
+* **`.strawberry` cache format bumped from `COBSTRW8` to `COBSTRW9`.**
+  Two expression kinds (tags 19 and 20, `input` and `input_int`, one
+  operand each) were appended after the existing ones, in both
+  `cob_interp` and `popcorn_comp`. Existing caches are detected as
+  stale and rebuilt automatically the next time a script runs (you will
+  see one `cache ... unreadable, reparsing source` note per script).
+  Nothing needs to be deleted by hand. The bump also means an older
+  `cob_interp` that finds a cache written by this version re-parses the
+  source instead of failing on a kind it does not know. `popcorn_comp`
+  takes a `.strawberry` file as input, so regenerate it with
+  `cob_interp` first if it complains about the magic.
 
 ## Verified this session
 

@@ -340,6 +340,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  *   COBSTRW6 -- raygui widgets (window_button/slider/textbox)
  *   COBSTRW7 -- C API / FFI (CEP-2): STMT_EXTERN + EXPR_EXTERN_CALL
  *   COBSTRW8 -- if/elif/else: STMT_IF (cond, then-program, else-program)
+ *   COBSTRW9 -- console input: EXPR_INPUT / EXPR_INPUT_INT (one operand each)
  * popcorn_comp.c does not implement codegen for the SQLite/_cobwindow/
  * Tcl-Tk/widget keywords added in v4-v6 -- those bumps only ever
  * *appended* new ExprKind values after EXPR_HARVEST, never changed the
@@ -349,7 +350,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  * file. That's what makes sharing one writer-side magic constant safe
  * for a reader that only ever implements a subset of it.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW8"
+#define STRAWBERRY_MAGIC      "COBSTRW9"
 #define STRAWBERRY_MAGIC_LEN  8
 
 #ifdef __cplusplus

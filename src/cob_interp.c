@@ -259,9 +259,9 @@ typedef enum {
      * popcorn_comp.c's reader depends on that (it hard-codes this one as
      * 18; keep the two in sync). */
     EXPR_EXTERN_CALL,
-    /* Console input (v0.0.8). One-arg (`left` = prompt). Appended after
-     * EXPR_EXTERN_CALL so every earlier kind keeps its numeric value --
-     * popcorn_comp.c rejects these cleanly (unknown kind) for now. */
+    /* Console input (v0.0.8, cache format COBSTRW9). One-arg (`left` =
+     * prompt). Appended after EXPR_EXTERN_CALL so every earlier kind keeps
+     * its numeric value; popcorn_comp.c mirrors both kinds. */
     EXPR_INPUT, EXPR_INPUT_INT
 } ExprKind;
 
