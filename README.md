@@ -44,6 +44,19 @@ set buffer = harvest(1024)
 trash(buffer)
 ```
 
+### Console Input
+```cob
+set name = input("Name? ")          # one line from stdin, as a string
+set age = input_int("Age? ")        # one line parsed as an integer
+pop("Hi " + name)
+set blank = input()                 # the prompt is optional
+```
+The prompt is printed without a newline. `input()` returns `""` at end of
+input; `input_int()` returns `0` (with a warning on stderr) for a
+non-numeric line or at end of input. Works in `cob_interp` and in programs
+built by `popcorn_comp`. In the browser sandbox there is no keyboard unless the
+host page provides standard input (Pounce does).
+
 ### SQLite (Requires `cob_interp_full` or `cob_interp_db`)
 ```cob
 set h = sql_open("scores.db")
@@ -74,7 +87,7 @@ update the same widget.
 ## ⚙️ Toolchain & Ecosystem
 
 * **`cob_interp`**: The multi-platform interpreter. Plain `make` builds `cob_interp_full` (SQLite + native windows/widgets) by default; `make cob_interp` builds the original zero-dependency binary; `make cob_interp_db` swaps the window backend for Tcl/Tk instead.
-* **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. (SQLite/window/widget keywords and string values are cob_interp-only so far; not yet supported by popcorn_comp's codegen.)
+* **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. (SQLite/window/widget keywords are cob_interp-only so far; not yet supported by popcorn_comp's codegen. String values and `input`/`input_int` are supported.)
 * **`farmer`**: Package manager. Installs zipped modules from a secure static JSON registry into `cob_modules/` via `farmer harvest <package>`.
 * **Caching Control**: Write `_MakeCache = False` as the literal first line of a `.cob` file to bypass the `.strawberry` fast-boot cache.
 

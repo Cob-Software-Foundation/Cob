@@ -77,6 +77,15 @@
  * one of these keywords there prints a one-line warning and evaluates
  * to a harmless default (0 or "") instead of failing to build.
  *
+ *   input(<prompt>)           Console input. Prints <prompt> (no newline,
+ *                             flushed), reads one line from stdin and
+ *                             returns it as a string without the line
+ *                             ending. Returns "" at end of input. The
+ *                             prompt is optional: input() is allowed.
+ *   input_int(<prompt>)       Same, but parses the line as a base-10
+ *                             integer. A non-numeric line (or end of
+ *                             input) warns on stderr and returns 0.
+ *
  *   window_button(<h>,<label>)   raygui binding (this session). Draws/
  *                             updates a button below the window_label()
  *                             text; returns 1 if it was clicked since
@@ -93,16 +102,12 @@
  * friends, see the _cobwindow section further down for the full
  * picture (raylib backend, one-window-per-process limit, etc).
  *
- * NOTE ON popcorn_comp: string support above is cob_interp-only so far.
- * popcorn_comp has its own separate copy of this AST and its own C
- * code generator, which still assumes every Cob variable is a `long`.
- * A .cob program using strings runs correctly under cob_interp but is
- * not yet compilable to a native binary -- that needs popcorn_comp's
- * codegen to grow a tagged value representation too, which hasn't
- * been done yet. The .strawberry cache format bumped to v3 alongside
- * this change specifically so an old-format reader (like today's
- * popcorn_comp) fails cleanly on a new-format cache instead of
- * misreading it.
+ * NOTE ON popcorn_comp: it has its own separate copy of this AST and its
+ * own C code generator (tagged int/string values, see popcorn_comp.c).
+ * Strings and input()/input_int() compile to native binaries with the
+ * same behavior as here; the SQL/window/Tcl keywords remain
+ * cob_interp-only. Expression kinds are appended in the same order in
+ * both files so the .strawberry tags line up.
  *
  * If a program uses harvest()/trash() but --no-gc was not passed on the
  * command line, cob_interp refuses to run it with a clear error instead
@@ -113,6 +118,7 @@
  *                term := primary (('*'|'/') primary)*
  *                primary := NUMBER | STRING | IDENT
  *                           | 'harvest' '(' expr ')'
+ *                           | ('input' | 'input_int') '(' [expr] ')'
  * cond grammar:  expr (('=='|'!='|'<'|'>'|'<='|'>=') expr)?  (bare expr
  *                is a truthiness/nonzero test; for a string, truthy
  *                means non-empty, matching non-zero for numbers)
@@ -252,7 +258,11 @@ typedef enum {
      * Appended last so every earlier kind keeps its numeric value --
      * popcorn_comp.c's reader depends on that (it hard-codes this one as
      * 18; keep the two in sync). */
-    EXPR_EXTERN_CALL
+    EXPR_EXTERN_CALL,
+    /* Console input (v0.0.8). One-arg (`left` = prompt). Appended after
+     * EXPR_EXTERN_CALL so every earlier kind keeps its numeric value --
+     * popcorn_comp.c rejects these cleanly (unknown kind) for now. */
+    EXPR_INPUT, EXPR_INPUT_INT
 } ExprKind;
 
 typedef struct Expr {
@@ -344,7 +354,8 @@ static void expr_free(Expr *e) {
     if (e->kind == EXPR_HARVEST) { expr_free(e->left); }
     if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
         e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
-        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE) {
+        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE ||
+        e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) {
         expr_free(e->left);
     }
     if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
@@ -368,7 +379,8 @@ static int expr_uses_harvest(const Expr *e) {
     }
     if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
         e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
-        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE) {
+        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE ||
+        e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) {
         return expr_uses_harvest(e->left);
     }
     if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
@@ -744,7 +756,8 @@ static int cob_is_reserved_word(const char *name) {
         COB_KW_SQL_OPEN, COB_KW_SQL_EXEC, COB_KW_SQL_QUERY, COB_KW_SQL_CLOSE,
         COB_KW_TCL_EVAL, COB_KW_TK_EVAL,
         COB_KW_WINDOW_OPEN, COB_KW_WINDOW_LABEL, COB_KW_WINDOW_WAIT, COB_KW_WINDOW_CLOSE,
-        COB_KW_WINDOW_BUTTON, COB_KW_WINDOW_SLIDER, COB_KW_WINDOW_TEXTBOX
+        COB_KW_WINDOW_BUTTON, COB_KW_WINDOW_SLIDER, COB_KW_WINDOW_TEXTBOX,
+        COB_KW_INPUT, COB_KW_INPUT_INT
     };
     size_t i;
     for (i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
@@ -844,6 +857,8 @@ static const char *parse_primary(const char *p, Expr **out) {
             { COB_KW_WINDOW_BUTTON,  EXPR_WINDOW_BUTTON,  2 },
             { COB_KW_WINDOW_SLIDER,  EXPR_WINDOW_SLIDER,  3 },
             { COB_KW_WINDOW_TEXTBOX, EXPR_WINDOW_TEXTBOX, 2 },
+            { COB_KW_INPUT,     EXPR_INPUT,     1 },
+            { COB_KW_INPUT_INT, EXPR_INPUT_INT, 1 },
         };
         size_t i;
         for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
@@ -858,8 +873,16 @@ static const char *parse_primary(const char *p, Expr **out) {
                 {
                     Expr *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
                     const char *cur = skip_blank(after_kw + 1);
-                    cur = parse_expr(cur, &arg1);
-                    if (!cur) return NULL;
+                    if ((calls[i].kind == EXPR_INPUT || calls[i].kind == EXPR_INPUT_INT) && *cur == ')') {
+                        /* input() -- no prompt: use an empty string literal */
+                        char *empty = cob_strdup("");
+                        if (!empty) return NULL;
+                        arg1 = expr_new_str(empty, 0);
+                        if (!arg1) { free(empty); return NULL; }
+                    } else {
+                        cur = parse_expr(cur, &arg1);
+                        if (!cur) return NULL;
+                    }
                     cur = skip_blank(cur);
                     if (calls[i].argc >= 2) {
                         if (*cur != ',') { expr_free(arg1); return NULL; }
@@ -1691,6 +1714,39 @@ static void cob_ext_shutdown(void) {
     cob_extern_shutdown();
 }
 
+/* ---------------------------------------------------------------------
+ * CONSOLE INPUT (v0.0.8): input() / input_int()
+ * ------------------------------------------------------------------- */
+/* Prints `prompt` (no newline, flushed), then reads one line from stdin.
+ * Returns a malloc'd string with the trailing "\n" / "\r\n" removed; ""
+ * at EOF. *got_line is set to 1 if a line (even an empty one) was read,
+ * 0 at EOF/error. Lines of any length are supported. */
+static char *cob_read_line(const char *prompt, int *got_line) {
+    size_t cap = 128, len = 0;
+    char *buf = (char *)malloc(cap);
+    *got_line = 0;
+    if (!buf) return NULL;
+    if (prompt && prompt[0]) { fputs(prompt, stdout); }
+    fflush(stdout);
+    for (;;) {
+        if (!fgets(buf + len, (int)(cap - len), stdin)) break;
+        *got_line = 1;
+        len += strlen(buf + len);
+        if (len > 0 && buf[len - 1] == '\n') break;
+        if (len + 1 >= cap) {
+            char *grown;
+            cap *= 2;
+            grown = (char *)realloc(buf, cap);
+            if (!grown) { free(buf); return NULL; }
+            buf = grown;
+        }
+    }
+    if (!*got_line) len = 0;
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) len--;
+    buf[len] = '\0';
+    return buf;
+}
+
 static Value eval_expr(const Expr *e, EvalCtx *ctx) {
     switch (e->kind) {
         case EXPR_NUM: return value_int(e->num);
@@ -1929,6 +1985,39 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
             value_free(&hV); value_free(&labelV);
             return value_str_take(result);
         }
+        case EXPR_INPUT:
+        case EXPR_INPUT_INT: {
+            Value pV = eval_expr(e->left, ctx);
+            const char *prompt;
+            char numbuf[32];
+            char *line;
+            int got;
+            if (pV.kind == VAL_STR) { prompt = pV.s ? pV.s : ""; }
+            else { long_to_str(pV.i, numbuf, sizeof(numbuf)); prompt = numbuf; }
+            line = cob_read_line(prompt, &got);
+            value_free(&pV);
+            if (!line) {
+                fprintf(stderr, "[cob_interp] out of memory in %s()\n", e->kind == EXPR_INPUT ? "input" : "input_int");
+                return e->kind == EXPR_INPUT ? value_str_take(cob_strdup("")) : value_int(0);
+            }
+            if (e->kind == EXPR_INPUT) return value_str_take(line);
+            {
+                char *end; long n = 0; int ok = 0;
+                const char *q = line;
+                while (*q == ' ' || *q == '\t') q++;
+                if (*q) {
+                    n = strtol(q, &end, 10);
+                    while (*end == ' ' || *end == '\t') end++;
+                    ok = (end != q && *end == '\0');
+                }
+                if (!ok) {
+                    if (got) fprintf(stderr, "[cob_interp] warning: input_int() got non-numeric input \"%s\"; treated as 0\n", line);
+                    n = 0;
+                }
+                free(line);
+                return value_int(n);
+            }
+        }
         case EXPR_EXTERN_CALL: {
             int n = e->argc, i;
             Value *vals = (Value *)calloc((size_t)(n > 0 ? n : 1), sizeof(Value));
@@ -2022,6 +2111,11 @@ static void execute(const Program *prog, EvalCtx *ctx) {
                     if (n > 0) fwrite(buf, 1, (size_t)n, stdout);
                 }
                 fputc('\n', stdout);
+#if defined(COB_WASM)
+                /* Browser hosts that capture stdout byte by byte (Pounce) would
+                 * otherwise see output only when libc's buffer fills or at exit. */
+                fflush(stdout);
+#endif
                 value_free(&v);
                 break;
             }
@@ -2704,6 +2798,8 @@ static int write_expr(ByteBuf *b, const Expr *e) {
         case EXPR_TK_EVAL:
         case EXPR_WINDOW_OPEN:
         case EXPR_WINDOW_CLOSE:
+        case EXPR_INPUT:
+        case EXPR_INPUT_INT:
             return write_expr(b, e->left);
         case EXPR_SQL_EXEC:
         case EXPR_SQL_QUERY:
@@ -2877,7 +2973,9 @@ static int read_expr(ByteReader *r, Expr **out) {
         case EXPR_TCL_EVAL:
         case EXPR_TK_EVAL:
         case EXPR_WINDOW_OPEN:
-        case EXPR_WINDOW_CLOSE: {
+        case EXPR_WINDOW_CLOSE:
+        case EXPR_INPUT:
+        case EXPR_INPUT_INT: {
             Expr *inner;
             if (read_expr(r, &inner) != 0) return -1;
             *out = expr_new_call1((ExprKind)kind, inner);

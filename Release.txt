@@ -1,3 +1,76 @@
+# Cob Language v0.0.8
+
+## Overview
+
+The headline feature is console input. Cob programs can now ask the
+person running them a question and use the answer:
+
+```
+set name = input("What is your name? ")
+set age = input_int("How old are you? ")
+pop("Hello, " + name + "!")
+pop(age + 1)
+```
+
+## Added
+
+* **`input(<prompt>)`** prints the prompt (no trailing newline, flushed),
+  reads one line from standard input, and returns it as a string with
+  the line ending removed. At end of input it returns `""`. The prompt
+  is optional: `input()` is allowed.
+* **`input_int(<prompt>)`** does the same and parses the line as a
+  base-10 integer. A line that is not a number (or end of input) returns
+  `0`; a non-numeric line also prints a warning on stderr.
+* `input` and `input_int` are now reserved words when followed by `(`,
+  so an `extern` can no longer be declared with those names. A variable
+  named `input` (no parentheses) still works.
+* **`popcorn_comp` compiles `input` and `input_int`** too, so compiled
+  programs read standard input exactly like interpreted ones: same
+  prompt handling, same end-of-input results, same non-numeric
+  warning (tagged `[cob]` instead of `[cob_interp]`, like every compiled
+  warning). The input runtime is only added to the generated C for
+  programs that use it, so every other program compiles to the same C
+  as before.
+* A regression test, `tools/tests/input.cob`, with the lines it reads in
+  `input.stdin` and its expected output in `input.expected`:
+  `cob_interp tools/tests/input.cob < tools/tests/input.stdin`; `sh tools/tests/input_native.sh`
+  checks the compiled binary against the interpreter.
+
+## Changed
+
+* In the WebAssembly build only (`-DCOB_WASM`), `pop` now flushes stdout
+  after each line, so a host that captures output byte by byte sees it
+  as it is printed instead of when libc's buffer fills.
+* The `.strawberry` cache format is unchanged (`COBSTRW8`). Two
+  expression kinds (tags 19 and 20) were appended after the existing
+  ones, in both `cob_interp` and `popcorn_comp`, so older caches stay
+  valid.
+
+## Verified this session
+
+* Native binaries built by `popcorn_comp` and `cob_interp` give
+  byte-identical stdout and identical warnings (modulo the `[cob]` tag)
+  on `tools/tests/input.cob` with five different stdin files: normal,
+  CRLF line endings with blank and non-numeric answers, immediate end
+  of input, padded numbers with no trailing newline, and trailing junk
+  or negatives; and on a program with a 100,000-character line, `input`
+  inside `while`/`if`, and an expression as the prompt.
+* The generated C runs clean under AddressSanitizer + UndefinedBehavior-
+  Sanitizer + LeakSanitizer on all of those inputs.
+
+
+## Fixed
+
+* `popcorn_comp`: testing a string for truthiness (`if name:`,
+  `while text:`) leaked the string it tested. The compiled program's
+  `cob_truthy` now frees it. Output was never affected; LeakSanitizer
+  reported it on exit.
+
+## Not yet supported
+
+* The browser sandbox has no keyboard. Unless the host page supplies
+  standard input (Pounce does), `input()` sees end of input.
+
 # Cob Language v0.0.7
 
 ## Overview

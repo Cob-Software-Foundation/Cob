@@ -68,6 +68,11 @@
  * are tagged "[cob]" rather than "[cob_interp]", since a compiled
  * binary is its own standalone program, not the interpreter.
  *
+ * CONSOLE INPUT (v0.0.8) -- input(<prompt>) and input_int(<prompt>)
+ * compile to cob_input()/cob_input_int(), a small stdin runtime that
+ * mirrors cob_interp.c line for line (see COB_INPUT_RUNTIME below). It is
+ * appended to the generated C only for programs that use it.
+ *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
 
@@ -122,7 +127,11 @@ typedef enum {
     /* C API / FFI (CEP-2): a call to a name bound by an `extern`
      * statement elsewhere in the program. var = the C symbol name,
      * args[0..argc-1] = the call's arguments. */
-    EXPR_EXTERN_CALL
+    EXPR_EXTERN_CALL,
+    /* Console input (v0.0.8): input(<prompt>) / input_int(<prompt>). One
+     * operand in `left`. Appended after EXPR_EXTERN_CALL exactly like
+     * cob_interp.c, so the on-the-wire tags (19, 20) line up. */
+    EXPR_INPUT, EXPR_INPUT_INT
 } ExprKind;
 typedef struct Expr {
     ExprKind kind;
@@ -269,6 +278,15 @@ static int read_expr(ByteReader *r, Expr **out) {
             Expr *inner;
             if (read_expr(r, &inner) != 0) return -1;
             *out = expr_new(EXPR_HARVEST);
+            if (!*out) return -1;
+            (*out)->left = inner;
+            return 0;
+        }
+        case EXPR_INPUT:
+        case EXPR_INPUT_INT: {
+            Expr *inner;
+            if (read_expr(r, &inner) != 0) return -1;
+            *out = expr_new((ExprKind)kind);
             if (!*out) return -1;
             (*out)->left = inner;
             return 0;
@@ -425,7 +443,7 @@ static void collect_expr(const Expr *e, NameSet *ns) {
     if (!e) return;
     if (e->kind == EXPR_VAR) nameset_add(ns, e->var);
     if (e->kind == EXPR_BINOP) { collect_expr(e->left, ns); collect_expr(e->right, ns); }
-    if (e->kind == EXPR_HARVEST) collect_expr(e->left, ns);
+    if (e->kind == EXPR_HARVEST || e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) collect_expr(e->left, ns);
     if (e->kind == EXPR_EXTERN_CALL) {
         int j;
         for (j = 0; j < e->argc; j++) collect_expr(e->args[j], ns);
@@ -588,6 +606,11 @@ static int emit_expr(StrBuf *b, const Expr *e) {
             if (sb_append(b, "cob_int((long)(intptr_t)malloc((size_t)cob_harvest_bytes(") != 0) return -1;
             if (emit_expr(b, e->left) != 0) return -1;
             return sb_append(b, ")))");
+        case EXPR_INPUT:
+        case EXPR_INPUT_INT:
+            if (sb_append(b, e->kind == EXPR_INPUT ? "cob_input(" : "cob_input_int(") != 0) return -1;
+            if (emit_expr(b, e->left) != 0) return -1;
+            return sb_append(b, ")");
         case EXPR_EXTERN_CALL: {
             /* cob_call_<name>(...) is the per-name adapter transpile()
              * emits once near the top of the file (see "FFI CODEGEN"
@@ -778,12 +801,107 @@ static const char *COB_RUNTIME_PREAMBLE =
 "static int cob_gt(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c > 0); }\n"
 "static int cob_le(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c <= 0); }\n"
 "static int cob_ge(CobValue l, CobValue r) { int m; int c = cob_cmp_raw(l, r, &m); return m ? cob_mismatch_warn() : (c >= 0); }\n"
-"static int cob_truthy(CobValue v) { return v.is_str ? (v.s != NULL && v.s[0] != '\\0') : (v.i != 0); }\n"
+"static int cob_truthy(CobValue v) { int t = v.is_str ? (v.s != NULL && v.s[0] != '\\0') : (v.i != 0); cob_free(&v); return t; }\n"
 "static void cob_pop(CobValue v) {\n"
 "    if (v.is_str) { fwrite(v.s, 1, strlen(v.s), stdout); }\n"
 "    else { char buf[32]; int n = snprintf(buf, sizeof(buf), \"%ld\", v.i); if (n > 0) fwrite(buf, 1, (size_t)n, stdout); }\n"
 "    fputc('\\n', stdout);\n"
 "    cob_free(&v);\n"
+"}\n";
+
+/* ---------------------------------------------------------------------
+ * CONSOLE INPUT RUNTIME (v0.0.8) -- emitted only for programs that call
+ * input()/input_int(), so every other program's generated C is unchanged.
+ * Mirrors cob_interp.c's cob_read_line / EXPR_INPUT eval exactly (same
+ * prompt handling, EOF -> "" or 0, same non-numeric warning, "[cob]"
+ * prefix instead of "[cob_interp]").
+ * ------------------------------------------------------------------- */
+static int expr_uses_input(const Expr *e) {
+    int j;
+    if (!e) return 0;
+    if (e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) return 1;
+    if (expr_uses_input(e->left) || expr_uses_input(e->right)) return 1;
+    for (j = 0; j < e->argc; j++) if (expr_uses_input(e->args[j])) return 1;
+    return 0;
+}
+static int cond_uses_input(const Cond *c) { return c && (expr_uses_input(c->left) || expr_uses_input(c->right)); }
+static int program_uses_input(const Program *p) {
+    size_t i;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        switch (s->kind) {
+            case STMT_POP: if (expr_uses_input(s->pop_expr)) return 1; break;
+            case STMT_SET: if (expr_uses_input(s->set_expr)) return 1; break;
+            case STMT_WHILE: if (cond_uses_input(s->while_cond) || program_uses_input(&s->while_body)) return 1; break;
+            case STMT_IF:
+                if (cond_uses_input(s->if_cond) || program_uses_input(&s->if_body) || program_uses_input(&s->else_body)) return 1;
+                break;
+            default: break;
+        }
+    }
+    return 0;
+}
+static const char *COB_INPUT_RUNTIME =
+"static char *cob_read_line_(const char *prompt, int *got) {\n"
+"    size_t cap = 128, len = 0;\n"
+"    char *buf = (char *)malloc(cap);\n"
+"    *got = 0;\n"
+"    if (!buf) return NULL;\n"
+"    if (prompt[0]) fputs(prompt, stdout);\n"
+"    fflush(stdout);\n"
+"    for (;;) {\n"
+"        if (!fgets(buf + len, (int)(cap - len), stdin)) break;\n"
+"        *got = 1;\n"
+"        len += strlen(buf + len);\n"
+"        if (len > 0 && buf[len - 1] == '\\n') break;\n"
+"        if (len + 1 >= cap) {\n"
+"            char *g;\n"
+"            cap *= 2;\n"
+"            g = (char *)realloc(buf, cap);\n"
+"            if (!g) { free(buf); return NULL; }\n"
+"            buf = g;\n"
+"        }\n"
+"    }\n"
+"    if (!*got) len = 0;\n"
+"    while (len > 0 && (buf[len - 1] == '\\n' || buf[len - 1] == '\\r')) len--;\n"
+"    buf[len] = '\\0';\n"
+"    return buf;\n"
+"}\n"
+"static char *cob_ask_(CobValue p, int *got) {\n"
+"    char nb[32];\n"
+"    const char *ps;\n"
+"    char *line;\n"
+"    if (p.is_str) ps = p.s ? p.s : \"\"; else { cob_long_to_str(p.i, nb, sizeof(nb)); ps = nb; }\n"
+"    line = cob_read_line_(ps, got);\n"
+"    cob_free(&p);\n"
+"    return line;\n"
+"}\n"
+"static CobValue cob_input(CobValue p) {\n"
+"    int got;\n"
+"    char *line = cob_ask_(p, &got);\n"
+"    if (!line) { fprintf(stderr, \"[cob] out of memory in input()\\n\"); return cob_str(\"\"); }\n"
+"    return cob_str_take(line);\n"
+"}\n"
+"static CobValue cob_input_int(CobValue p) {\n"
+"    int got, ok = 0;\n"
+"    long n = 0;\n"
+"    char *line = cob_ask_(p, &got);\n"
+"    const char *q;\n"
+"    char *end;\n"
+"    if (!line) { fprintf(stderr, \"[cob] out of memory in input_int()\\n\"); return cob_int(0); }\n"
+"    q = line;\n"
+"    while (*q == ' ' || *q == '\\t') q++;\n"
+"    if (*q) {\n"
+"        n = strtol(q, &end, 10);\n"
+"        while (*end == ' ' || *end == '\\t') end++;\n"
+"        ok = (end != q && *end == '\\0');\n"
+"    }\n"
+"    if (!ok) {\n"
+"        if (got) fprintf(stderr, \"[cob] warning: input_int() got non-numeric input \\\"%s\\\"; treated as 0\\n\", line);\n"
+"        n = 0;\n"
+"    }\n"
+"    free(line);\n"
+"    return cob_int(n);\n"
 "}\n";
 
 /* ---------------------------------------------------------------------
@@ -890,6 +1008,7 @@ static char *transpile(const Program *prog, const ExternSet *externs) {
         "#include <stdint.h>\n"
         "#include <string.h>\n") != 0) goto fail;
     if (sb_append(&b, COB_RUNTIME_PREAMBLE) != 0) goto fail;
+    if (program_uses_input(prog) && sb_append(&b, COB_INPUT_RUNTIME) != 0) goto fail;
     if (emit_extern_adapters(&b, externs) != 0) goto fail;
     if (sb_append(&b, "int main(void) {\n") != 0) goto fail;
 

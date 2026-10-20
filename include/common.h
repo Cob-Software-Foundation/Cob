@@ -40,7 +40,7 @@ extern "C" {
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
 #define COB_VERSION_PATCH       2
-#define COB_VERSION_STRING      "0.0.7"
+#define COB_VERSION_STRING      "0.0.8"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
@@ -229,6 +229,10 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
  * resolves it eagerly with dlopen()/dlsym() (POSIX) or LoadLibraryA()/
  * GetProcAddress() (Windows); popcorn_comp emits an `extern`
  * declaration and links the library at compile time instead. */
+/* Console input (v0.0.8). Both take an optional prompt (printed without a
+ * trailing newline), then read one line from stdin. */
+#define COB_KW_INPUT          "input"      /* input(<prompt>) -> str; "" at EOF      */
+#define COB_KW_INPUT_INT      "input_int"  /* input_int(<prompt>) -> int; 0 if not a number / at EOF */
 #define COB_KW_EXTERN         "extern"   /* extern f(x) from "lib.so"      */
 #define COB_KW_FROM           "from"     /* ... from "<library>"           */
 
