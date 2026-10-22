@@ -92,6 +92,9 @@ jobs:
             zig_ext: tarxz
             full_build: true
 
+          # Cross-arch Linux builds are intentionally not full X11 builds on
+          # the ubuntu-latest runner because apt multiarch setup on the same host
+          # creates libgcc/libx11 version conflicts. Keep them as minimal builds.
           - goos: linux
             goarch: '386'
             runner: ubuntu-latest
@@ -105,8 +108,7 @@ jobs:
             archive_name: cob-linux-386
             zig_target: x86-linux
             zig_ext: tarxz
-            full_build: true
-            x11_arch: i386
+            full_build: false
 
           - goos: linux
             goarch: arm64
@@ -121,8 +123,7 @@ jobs:
             archive_name: cob-linux-arm64
             zig_target: aarch64-linux
             zig_ext: tarxz
-            full_build: true
-            x11_arch: arm64
+            full_build: false
 
           - goos: linux
             goarch: arm
@@ -137,8 +138,7 @@ jobs:
             archive_name: cob-linux-arm32
             zig_target: arm-linux
             zig_ext: tarxz
-            full_build: true
-            x11_arch: armhf
+            full_build: false
 
           # ---------------- macOS ----------------
           - goos: darwin
@@ -201,36 +201,6 @@ jobs:
           "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_DIST}.tar.xz"
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
-
-    - name: Install X11/OpenGL dev headers (full build, foreign-arch Linux)
-      if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch != null
-      shell: bash
-      run: |
-        set -euxo pipefail
-
-        sudo dpkg --add-architecture "${{ matrix.x11_arch }}"
-        if [ "${{ matrix.x11_arch }}" != "i386" ]; then
-          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            sudo sed -i '/^Types: deb$/a Architectures: amd64 i386' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-
-          sudo tee /etc/apt/sources.list.d/ubuntu-ports.list > /dev/null <<'PORTS_EOF'
-        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse
-        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse
-        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-backports main universe restricted multiverse
-        deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse
-        PORTS_EOF
-        fi
-
-        sudo apt-get update
-        sudo apt-get install -y --allow-downgrades --allow-change-held-packages \
-          libgcc-s1:amd64 libgcc-s1:${{ matrix.x11_arch }} \
-          libx11-dev:${{ matrix.x11_arch }} \
-          libgl1-mesa-dev:${{ matrix.x11_arch }} \
-          libxrandr-dev:${{ matrix.x11_arch }} \
-          libxinerama-dev:${{ matrix.x11_arch }} \
-          libxcursor-dev:${{ matrix.x11_arch }} \
-          libxi-dev:${{ matrix.x11_arch }}
 
     - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
