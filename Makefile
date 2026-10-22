@@ -51,6 +51,30 @@ INCLUDE  = -Iinclude
 # matching cross toolchain's own `ar`, e.g. AR=aarch64-w64-mingw32-ar).
 AR      ?= ar
 
+# -------------------------------------------------------------------------
+# ENTERPRISE=1 -- license-gated build (separate binaries, "Option B").
+# With it, cob_interp / cob_interp_full / popcorn_comp are built with
+# src/drm.c + Monocypher, require a valid cob.lic at startup, and are
+# written as bin/*_enterprise so they can't be mistaken for the free ones.
+# You normally don't set this by hand: plain `make` (when
+# include/drm_pubkey.h exists), `make enterprise` and
+# `make embed_enterprise` do it for you. The free build never contains
+# any license code.
+# -------------------------------------------------------------------------
+ENTERPRISE ?= 0
+ifeq ($(ENTERPRISE),1)
+    ifeq ($(wildcard include/drm_pubkey.h),)
+        $(error ENTERPRISE=1 needs include/drm_pubkey.h (your PUBLIC key) -- see ENTERPRISE.md)
+    endif
+    ENT_DEFS = -DCOB_ENTERPRISE -Ivendor/monocypher
+    ENT_SRC  = src/drm.c vendor/monocypher/monocypher.c
+    ENT_SUF  = _enterprise
+else
+    ENT_DEFS =
+    ENT_SRC  =
+    ENT_SUF  =
+endif
+
 BIN_DIR    = bin
 VENDOR_DIR = vendor
 
@@ -197,9 +221,37 @@ else
     endif
 endif
 
-.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass wasm play
+.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full popcorn_comp farmer smartpass wasm play enterprise embed_enterprise cob_sign
 
-all: cob_interp_full popcorn_comp farmer
+# Plain `make` builds the free tools and, when include/drm_pubkey.h exists
+# (your PUBLIC key -- safe to commit), the license-gated *_enterprise
+# binaries too. A fresh clone without that file just skips the enterprise
+# step with a note, so the free build is exactly what it always was.
+ifneq ($(wildcard include/drm_pubkey.h),)
+    ALL_ENT = enterprise
+else
+    ALL_ENT =
+endif
+
+all: cob_interp_full popcorn_comp farmer $(ALL_ENT)
+ifeq ($(ALL_ENT),)
+	@echo ""
+	@echo "[note] include/drm_pubkey.h not found -- skipped the Enterprise builds (see ENTERPRISE.md)."
+endif
+
+# bin/cob_interp_full_enterprise + bin/popcorn_comp_enterprise. Recurses
+# into the normal targets with ENTERPRISE=1 so both builds come from the
+# exact same source.
+enterprise:
+	$(MAKE) ENTERPRISE=1 cob_interp_full popcorn_comp
+	@echo ""
+	@echo "Enterprise build done: $(BIN_DIR)/cob_interp_full_enterprise$(EXE_SUF), $(BIN_DIR)/popcorn_comp_enterprise$(EXE_SUF)"
+
+# The embeddable package with the license-gated interpreter inside:
+# bin/cob-<version>-embed_enterprise.zip. The host app must make cob.lic
+# reachable (set COB_LICENSE, or keep cob.lic in the working directory).
+embed_enterprise:
+	$(MAKE) ENTERPRISE=1 embed
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -221,8 +273,8 @@ smartpass:
 	@exit 1
 
 cob_interp: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(FFI_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDE) $(ENT_DEFS) -o $(BIN_DIR)/cob_interp$(ENT_SUF)$(EXE_SUF) \
+		src/file_io.c src/cob_interp.c $(ENT_SRC) $(FFI_LIBS)
 # ^ The lightweight, dependency-free interpreter: no SQLite/Tcl/Tk,
 # no _cobwindow, no vendor build, no X11 dependency, builds in under a
 # second. Plain `make` builds `cob_interp_full` instead (see below) --
@@ -306,20 +358,27 @@ cob_interp_window: $(BIN_DIR) $(RAYLIB_LIB)
 .PHONY: cob_interp_full
 cob_interp_full: $(BIN_DIR) $(SQLITE_LIB) $(RAYLIB_LIB)
 	$(CC) $(CFLAGS) $(INCLUDE) \
-		-DCOB_WITH_SQLITE -DCOB_WITH_COBWINDOW \
+		-DCOB_WITH_SQLITE -DCOB_WITH_COBWINDOW $(ENT_DEFS) \
 		-I$(VENDOR_DIR)/SQLite \
 		-I$(RAYLIB_BUILD_DIR) \
 		-I$(VENDOR_DIR)/raygui/src \
-		-o $(BIN_DIR)/cob_interp_full$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c \
+		-o $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) \
+		src/file_io.c src/cob_interp.c $(ENT_SRC) \
 		$(SQLITE_LIB) $(RAYLIB_LIB) $(WINDOW_LIBS)
 	@echo ""
-	@echo "Built $(BIN_DIR)/cob_interp_full$(EXE_SUF) -- SQLite + _cobwindow, all in one binary."
+	@echo "Built $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) -- SQLite + _cobwindow, all in one binary."
 	@echo "(Tcl/Tk not included -- see \`make cob_interp_db\` if you want tcl_eval()/tk_eval() too.)"
 
 popcorn_comp: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/popcorn_comp$(EXE_SUF) \
-		src/file_io.c src/popcorn_comp.c
+	$(CC) $(CFLAGS) $(INCLUDE) $(ENT_DEFS) -o $(BIN_DIR)/popcorn_comp$(ENT_SUF)$(EXE_SUF) \
+		src/file_io.c src/popcorn_comp.c $(ENT_SRC)
+
+# Optional maintainer helper (keygen + signing). Never part of `make` or
+# releases. Not needed if you sign cob.lic files some other way.
+cob_sign: $(BIN_DIR)
+	$(CC) $(CFLAGS) $(INCLUDE) -Ivendor/monocypher -DCOB_LIC_NO_EMBEDDED_KEYS \
+		-o $(BIN_DIR)/cob_sign$(EXE_SUF) \
+		tools/cob_sign.c src/drm.c vendor/monocypher/monocypher.c
 
 farmer: $(BIN_DIR)
 	$(CC) $(CFLAGS) $(INCLUDE) -Ivendor/miniz -D_POSIX_C_SOURCE=200809L -DMINIZ_NO_ZLIB_APIS \
@@ -419,14 +478,14 @@ play: wasm
 # Explicitly NOT included: farmer, popcorn_comp, docs/ -- see
 # EMBED-README.md's "What's not in here, on purpose" section.
 EMBED_STAGE = $(BIN_DIR)/embed-stage
-EMBED_SUF  ?=
+EMBED_SUF  ?= $(ENT_SUF)
 EMBED_ZIP   = $(BIN_DIR)/cob-$(shell cat VERSION)-embed$(EMBED_SUF).zip
 
 .PHONY: embed
 embed: cob_interp_full
 	rm -rf $(EMBED_STAGE) $(EMBED_ZIP)
 	mkdir -p $(EMBED_STAGE)/legal
-	cp $(BIN_DIR)/cob_interp_full$(EXE_SUF) $(EMBED_STAGE)/cob$(EXE_SUF)
+	cp $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) $(EMBED_STAGE)/cob$(EXE_SUF)
 	cp LICENSE.md $(EMBED_STAGE)/
 	cp legal/license_raylib.terms legal/license_raygui.terms $(EMBED_STAGE)/legal/
 	cp VERSION $(EMBED_STAGE)/

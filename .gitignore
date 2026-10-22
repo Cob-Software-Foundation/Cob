@@ -69,3 +69,9 @@ tools/ffi/*.dylib
 tools/ffi/*.dll
 tools/ffi/*.popcorn_tmp.c
 tools/ffi/ffi_test_native*
+
+# Enterprise licensing: NEVER commit the private signing key or issued licenses.
+# (include/drm_pubkey.h is the PUBLIC key and is safe to commit.)
+*.key
+cob_private*
+*.lic

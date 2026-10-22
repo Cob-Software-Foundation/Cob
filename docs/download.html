@@ -103,9 +103,9 @@
         <h3>Windows</h3>
         <div class="os-sub">amd64 · 386 · arm64</div>
         <div class="arch-list">
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-amd64.zip">64-bit (amd64) <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-386.zip">32-bit (386) <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-windows-arm64.zip">ARM64 <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-windows-amd64.zip">64-bit (amd64) <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-windows-386.zip">32-bit (386) <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-windows-arm64.zip">ARM64 <span class="tag">.zip</span></a>
           <a href="#">ARM32 COMING SOON <span class="tag">.zip</span></a>
         </div>
       </div>
@@ -115,8 +115,8 @@
         <h3>macOS</h3>
         <div class="os-sub">amd64 (Intel) · arm64 (Apple Silicon)</div>
         <div class="arch-list">
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-darwin-arm64.zip">Apple Silicon (arm64) <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-darwin-amd64.zip">Intel (amd64) <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-darwin-arm64.zip">Apple Silicon (arm64) <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-darwin-amd64.zip">Intel (amd64) <span class="tag">.zip</span></a>
         </div>
       </div>
 
@@ -125,10 +125,10 @@
         <h3>Linux</h3>
         <div class="os-sub">amd64 · 386 · arm64 · arm32 — static musl binaries</div>
         <div class="arch-list">
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-linux-amd64.zip">amd64 <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-linux-arm64.zip">arm64 <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-linux-386.zip">386 <span class="tag">.zip</span></a>
-          <a href="https://github.com/Cob-Software-Foundation/Cob/releases/latest/download/cob-linux-arm32.zip">arm32 <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-linux-amd64.zip">amd64 <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-linux-arm64.zip">arm64 <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-linux-386.zip">386 <span class="tag">.zip</span></a>
+          <a href="/ftp/dist/latest/cob-linux-arm32.zip">arm32 <span class="tag">.zip</span></a>
         </div>
       </div>
     </div>
@@ -155,7 +155,7 @@
       <div class="verify-steps">
         <div class="verify-step">
           <div class="num">1</div>
-          <div><strong>Download checksums.txt</strong><p>It sits alongside the binaries on the same GitHub release.</p></div>
+          <div><strong>Download checksums.txt</strong><p>It sits alongside the binaries in the same folder, e.g. <a href="/ftp/dist/latest/checksums.txt">/ftp/dist/latest/checksums.txt</a>.</p></div>
         </div>
         <div class="verify-step">
           <div class="num">2</div>
@@ -189,47 +189,47 @@ $ grep cob-linux-amd64 checksums.txt<br>
           <tr>
             <td class="ver">0.0.8</td>
             <td class="note">Console input: <code>input(&lt;prompt&gt;)</code> returns a line of typing as a string and <code>input_int(&lt;prompt&gt;)</code> returns it as a whole number (0, with a warning, if it isn't one). The prompt is optional, and at the end of the input they return an empty string or 0. Works in both cob_interp and popcorn_comp, which behave identically, and in the in-browser <a href="play/index.html">playground</a>. Also fixes a small leak in compiled programs that tested a string for truthiness. The .strawberry cache format bumped to COBSTRW9 (old caches are rebuilt automatically).</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.8">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.8/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.7</td>
             <td class="note">Conditionals: <code>if &lt;condition&gt;:</code> with optional <code>elif</code> and <code>else:</code> blocks, using the same conditions as <code>while</code> and nesting freely. Works in both cob_interp and popcorn_comp, which produce identical output. The .strawberry cache format bumped to COBSTRW8 (old caches are rebuilt automatically).</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.7">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.7/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.6</td>
             <td class="note">A C API / FFI (<code>extern &lt;name&gt;(...) from "&lt;lib&gt;"</code>): call a real exported C function from a Cob script, with the same fixed <code>CobValue</code> signature in both cob_interp (dlopen/dlsym, resolved eagerly) and popcorn_comp (a real static link, no dlopen in the compiled binary at all). Also new: a WebAssembly build of the pure-language core powers the in-browser <a href="play/index.html">playground</a> — desktop-only keywords (SQLite, _cobwindow, and now extern) no-op there with a one-time notice instead of crashing.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.6">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.6/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.5</td>
             <td class="note">Plain `make` now builds SQLite + a native raylib-backed window by default, with raygui-backed window_button/window_slider/window_textbox for real interactive widgets. Tcl/Tk moved to the separate cob_interp_db build. Zero configure/autoconf anywhere in the default build's dependency chain.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.5">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.5/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.4</td>
             <td class="note">Strings — a real second value type. pop(x) prints a variable's value, "+" concatenates, and comparisons work on two strings. Shipped in both cob_interp and popcorn_comp, verified to compile and interpret identically.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.4">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.4/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.3-bug-fix-2</td>
             <td class="note">Project moved from pixel-pulse-labs to the Cob-Software-Foundation org on GitHub. Every hardcoded repo/registry URL updated, including farmer's default package registry (now cpi.cob.pixel-pulse.dev).</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.3-bug-fix-2">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.3-bug-fix-2/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.3-bug-fix-1</td>
             <td class="note">Fixes a Windows cmd.exe quoting bug in popcorn_comp's bundled-Zig auto-resolve. No other changes.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.3-bug-fix-1">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.3-bug-fix-1/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.3</td>
             <td class="note">Project Obsidian Falcon. popcorn_comp now spawns a real compiler (Zig by default) instead of embedding TCC. farmer extracts zips in-process with zip-slip protection.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.3">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.3/">Files →</a></td>
           </tr>
           <tr>
             <td class="ver">0.0.2</td>
             <td class="note">Prior release. See the repository history for details.</td>
-            <td><a href="https://github.com/Cob-Software-Foundation/Cob/releases/tag/v0.0.2">Release page →</a></td>
+            <td><a href="/ftp/dist/v0.0.2/">Files →</a></td>
           </tr>
         </tbody>
       </table>

@@ -85,6 +85,9 @@
 #endif
 
 #include "common.h"
+#ifdef COB_ENTERPRISE
+#include "drm.h"   /* enterprise build only (make ENTERPRISE=1) */
+#endif
 #include "file_io.h"
 
 #include <stdio.h>
@@ -1433,6 +1436,9 @@ int main(int argc, char **argv) {
 
     if (cob_check_hidden_version_flag(argc, argv)) return 0;
     if (cob_check_hidden_license_flag(argc, argv)) return 0;
+#ifdef COB_ENTERPRISE
+    if (cob_lic_require("popcorn_comp") != 0) return 1;
+#endif
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0) {

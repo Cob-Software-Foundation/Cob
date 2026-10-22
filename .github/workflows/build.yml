@@ -301,6 +301,22 @@ jobs:
             EXE_SUF="$EXE_SUF"
 
           cp "bin/cob_interp_full${EXE_SUF}" "dist/${{ matrix.output_name }}"
+
+          # ---- Enterprise (license-gated) builds -----------------------
+          # Only when the maintainer's PUBLIC key is committed. These go
+          # into their own zips/artifacts and never into the .deb/apt repo.
+          if [ -f include/drm_pubkey.h ]; then
+            mkdir -p dist/enterprise
+            make cob_interp_full ENTERPRISE=1 "${FULL_BUILD_ARGS[@]}"
+            make embed ENTERPRISE=1 "${FULL_BUILD_ARGS[@]}" EMBED_SUF="_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}"
+            cp bin/cob-*-embed_enterprise-*.zip "dist/"
+            make popcorn_comp ENTERPRISE=1 \
+              CC="${{ matrix.cc }}" \
+              CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
+              EXE_SUF="$EXE_SUF"
+            cp "bin/cob_interp_full_enterprise${EXE_SUF}" "dist/enterprise/${{ matrix.output_name }}"
+            cp "bin/popcorn_comp_enterprise${EXE_SUF}"    "dist/enterprise/${{ matrix.popcorn_output_name }}"
+          fi
         else
           make cob_interp farmer popcorn_comp \
             CC="${{ matrix.cc }}" \
@@ -308,6 +324,16 @@ jobs:
             EXE_SUF="$EXE_SUF"
 
           cp "bin/cob_interp${EXE_SUF}" "dist/${{ matrix.output_name }}"
+
+          if [ -f include/drm_pubkey.h ]; then
+            mkdir -p dist/enterprise
+            make cob_interp popcorn_comp ENTERPRISE=1 \
+              CC="${{ matrix.cc }}" \
+              CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
+              EXE_SUF="$EXE_SUF"
+            cp "bin/cob_interp_enterprise${EXE_SUF}"      "dist/enterprise/${{ matrix.output_name }}"
+            cp "bin/popcorn_comp_enterprise${EXE_SUF}"    "dist/enterprise/${{ matrix.popcorn_output_name }}"
+          fi
         fi
 
         # Rename the Makefile's output names to the shorter names the
@@ -371,10 +397,38 @@ jobs:
         zip -r "../dist/${{ matrix.archive_name }}.zip" ${{ matrix.archive_name }}
         cd ..
 
+    # Enterprise zip: same layout as the free zip (bundled Zig, legal files,
+    # farmer) but with the license-gated cob + popcorn_comp. Needs a cob.lic
+    # to run. Built only when include/drm_pubkey.h is committed.
+    - name: Package Enterprise zip
+      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        ENT="cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}"
+        mkdir -p "staging/$ENT"
+        cp -r "staging/${{ matrix.archive_name }}"/. "staging/$ENT/"
+        cp "dist/enterprise/${{ matrix.output_name }}"         "staging/$ENT/${{ matrix.output_name }}"
+        cp "dist/enterprise/${{ matrix.popcorn_output_name }}" "staging/$ENT/${{ matrix.popcorn_output_name }}"
+        {
+          echo "Cob Enterprise build"
+          echo "===================="
+          echo "cob and popcorn_comp in this archive need a valid cob.lic."
+          echo "Put it next to the program, or set the COB_LICENSE environment variable."
+          echo "No license? Use the free build: https://cob.pixel-pulse.dev/download.html"
+        } > "staging/$ENT/ENTERPRISE-README.txt"
+        (cd staging && zip -r "../dist/$ENT.zip" "$ENT")
+
     - name: Attest Build Provenance
       uses: actions/attest-build-provenance@v4.2.2
       with:
         subject-path: dist/${{ matrix.archive_name }}.zip
+
+    - name: Attest Enterprise Build Provenance
+      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      uses: actions/attest-build-provenance@v4.2.2
+      with:
+        subject-path: dist/cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip
 
     - name: Generate individual hash and text fragment
       shell: bash
@@ -386,6 +440,14 @@ jobs:
         # Embeddable package, named by `make embed` as
         # cob-<VERSION>-embed-<goos>-<goarch>.zip.
         for f in cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip; do
+          [ -e "$f" ] || continue
+          sha256sum "$f" > "$f.sha256"
+          sha256sum "$f" > "$f.hashfrag"
+        done
+
+        # Enterprise zip + enterprise embeddable package (if built).
+        for f in cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip \
+                 cob-*-embed_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip; do
           [ -e "$f" ] || continue
           sha256sum "$f" > "$f.sha256"
           sha256sum "$f" > "$f.hashfrag"
@@ -403,6 +465,25 @@ jobs:
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.sha256
           dist/cob-*-embed-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
+
+    # Enterprise files get their OWN artifact. Its name does not match the
+    # deb job's `artifact-cob-linux-*` pattern, and the apt-repo job only
+    # downloads `artifact-cob-deb`, so enterprise binaries can never reach
+    # the .deb or the apt repository. The release job's `artifact-*`
+    # pattern does pick it up, so they are published with the release.
+    - name: Upload Enterprise matrix artifacts
+      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifact-cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}
+        if-no-files-found: ignore
+        path: |
+          dist/cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+          dist/cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip.sha256
+          dist/cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
+          dist/cob-*-embed_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+          dist/cob-*-embed_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip.sha256
+          dist/cob-*-embed_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
   # ---------------------------------------------------------------------
   # Debian package. ONE signed .deb that carries every Linux architecture
