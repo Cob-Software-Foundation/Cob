@@ -202,37 +202,35 @@ jobs:
         tar xf llvm-mingw.tar.xz
         echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
-    - name: Install X11/OpenGL dev headers (full build, native Linux)
-      if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch == null
-      run: |
-        sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-          libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-
     - name: Install X11/OpenGL dev headers (full build, foreign-arch Linux)
       if: matrix.full_build == true && matrix.goos == 'linux' && matrix.x11_arch != null
-      # i386 is served from the normal Ubuntu mirrors. arm64/armhf are
-      # only served from ports.ubuntu.com, so the default amd64 stanzas
-      # are restricted to amd64/i386 (otherwise apt 404s on
-      # binary-arm64/Packages) and a dedicated ports source is added
-      # covering main/updates/backports/security.
+      shell: bash
       run: |
-        sudo dpkg --add-architecture ${{ matrix.x11_arch }}
+        set -euxo pipefail
+
+        sudo dpkg --add-architecture "${{ matrix.x11_arch }}"
         if [ "${{ matrix.x11_arch }}" != "i386" ]; then
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
             sudo sed -i '/^Types: deb$/a Architectures: amd64 i386' /etc/apt/sources.list.d/ubuntu.sources
           fi
-          sudo tee /etc/apt/sources.list.d/ubuntu-ports.list > /dev/null << 'PORTS_EOF'
+
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports.list > /dev/null <<'PORTS_EOF'
         deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble main universe restricted multiverse
         deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe restricted multiverse
         deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-backports main universe restricted multiverse
         deb [arch=arm64,armhf signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://ports.ubuntu.com/ubuntu-ports noble-security main universe restricted multiverse
         PORTS_EOF
         fi
+
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          libx11-dev:${{ matrix.x11_arch }} libgl1-mesa-dev:${{ matrix.x11_arch }} \
-          libxrandr-dev:${{ matrix.x11_arch }} libxinerama-dev:${{ matrix.x11_arch }} \
-          libxcursor-dev:${{ matrix.x11_arch }} libxi-dev:${{ matrix.x11_arch }}
+        sudo apt-get install -y --allow-downgrades --allow-change-held-packages \
+          libgcc-s1:amd64 libgcc-s1:${{ matrix.x11_arch }} \
+          libx11-dev:${{ matrix.x11_arch }} \
+          libgl1-mesa-dev:${{ matrix.x11_arch }} \
+          libxrandr-dev:${{ matrix.x11_arch }} \
+          libxinerama-dev:${{ matrix.x11_arch }} \
+          libxcursor-dev:${{ matrix.x11_arch }} \
+          libxi-dev:${{ matrix.x11_arch }}
 
     - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
