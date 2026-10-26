@@ -26,18 +26,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # dev headers for GLFW's X11 backend) + Xvfb so a real (virtual) display is
 # available for window_open() to actually open a window against, same as
 # .github/workflows/build.yml's test_extensions job does.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        make \
-        libx11-dev \
-        libxrandr-dev \
-        libxinerama-dev \
-        libxcursor-dev \
-        libxi-dev \
-        libgl1-mesa-dev \
-        xvfb \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update && apk add --no-cache \
+    build-base \
+    make \
+    libx11-dev \
+    libxrandr-dev \
+    libxinerama-dev \
+    libxcursor-dev \
+    libxi-dev \
+    mesa-dev \
+    xvfb \
+    ca-certificates
 
 WORKDIR /cob
 COPY . /cob
