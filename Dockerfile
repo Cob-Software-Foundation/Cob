@@ -18,7 +18,7 @@
 # heavier build (see Release.txt for the autoconf/busybox-ash fragility
 # that comes with it) and isn't part of the default `make` this image runs.
 # =============================================================================
-FROM alpine:latest
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
