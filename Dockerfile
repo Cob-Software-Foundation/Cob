@@ -18,7 +18,7 @@
 # heavier build (see Release.txt for the autoconf/busybox-ash fragility
 # that comes with it) and isn't part of the default `make` this image runs.
 # =============================================================================
-FROM debian:bookworm-slim
+FROM alpine:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
