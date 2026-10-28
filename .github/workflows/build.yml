@@ -35,7 +35,7 @@ jobs:
           # ---------------- Windows ----------------
           - goos: windows
             goarch: amd64
-            runner: ubuntu-latest
+            runner: windows-2022
             toolchain: mingw
             cc: x86_64-w64-mingw32-gcc
             ar: x86_64-w64-mingw32-ar
@@ -50,7 +50,7 @@ jobs:
 
           - goos: windows
             goarch: '386'
-            runner: ubuntu-latest
+            runner: windows-2022
             toolchain: mingw
             cc: i686-w64-mingw32-gcc
             ar: i686-w64-mingw32-ar
@@ -65,7 +65,7 @@ jobs:
 
           - goos: windows
             goarch: arm64
-            runner: ubuntu-latest
+            runner: windows-11-arm
             toolchain: llvm-mingw
             cc: aarch64-w64-mingw32-clang
             ar: aarch64-w64-mingw32-ar
@@ -81,7 +81,7 @@ jobs:
           # ---------------- Linux ----------------
           - goos: linux
             goarch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             toolchain: native
             cc: gcc
             output_name: cob
@@ -97,7 +97,7 @@ jobs:
           # creates libgcc/libx11 version conflicts. Keep them as minimal builds.
           - goos: linux
             goarch: '386'
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             toolchain: multilib
             cc: gcc
             cflags: "-m32"
@@ -112,7 +112,7 @@ jobs:
 
           - goos: linux
             goarch: arm64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
             toolchain: cross
             cc: aarch64-linux-gnu-gcc
             ar: aarch64-linux-gnu-ar
@@ -127,7 +127,7 @@ jobs:
 
           - goos: linux
             goarch: arm
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
             toolchain: cross
             cc: arm-linux-gnueabihf-gcc
             ar: arm-linux-gnueabihf-ar
@@ -143,7 +143,7 @@ jobs:
           # ---------------- macOS ----------------
           - goos: darwin
             goarch: arm64
-            runner: macos-latest
+            runner: macos-14
             toolchain: clang-arch
             cc: clang
             cflags: "-arch arm64"
@@ -157,7 +157,7 @@ jobs:
 
           - goos: darwin
             goarch: amd64
-            runner: macos-latest
+            runner: macos-13
             toolchain: clang-arch
             cc: clang
             cflags: "-arch x86_64"
@@ -174,16 +174,34 @@ jobs:
       with:
         lfs: true
 
+    - name: Install Windows build tools
+      if: matrix.goos == 'windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ matrix.toolchain }}" = "llvm-mingw" ]; then
+          LLVM_MINGW_VERSION="20260421"
+          LLVM_MINGW_DIST="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-windows-x86_64"
+          curl -fsSL -o llvm-mingw.zip \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_DIST}.zip"
+          unzip -q llvm-mingw.zip
+          echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
+          exit 0
+        fi
+
+        choco install mingw --no-progress -y
+        echo "C:/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
+
     - name: Install mingw-w64 cross toolchain
-      if: matrix.toolchain == 'mingw'
+      if: matrix.goos == 'linux' && matrix.toolchain == 'mingw'
       run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_pkg }}
 
     - name: Install 32-bit multilib toolchain
-      if: matrix.toolchain == 'multilib'
+      if: matrix.goos == 'linux' && matrix.toolchain == 'multilib'
       run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_pkg }}
 
     - name: Install Linux cross toolchain
-      if: matrix.toolchain == 'cross'
+      if: matrix.goos == 'linux' && matrix.toolchain == 'cross'
       run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_pkg }}
 
     - name: Install X11/OpenGL dev headers (full build, native Linux only)
@@ -191,16 +209,6 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y --no-install-recommends \
           libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-
-    - name: Install llvm-mingw (Windows arm64)
-      if: matrix.toolchain == 'llvm-mingw'
-      run: |
-        LLVM_MINGW_VERSION="20260421"
-        LLVM_MINGW_DIST="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64"
-        curl -fsSL -o llvm-mingw.tar.xz \
-          "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_DIST}.tar.xz"
-        tar xf llvm-mingw.tar.xz
-        echo "$PWD/${LLVM_MINGW_DIST}/bin" >> "$GITHUB_PATH"
 
     - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
@@ -215,19 +223,6 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
 
         if [ "${{ matrix.full_build }}" = "true" ]; then
-          # Ships cob_interp_full (SQLite + _cobwindow + raygui widgets)
-          # as "cob"/"cob.exe".
-          #
-          # CFLAGS is deliberately NOT overridden in this branch:
-          # cob_interp_full recurses into raylib's Makefile, and a
-          # command-line CFLAGS replaces raylib's own flags (which pick
-          # its GLFW backend). Anything matrix.cflags would supply
-          # (-m32, -arch arm64, ...) is folded into CC instead.
-          #
-          # PLATFORM_OS/WINDOW_LIBS/SQLITE_LIB are forced for Windows
-          # and Linux because both Makefiles key their platform
-          # branches on the build host, not the cross-compile target.
-          # macOS is built natively, so auto-detection already works.
           FULL_CC="${{ matrix.cc }} ${{ matrix.cflags || '' }}"
           FULL_AR="${{ matrix.ar || '' }}"
           case "${{ matrix.goos }}" in
@@ -248,8 +243,6 @@ jobs:
               ;;
           esac
 
-          # Empty values are omitted rather than passed to make as
-          # literal empty assignments.
           FULL_BUILD_ARGS=(CC="$FULL_CC" EXE_SUF="$EXE_SUF")
           [ -n "$FULL_AR" ] && FULL_BUILD_ARGS+=(AR="$FULL_AR")
           [ -n "$WINDOW_LIBS" ] && FULL_BUILD_ARGS+=(WINDOW_LIBS="$WINDOW_LIBS")
@@ -258,8 +251,6 @@ jobs:
 
           make cob_interp_full "${FULL_BUILD_ARGS[@]}"
 
-          # Minimal embeddable package (cob(.exe) + license text); see
-          # EMBED-README.md. Reuses what cob_interp_full just built.
           make embed "${FULL_BUILD_ARGS[@]}" EMBED_SUF="-${{ matrix.goos }}-${{ matrix.goarch }}"
           cp bin/cob-*-embed-*.zip "dist/"
 
@@ -270,9 +261,6 @@ jobs:
 
           cp "bin/cob_interp_full${EXE_SUF}" "dist/${{ matrix.output_name }}"
 
-          # ---- Enterprise (license-gated) builds -----------------------
-          # Only when the maintainer's PUBLIC key is committed. These go
-          # into their own zips/artifacts and never into the .deb/apt repo.
           if [ -f include/drm_pubkey.h ]; then
             mkdir -p dist/enterprise
             make cob_interp_full ENTERPRISE=1 "${FULL_BUILD_ARGS[@]}"
@@ -304,8 +292,6 @@ jobs:
           fi
         fi
 
-        # Rename the Makefile's output names to the shorter names the
-        # release archives ship.
         cp "bin/farmer${EXE_SUF}"       "dist/${{ matrix.farmer_output_name }}"
         cp "bin/popcorn_comp${EXE_SUF}" "dist/${{ matrix.popcorn_output_name }}"
 
