@@ -1,0 +1,56 @@
+# =============================================================================
+# Dockerfile.stress -- Cob Toolchain stress-test image
+# =============================================================================
+# (The image people run Cob from is the plain `Dockerfile` next to this one;
+# this one exists only for CI's stress job.)
+#
+# Builds cob_interp and the standard library (pantry = SQLite, barn =
+# windows) in a clean, reproducible Ubuntu environment and runs
+# tools/stress/run_stress.sh against it. This exists to catch regressions
+# that only show up under sustained load (interpreter loop overhead, recipe
+# calls, library result buffers, SQLite under many statements, repeated
+# window open/close cycles) in an environment that doesn't depend on
+# whatever's already installed on a developer's machine or a GitHub-hosted
+# runner's image -- everything this needs is installed explicitly, below.
+#
+# Usage:
+#   docker build -f Dockerfile.stress -t cob-stress .
+#   docker run --rm cob-stress                          # one pass
+#   docker run --rm cob-stress --iterations 20           # repeat 20x
+#
+# This does NOT test the tassel (Tcl/Tk) module -- that's a much heavier
+# from-source build (see Release.txt for the autoconf/busybox-ash fragility
+# that comes with it) and isn't part of what this image builds.
+# =============================================================================
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build tools + everything the barn module's raylib backend needs (X11 +
+# OpenGL dev headers for GLFW's X11 backend) + Xvfb so a real (virtual)
+# display is available for barn_open() to actually open a window against,
+# same as .github/workflows/build.yml's test_extensions job does.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        make \
+        libx11-dev \
+        libxrandr-dev \
+        libxinerama-dev \
+        libxcursor-dev \
+        libxi-dev \
+        libgl1-mesa-dev \
+        xvfb \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /cob
+COPY . /cob
+
+# Build once at image-build time so `docker run` starts fast and a broken
+# build fails the image build itself, not silently at container-run time.
+RUN make cob_interp popcorn_comp stdlib stdlib-barn
+
+RUN chmod +x tools/stress/run_stress.sh
+
+ENTRYPOINT ["sh", "tools/stress/run_stress.sh"]
+CMD []

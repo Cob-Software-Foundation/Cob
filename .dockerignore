@@ -1,0 +1,15 @@
+# Keeps the build context small. The product Dockerfile builds the interpreter,
+# compiler, farmer and the standard library without raylib, raygui or Tcl/Tk
+# (barn and tassel are not in the image), so those ~180 MB of vendored
+# sources are not sent to the daemon. Dockerfile.stress has its own list
+# (Dockerfile.stress.dockerignore) because it DOES build barn.
+.git
+.github
+bin
+docs
+**/*.strawberry
+**/*.o
+vendor/raylib
+vendor/raygui
+vendor/TCL
+vendor/TK

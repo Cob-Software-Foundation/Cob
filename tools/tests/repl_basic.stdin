@@ -1,0 +1,36 @@
+1 + 2
+"hi" + " there"
+set x = 10
+x * 4
+recipe square(n):
+    serve n * n
+
+square(7)
+recipe shout(s):
+    pop(s + "!")
+
+shout("hello")
+set big = square(x) + 1
+big
+:vars
+:recipes
+recipe square(n):
+    serve n * n * n
+
+square(2)
+shuck cornmath
+ear_max(3, 9)
+husk_abs(0 - 5)
+while x < 13:
+    set x = x + 1
+    pop(x)
+
+if x == 13:
+    pop("thirteen")
+else:
+    pop("other")
+
+:reset
+:vars
+:quit
+pop("never printed")

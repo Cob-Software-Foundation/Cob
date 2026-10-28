@@ -3,12 +3,12 @@ name: Stress Test
 # Separate from build.yml (which verifies the toolchain builds and the
 # smoke/unit tests pass) -- this workflow exists to catch regressions that
 # only show up under sustained load: interpreter loop overhead, SQLite under
-# many sequential statements, and repeated _cobwindow open/close cycles
+# many sequential statements, and repeated barn (window) open/close cycles
 # (resource leaks in the raylib backend would show up here as the loop
 # slowing down or eventually crashing, not just "does it open one window").
 #
 # Two independent jobs exercise the same tools/stress/run_stress.sh suite
-# two different ways: once inside the repo's own Dockerfile (a clean,
+# two different ways: once inside Dockerfile.stress (a clean,
 # reproducible environment, same one anyone can build and run locally), and
 # once directly on a GitHub-hosted runner (faster feedback, no Docker layer
 # caching involved, catches anything that's somehow specific to one
@@ -40,7 +40,7 @@ jobs:
           lfs: true
 
       - name: Build stress-test image
-        run: docker build -t cob-stress .
+        run: docker build -f Dockerfile.stress -t cob-stress .
 
       - name: Run stress test in container
         run: |
@@ -54,7 +54,7 @@ jobs:
         with:
           lfs: true
 
-      - name: Install build + _cobwindow (raylib) dependencies
+      - name: Install build + barn (raylib) dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

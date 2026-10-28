@@ -100,9 +100,12 @@
         <button data-ex="loop">A while loop</button>
         <button data-ex="strings">Strings</button>
         <button data-ex="ifelse">if / else</button>
+        <button data-ex="recipe">A recipe (function)</button>
+        <button data-ex="recursion">Recursion</button>
+        <button data-ex="library">Text &amp; math library</button>
         <button data-ex="ask">Ask a question</button>
         <button data-ex="add">Add two numbers</button>
-        <button data-ex="sandbox">Desktop-only keywords</button>
+        <button data-ex="sandbox">Desktop-only libraries</button>
       </div>
     </div>
   </section>
@@ -123,14 +126,17 @@
     </div>
 
     <p class="play-note">
-      This is the stripped-down <code>cob_interp</code> core — no SQLite, no Tcl/Tk, no
-      <code>_cobwindow</code>, and no native <code>extern</code> libraries (a browser tab can't
-      <code>dlopen()</code> anything). A script that uses any of those keywords still runs: they
-      quietly do nothing and print a one-time notice, so the rest of your script keeps going.
-      <code>input()</code> and <code>input_int()</code> ask with a browser dialog (a tab has no
-      keyboard to read); press Cancel and the program sees the end of its input.
-      Want the full thing? <a href="../download.html">Download the native build</a> for real
-      windows, databases, and C extensions.
+      This is <code>cob_interp</code> built for the browser. A tab can't <code>dlopen()</code> a
+      shared library, so the standard library modules that can run in a browser
+      (<code>porch</code>, <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>) are
+      compiled into it and <code>shuck</code> loads them as usual. The ones that need a real
+      computer &mdash; <code>pantry</code> (SQLite), <code>barn</code> (windows),
+      <code>tassel</code> (Tcl/Tk), <code>granary</code> (files) &mdash; and any native
+      <code>extern</code> library quietly do nothing and print a one-time notice, so the rest
+      of your script keeps going. <code>porch_ask()</code> and <code>porch_ask_int()</code> ask
+      with a browser dialog (a tab has no keyboard to read); press Cancel and the program sees
+      the end of its input. Want the full thing? <a href="../download.html">Download the native
+      build</a> for real windows, databases, files, a REPL, and C extensions.
     </p>
   </section>
 
@@ -194,7 +200,9 @@
     strings:
       'set name = "corn"\n' +
       'pop("hello, " + name + "!")\n' +
-      'pop("1 + 1 == 2 is " + (1 + 1 == 2))\n',
+      '# + joins text; a number is turned into text when joined\n' +
+      'set total = 1 + 1\n' +
+      'pop("1 + 1 is " + total)\n',
     ifelse:
       'set score = 85\n' +
       'if score >= 90:\n' +
@@ -203,21 +211,56 @@
       '    pop("grade: B")\n' +
       'else:\n' +
       '    pop("keep practicing")\n',
+    recipe:
+      '# recipe defines a function, serve hands a value back\n' +
+      'recipe add(a, b):\n' +
+      '    serve a + b\n' +
+      '\n' +
+      'recipe greet(name):\n' +
+      '    pop("Hello, " + name + "!")\n' +
+      '\n' +
+      'pop(add(2, 3))\n' +
+      'greet("Ada")\n',
+    recursion:
+      '# a recipe can call itself\n' +
+      'recipe fact(n):\n' +
+      '    if n <= 1:\n' +
+      '        serve 1\n' +
+      '    serve n * fact(n - 1)\n' +
+      '\n' +
+      'set i = 1\n' +
+      'while i <= 10:\n' +
+      '    pop(i + "! = " + fact(i))\n' +
+      '    set i = i + 1\n',
+    library:
+      '# the standard library: shuck brings a module in\n' +
+      'shuck kernels\n' +
+      'shuck cornmath\n' +
+      '\n' +
+      'pop(kernel_upper("corn on the cob"))\n' +
+      'pop(kernel_replace("a-b-c", "-", " + "))\n' +
+      'pop(stalk_pow(2, 10))\n' +
+      'pop(ear_max(3, 9))\n' +
+      'pop(silk_mod(0 - 7, 3))\n',
     ask:
-      'set name = input("What is your name? ")\n' +
+      'shuck porch\n' +
+      'set name = porch_ask("What is your name? ")\n' +
       'pop("Nice to meet you, " + name + "!")\n',
     add:
-      '# input_int turns what you type into a number\n' +
-      'set a = input_int("First number? ")\n' +
-      'set b = input_int("Second number? ")\n' +
+      '# porch_ask_int turns what you type into a number\n' +
+      'shuck porch\n' +
+      'set a = porch_ask_int("First number? ")\n' +
+      'set b = porch_ask_int("Second number? ")\n' +
       'set total = a + b\n' +
       'pop("Total: " + total)\n',
     sandbox:
-      '# These are desktop-only features -- in this browser sandbox they\n' +
-      '# quietly no-op (see the note below the playground) instead of\n' +
-      '# crashing, so the rest of the script still runs.\n' +
-      'set h = sql_open(":memory:")\n' +
-      'pop("sql handle=" + h)\n' +
+      '# pantry (SQLite), barn (windows) and tassel (Tcl/Tk) are desktop\n' +
+      '# libraries -- in this browser sandbox they quietly do nothing (see the\n' +
+      '# note below the playground) instead of crashing, so the rest of the\n' +
+      '# script still runs.\n' +
+      'shuck pantry\n' +
+      'set h = pantry_open(":memory:")\n' +
+      'pop("pantry handle=" + h)\n' +
       'extern calculate_fast(x) from "math_ext.so"\n' +
       'pop("extern result=" + calculate_fast(6))\n' +
       'pop("still running after both")\n'
@@ -278,7 +321,7 @@
     function onOut(line) { sawOutput = true; appendLine(line, lineClassFor(line)); }
     function onErr(line) { sawOutput = true; appendLine(line, lineClassFor(line) || "err"); }
 
-    // Console input. input()/input_int() read stdin, and a browser tab has no keyboard, so each
+    // Console input. porch_ask()/porch_ask_int() read stdin, and a browser tab has no keyboard, so each
     // read asks with a browser dialog that shows the program's own prompt text, then echoes the
     // question and answer into the output like a terminal would. Cancel means "end of input".
     // Output arrives byte by byte so a prompt with no newline ("Name? ") is visible when asked.

@@ -11,12 +11,26 @@
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
 
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "file_io.h"
 #include "common.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+
+#if defined(_WIN32)
+#  include <windows.h>
+#elif defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#  include <unistd.h>
+#elif !defined(COB_WASM)
+#  include <unistd.h>
+#endif
 
 CobFileStatus cob_file_read_all(const char *path, CobFileBuffer *out) {
     FILE *fp;
@@ -127,4 +141,59 @@ int cob_make_cache_path(const char *src_path, char *out_buf, size_t out_buf_size
     memcpy(out_buf, src_path, src_len - ext_len);
     memcpy(out_buf + (src_len - ext_len), COB_CACHE_EXTENSION, cache_ext_len + 1);
     return 0;
+}
+
+/* ---------------------------------------------------------------------
+ * STANDARD LIBRARY LOCATION (v0.0.9)
+ * ------------------------------------------------------------------- */
+int cob_stdlib_dir(char *out_buf, size_t out_buf_size) {
+    const char *env = getenv(COB_STDLIB_ENV);
+    if (!out_buf || out_buf_size == 0) return -1;
+    if (env && env[0]) {
+        if (strlen(env) + 1 > out_buf_size) return -1;
+        memcpy(out_buf, env, strlen(env) + 1);
+        return 0;
+    }
+#if defined(COB_WASM)
+    return -1;
+#else
+    {
+        char buf[4096];
+        char *last_sep;
+#if defined(_WIN32)
+        DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)sizeof(buf));
+        if (len == 0 || len >= sizeof(buf)) return -1;
+#elif defined(__APPLE__)
+        uint32_t size = (uint32_t)sizeof(buf);
+        if (_NSGetExecutablePath(buf, &size) != 0) return -1;
+#else
+        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (len <= 0) return -1;
+        buf[len] = '\0';
+#endif
+        last_sep = strrchr(buf, '/');
+#if defined(_WIN32)
+        { char *bs = strrchr(buf, '\\'); if (bs && (!last_sep || bs > last_sep)) last_sep = bs; }
+#endif
+        if (!last_sep) return -1;
+        *last_sep = '\0';
+        if (snprintf(out_buf, out_buf_size, "%s%c%s", buf, COB_PATH_SEP, COB_STDLIB_SUBDIR) >= (int)out_buf_size)
+            return -1;
+        return 0;
+    }
+#endif
+}
+
+int cob_stdlib_lib_path(const char *name, char *out_buf, size_t out_buf_size) {
+    char dir[1024];
+    int n;
+    if (cob_stdlib_dir(dir, sizeof(dir)) != 0) return -1;
+#if defined(_WIN32)
+    n = snprintf(out_buf, out_buf_size, "%s%c%s.dll", dir, COB_PATH_SEP, name);
+#elif defined(__APPLE__)
+    n = snprintf(out_buf, out_buf_size, "%s%clib%s.dylib", dir, COB_PATH_SEP, name);
+#else
+    n = snprintf(out_buf, out_buf_size, "%s%clib%s.so", dir, COB_PATH_SEP, name);
+#endif
+    return (n < 0 || (size_t)n >= out_buf_size) ? -1 : 0;
 }

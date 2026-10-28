@@ -68,10 +68,17 @@
  * are tagged "[cob]" rather than "[cob_interp]", since a compiled
  * binary is its own standalone program, not the interpreter.
  *
- * CONSOLE INPUT (v0.0.8) -- input(<prompt>) and input_int(<prompt>)
- * compile to cob_input()/cob_input_int(), a small stdin runtime that
- * mirrors cob_interp.c line for line (see COB_INPUT_RUNTIME below). It is
- * appended to the generated C only for programs that use it.
+ * RECIPES (v0.0.9) -- `recipe name(a, b):` becomes a C function
+ * cob_fn_<name>(void); `serve` becomes a goto to its single exit. Call
+ * arguments travel through a small argument stack (cob_argpush/cob_argpop)
+ * because C leaves the order of argument evaluation unspecified, and Cob
+ * promises left-to-right: the comma operator sequences the pushes. A
+ * recipe's parameters and every name it `set`s are C locals; any other name
+ * is a file-scope global, read-only -- identical scoping to cob_interp.
+ *
+ * THE STANDARD LIBRARY (console input, text, SQLite, ...) needs no special
+ * support here: it is `extern` calls into shared libraries, linked with
+ * -l<module> plus -L/rpath for the standard library directory.
  *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
@@ -111,30 +118,13 @@
  * top-of-file comment for the full language semantics). Only what's
  * needed to walk and transpile the tree lives here.
  * ------------------------------------------------------------------- */
-/* v0.0.5 added EXPR_SQL_OPEN..EXPR_WINDOW_TEXTBOX (13 kinds) between
- * EXPR_HARVEST and what cob_interp.c now calls EXPR_EXTERN_CALL (CEP-2).
- * This reader never implemented any of those 13 -- a script using one
- * fails cleanly via read_expr()'s `default: return -1` (see the magic-
- * sharing comment above) -- but EXPR_EXTERN_CALL's on-the-wire tag is
- * still *19th* (index 18), so the 13 are named here as plain spacers,
- * purely to keep that numbering, and never given a `case` of their own. */
+/* The tags mirror cob_interp.c (cache format COBSTRW10): v0.0.9 removed the
+ * built-in SQL/Tcl/Tk/window/input kinds (they are standard-library shared
+ * libraries now) and renumbered what is left. */
 typedef enum {
     EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST,
-    POPCORN_UNSUPPORTED_SQL_OPEN, POPCORN_UNSUPPORTED_SQL_EXEC,
-    POPCORN_UNSUPPORTED_SQL_QUERY, POPCORN_UNSUPPORTED_SQL_CLOSE,
-    POPCORN_UNSUPPORTED_TCL_EVAL, POPCORN_UNSUPPORTED_TK_EVAL,
-    POPCORN_UNSUPPORTED_WINDOW_OPEN, POPCORN_UNSUPPORTED_WINDOW_LABEL,
-    POPCORN_UNSUPPORTED_WINDOW_WAIT, POPCORN_UNSUPPORTED_WINDOW_CLOSE,
-    POPCORN_UNSUPPORTED_WINDOW_BUTTON, POPCORN_UNSUPPORTED_WINDOW_SLIDER,
-    POPCORN_UNSUPPORTED_WINDOW_TEXTBOX,
-    /* C API / FFI (CEP-2): a call to a name bound by an `extern`
-     * statement elsewhere in the program. var = the C symbol name,
-     * args[0..argc-1] = the call's arguments. */
-    EXPR_EXTERN_CALL,
-    /* Console input (v0.0.8): input(<prompt>) / input_int(<prompt>). One
-     * operand in `left`. Appended after EXPR_EXTERN_CALL exactly like
-     * cob_interp.c, so the on-the-wire tags (19, 20) line up. */
-    EXPR_INPUT, EXPR_INPUT_INT
+    EXPR_EXTERN_CALL,   /* a call to a name bound by `extern` (all stdlib calls) */
+    EXPR_CALL           /* a call to a recipe */
 } ExprKind;
 typedef struct Expr {
     ExprKind kind;
@@ -144,7 +134,7 @@ typedef struct Expr {
     char op;
     struct Expr *left;
     struct Expr *right;
-    struct Expr **args; int argc;   /* EXPR_EXTERN_CALL */
+    struct Expr **args; int argc;   /* EXPR_EXTERN_CALL / EXPR_CALL */
 } Expr;
 
 typedef enum { COND_TRUTHY, COND_EQ, COND_NE, COND_LT, COND_GT, COND_LE, COND_GE } CondOp;
@@ -154,7 +144,8 @@ typedef struct { Expr *left; CondOp op; Expr *right; } Cond;
  * numbering gap to bridge here, unlike ExprKind above. */
 /* STMT_IF mirrors cob_interp.c (appended last; `elif` is already desugared
  * to a nested if in else_body by the interpreter's parser). */
-typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF } StmtKind;
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF,
+               STMT_RECIPE, STMT_SERVE, STMT_CALL } StmtKind;
 typedef struct Program { struct Stmt *items; size_t count, capacity; } Program;
 typedef struct Stmt {
     StmtKind kind;
@@ -164,6 +155,9 @@ typedef struct Stmt {
     char *trash_name;
     char *ext_name; char *ext_lib;   /* STMT_EXTERN */
     Cond *if_cond; Program if_body; Program else_body;   /* STMT_IF */
+    char *recipe_name; char **recipe_params; int recipe_nparams; Program recipe_body; /* STMT_RECIPE */
+    Expr *serve_expr;                                     /* STMT_SERVE */
+    Expr *call_expr;                                      /* STMT_CALL */
 } Stmt;
 
 static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
@@ -285,16 +279,8 @@ static int read_expr(ByteReader *r, Expr **out) {
             (*out)->left = inner;
             return 0;
         }
-        case EXPR_INPUT:
-        case EXPR_INPUT_INT: {
-            Expr *inner;
-            if (read_expr(r, &inner) != 0) return -1;
-            *out = expr_new((ExprKind)kind);
-            if (!*out) return -1;
-            (*out)->left = inner;
-            return 0;
-        }
-        case EXPR_EXTERN_CALL: {
+        case EXPR_EXTERN_CALL:
+        case EXPR_CALL: {
             char *name; uint32_t n, j; Expr **args = NULL;
             if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
             if (reader_u32(r, &n) != 0) { free(name); return -1; }
@@ -305,7 +291,7 @@ static int read_expr(ByteReader *r, Expr **out) {
             for (j = 0; j < n; j++) {
                 if (read_expr(r, &args[j]) != 0) { free(args); free(name); return -1; }
             }
-            *out = expr_new(EXPR_EXTERN_CALL);
+            *out = expr_new((ExprKind)kind);
             if (!*out) { free(args); free(name); return -1; }
             (*out)->var = name; (*out)->args = args; (*out)->argc = (int)n;
             return 0;
@@ -348,6 +334,21 @@ static int read_stmt(ByteReader *r, Stmt *out) {
             if (read_cond(r, &out->if_cond) != 0) return -1;
             if (read_program(r, &out->if_body) != 0) return -1;
             return read_program(r, &out->else_body);
+        case STMT_RECIPE: {
+            uint32_t np, k;
+            if (reader_bytes_alloc(r, &out->recipe_name, NULL) != 0) return -1;
+            if (reader_u32(r, &np) != 0 || np > 255) return -1;
+            if (np > 0) {
+                out->recipe_params = (char **)calloc(np, sizeof(char *));
+                if (!out->recipe_params) return -1;
+            }
+            for (k = 0; k < np; k++)
+                if (reader_bytes_alloc(r, &out->recipe_params[k], NULL) != 0) return -1;
+            out->recipe_nparams = (int)np;
+            return read_program(r, &out->recipe_body);
+        }
+        case STMT_SERVE: return read_expr(r, &out->serve_expr);
+        case STMT_CALL: return read_expr(r, &out->call_expr);
         default: return -1;
     }
 }
@@ -446,8 +447,8 @@ static void collect_expr(const Expr *e, NameSet *ns) {
     if (!e) return;
     if (e->kind == EXPR_VAR) nameset_add(ns, e->var);
     if (e->kind == EXPR_BINOP) { collect_expr(e->left, ns); collect_expr(e->right, ns); }
-    if (e->kind == EXPR_HARVEST || e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) collect_expr(e->left, ns);
-    if (e->kind == EXPR_EXTERN_CALL) {
+    if (e->kind == EXPR_HARVEST) collect_expr(e->left, ns);
+    if (e->kind == EXPR_EXTERN_CALL || e->kind == EXPR_CALL) {
         int j;
         for (j = 0; j < e->argc; j++) collect_expr(e->args[j], ns);
     }
@@ -461,6 +462,8 @@ static void collect_program(const Program *p, NameSet *ns) {
             case STMT_POP: collect_expr(s->pop_expr, ns); break;
             case STMT_SET: nameset_add(ns, s->set_name); collect_expr(s->set_expr, ns); break;
             case STMT_TRASH: nameset_add(ns, s->trash_name); break;
+            case STMT_SERVE: collect_expr(s->serve_expr, ns); break;
+            case STMT_CALL: collect_expr(s->call_expr, ns); break;
             case STMT_WHILE: collect_cond(s->while_cond, ns); collect_program(&s->while_body, ns); break;
             case STMT_IF:
                 collect_cond(s->if_cond, ns);
@@ -470,6 +473,28 @@ static void collect_program(const Program *p, NameSet *ns) {
             default: break;
         }
     }
+}
+/* Names a recipe assigns with `set`, anywhere in its body. With its
+ * parameters these are the recipe's locals (everything else it reads is a
+ * global) -- the same rule cob_interp.c applies. */
+static void recipe_collect_sets(const Program *p, NameSet *ns) {
+    size_t i;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        if (s->kind == STMT_SET) nameset_add(ns, s->set_name);
+        if (s->kind == STMT_WHILE) recipe_collect_sets(&s->while_body, ns);
+        if (s->kind == STMT_IF) { recipe_collect_sets(&s->if_body, ns); recipe_collect_sets(&s->else_body, ns); }
+    }
+}
+static void recipe_locals(const Stmt *r, NameSet *ns) {
+    int k;
+    for (k = 0; k < r->recipe_nparams; k++) nameset_add(ns, r->recipe_params[k]);
+    recipe_collect_sets(&r->recipe_body, ns);
+}
+static int nameset_has(const NameSet *ns, const char *name) {
+    size_t i;
+    for (i = 0; i < ns->count; i++) if (strcmp(ns->names[i], name) == 0) return 1;
+    return 0;
 }
 static int program_uses_harvest_or_trash(const Program *p); /* fwd */
 
@@ -541,6 +566,8 @@ static int collect_externs(const Program *p, ExternSet *es) {
         const Stmt *s = &p->items[i];
         if (s->kind == STMT_EXTERN) {
             if (externset_add(es, s->ext_name, s->ext_lib) != 0) return -1;
+        } else if (s->kind == STMT_RECIPE) {
+            if (collect_externs(&s->recipe_body, es) != 0) return -1;
         } else if (s->kind == STMT_WHILE) {
             if (collect_externs(&s->while_body, es) != 0) return -1;
         } else if (s->kind == STMT_IF) {
@@ -582,6 +609,38 @@ static int emit_c_string_literal(StrBuf *b, const char *text, size_t len) {
     }
     return sb_append(b, "\"");
 }
+/* Does evaluating this expression run code that can print or read (a recipe
+ * or library call)? Only when BOTH operands of an operator do does their
+ * order matter -- see emit_sequenced(). */
+static int has_effects(const Expr *e) {
+    if (!e) return 0;
+    if (e->kind == EXPR_CALL || e->kind == EXPR_EXTERN_CALL) return 1;
+    if (e->kind == EXPR_BINOP) return has_effects(e->left) || has_effects(e->right);
+    if (e->kind == EXPR_HARVEST) return has_effects(e->left);
+    return 0;
+}
+static int emit_expr(StrBuf *b, const Expr *e);
+/* fn(left, right) with `left` guaranteed to run before `right`. C leaves the
+ * evaluation order of function arguments unspecified (gcc usually goes right
+ * to left), but Cob evaluates left to right. When both sides have effects,
+ * the left value is parked on the argument stack by a comma expression --
+ * the comma operator IS sequenced -- and picked up again as the first
+ * argument. (Evaluating `right` may push and pop its own arguments; they
+ * are balanced, so the parked value is still on top when it is popped.) */
+static int emit_sequenced(StrBuf *b, const char *fn, const Expr *l, const Expr *r) {
+    if (has_effects(l) && has_effects(r)) {
+        if (sb_append(b, "(cob_argpush(") != 0) return -1;
+        if (emit_expr(b, l) != 0) return -1;
+        if (sb_appendf(b, "), %s(cob_argpop(), ", fn) != 0) return -1;
+        if (emit_expr(b, r) != 0) return -1;
+        return sb_append(b, "))");
+    }
+    if (sb_appendf(b, "%s(", fn) != 0) return -1;
+    if (emit_expr(b, l) != 0) return -1;
+    if (sb_append(b, ", ") != 0) return -1;
+    if (emit_expr(b, r) != 0) return -1;
+    return sb_append(b, ")");
+}
 static int emit_expr(StrBuf *b, const Expr *e) {
     switch (e->kind) {
         case EXPR_NUM: return sb_appendf(b, "cob_int(%ldL)", e->num);
@@ -599,29 +658,47 @@ static int emit_expr(StrBuf *b, const Expr *e) {
                 case '/': fn = "cob_divop"; break;
                 default: return -1;
             }
-            if (sb_appendf(b, "%s(", fn) != 0) return -1;
-            if (emit_expr(b, e->left) != 0) return -1;
-            if (sb_append(b, ", ") != 0) return -1;
-            if (emit_expr(b, e->right) != 0) return -1;
-            return sb_append(b, ")");
+            return emit_sequenced(b, fn, e->left, e->right);
         }
         case EXPR_HARVEST:
             if (sb_append(b, "cob_int((long)(intptr_t)malloc((size_t)cob_harvest_bytes(") != 0) return -1;
             if (emit_expr(b, e->left) != 0) return -1;
             return sb_append(b, ")))");
-        case EXPR_INPUT:
-        case EXPR_INPUT_INT:
-            if (sb_append(b, e->kind == EXPR_INPUT ? "cob_input(" : "cob_input_int(") != 0) return -1;
-            if (emit_expr(b, e->left) != 0) return -1;
-            return sb_append(b, ")");
+        case EXPR_CALL: {
+            /* (cob_argpush(a0), cob_argpush(a1), cob_fn_name()): the comma
+             * operator evaluates the arguments strictly left to right and
+             * the callee pops them into its parameters. */
+            int j;
+            if (e->argc == 0) return sb_appendf(b, "cob_fn_%s()", e->var);
+            if (sb_append(b, "(") != 0) return -1;
+            for (j = 0; j < e->argc; j++) {
+                if (sb_append(b, "cob_argpush(") != 0) return -1;
+                if (emit_expr(b, e->args[j]) != 0) return -1;
+                if (sb_append(b, "), ") != 0) return -1;
+            }
+            return sb_appendf(b, "cob_fn_%s())", e->var);
+        }
         case EXPR_EXTERN_CALL: {
             /* cob_call_<name>(...) is the per-name adapter transpile()
              * emits once near the top of the file (see "FFI CODEGEN"
              * below) -- it does the CobValue<->CobFFIValue conversion
              * and the actual call. argc==0 passes NULL/0 rather than an
              * empty compound literal, which C99 doesn't allow. */
-            int j;
+            int j, effectful = 0;
             if (e->argc == 0) return sb_appendf(b, "cob_call_%s(NULL, 0)", e->var);
+            for (j = 0; j < e->argc; j++) if (has_effects(e->args[j])) effectful++;
+            if (effectful >= 2) {
+                /* two or more arguments that print/read: evaluate them in
+                 * order onto the argument stack, call on that frame, drop it */
+                if (sb_append(b, "(") != 0) return -1;
+                for (j = 0; j < e->argc; j++) {
+                    if (sb_append(b, "cob_argpush(") != 0) return -1;
+                    if (emit_expr(b, e->args[j]) != 0) return -1;
+                    if (sb_append(b, "), ") != 0) return -1;
+                }
+                return sb_appendf(b, "cob_argdrop(cob_call_%s(cob_argtop(%d), %d), %d))",
+                                  e->var, e->argc, e->argc, e->argc);
+            }
             if (sb_appendf(b, "cob_call_%s((CobValue[]){", e->var) != 0) return -1;
             for (j = 0; j < e->argc; j++) {
                 if (j > 0 && sb_append(b, ", ") != 0) return -1;
@@ -646,11 +723,7 @@ static int emit_cond(StrBuf *b, const Cond *c) {
         if (emit_expr(b, c->left) != 0) return -1;
         return sb_append(b, ")");
     }
-    if (sb_appendf(b, "%s(", cond_op_fn(c->op)) != 0) return -1;
-    if (emit_expr(b, c->left) != 0) return -1;
-    if (sb_append(b, ", ") != 0) return -1;
-    if (emit_expr(b, c->right) != 0) return -1;
-    return sb_append(b, ")");
+    return emit_sequenced(b, cond_op_fn(c->op), c->left, c->right);
 }
 static int emit_program(StrBuf *b, const Program *p) {
     size_t i;
@@ -663,12 +736,15 @@ static int emit_program(StrBuf *b, const Program *p) {
                 if (sb_append(b, ");\n") != 0) return -1;
                 break;
             case STMT_SET:
-                /* free the old value first -- e.g. reassigning a string
-                 * variable in a loop must not leak the previous string,
-                 * same discipline as cob_interp's vars_set(). */
-                if (sb_appendf(b, "cob_free(&cob_var_%s);\ncob_var_%s = ", s->set_name, s->set_name) != 0) return -1;
+                /* Evaluate FIRST, then free the old value and store: the
+                 * right-hand side may read the very variable being
+                 * assigned (`set s = s + "x"`), and freeing it before that
+                 * lost the old string. Reassigning in a loop still must not
+                 * leak the previous string, same discipline as cob_interp's
+                 * vars_set(). */
+                if (sb_append(b, "{ CobValue cob_tmp = ") != 0) return -1;
                 if (emit_expr(b, s->set_expr) != 0) return -1;
-                if (sb_append(b, ";\n") != 0) return -1;
+                if (sb_appendf(b, "; cob_free(&cob_var_%s); cob_var_%s = cob_tmp; }\n", s->set_name, s->set_name) != 0) return -1;
                 break;
             case STMT_TRASH:
                 if (sb_appendf(b,
@@ -695,35 +771,54 @@ static int emit_program(StrBuf *b, const Program *p) {
                 if (sb_append(b, "}\n") != 0) return -1;
                 break;
             case STMT_EXTERN:
-                /* No-op here: unlike cob_interp's dlopen/dlsym, which
-                 * genuinely happens at this point in execution, the
-                 * compiled program's binding is entirely static -- the
-                 * forward declaration and the real library link both
-                 * already happened before this program started running
-                 * (see transpile()'s FFI CODEGEN section and main()'s
-                 * link-argument construction). Nothing to emit at the
-                 * position of the statement itself. */
+                /* No-op here: the compiled program's binding is entirely
+                 * static -- the forward declaration and the real library
+                 * link already happened before it starts running (see
+                 * transpile()'s FFI CODEGEN section and main()'s
+                 * link-argument construction). */
+                break;
+            case STMT_RECIPE:
+                /* emitted once, at file scope, by transpile() */
+                break;
+            case STMT_SERVE:
+                /* hand the value to the single exit of the enclosing recipe */
+                if (sb_append(b, "{ CobValue cob_tmp = ") != 0) return -1;
+                if (emit_expr(b, s->serve_expr) != 0) return -1;
+                if (sb_append(b, "; cob_free(&cob_retval); cob_retval = cob_tmp; goto cob_done; }\n") != 0) return -1;
+                break;
+            case STMT_CALL:
+                if (sb_append(b, "{ CobValue cob_tmp = ") != 0) return -1;
+                if (emit_expr(b, s->call_expr) != 0) return -1;
+                if (sb_append(b, "; cob_free(&cob_tmp); }\n") != 0) return -1;
                 break;
         }
     }
     return 0;
 }
 
+static int expr_uses_harvest(const Expr *e) {
+    int j;
+    if (!e) return 0;
+    if (e->kind == EXPR_HARVEST) return 1;
+    if (expr_uses_harvest(e->left) || expr_uses_harvest(e->right)) return 1;
+    for (j = 0; j < e->argc; j++) if (expr_uses_harvest(e->args[j])) return 1;
+    return 0;
+}
 static int program_uses_harvest_or_trash(const Program *p) {
     size_t i;
     for (i = 0; i < p->count; i++) {
         const Stmt *s = &p->items[i];
         if (s->kind == STMT_TRASH) return 1;
-        if (s->kind == STMT_SET) {
-            const Expr *e = s->set_expr;
-            /* shallow-ish check reusing collect_expr's traversal shape */
-            if (e && (e->kind == EXPR_HARVEST ||
-                (e->kind == EXPR_BINOP && (e->left->kind == EXPR_HARVEST || e->right->kind == EXPR_HARVEST))))
-                return 1;
-        }
-        if (s->kind == STMT_WHILE && program_uses_harvest_or_trash(&s->while_body)) return 1;
-        if (s->kind == STMT_IF && (program_uses_harvest_or_trash(&s->if_body) ||
+        if (s->kind == STMT_POP && expr_uses_harvest(s->pop_expr)) return 1;
+        if (s->kind == STMT_SET && expr_uses_harvest(s->set_expr)) return 1;
+        if (s->kind == STMT_SERVE && expr_uses_harvest(s->serve_expr)) return 1;
+        if (s->kind == STMT_CALL && expr_uses_harvest(s->call_expr)) return 1;
+        if (s->kind == STMT_WHILE && (expr_uses_harvest(s->while_cond->left) || expr_uses_harvest(s->while_cond->right) ||
+                                      program_uses_harvest_or_trash(&s->while_body))) return 1;
+        if (s->kind == STMT_IF && (expr_uses_harvest(s->if_cond->left) || expr_uses_harvest(s->if_cond->right) ||
+                                   program_uses_harvest_or_trash(&s->if_body) ||
                                    program_uses_harvest_or_trash(&s->else_body))) return 1;
+        if (s->kind == STMT_RECIPE && program_uses_harvest_or_trash(&s->recipe_body)) return 1;
     }
     return 0;
 }
@@ -813,99 +908,27 @@ static const char *COB_RUNTIME_PREAMBLE =
 "}\n";
 
 /* ---------------------------------------------------------------------
- * CONSOLE INPUT RUNTIME (v0.0.8) -- emitted only for programs that call
- * input()/input_int(), so every other program's generated C is unchanged.
- * Mirrors cob_interp.c's cob_read_line / EXPR_INPUT eval exactly (same
- * prompt handling, EOF -> "" or 0, same non-numeric warning, "[cob]"
- * prefix instead of "[cob_interp]").
+ * RECIPE RUNTIME (v0.0.9) -- emitted only for programs that define recipes.
+ * The argument stack carries call arguments (and parks the left operand
+ * where evaluation order matters, see emit_sequenced()); cob_depth enforces
+ * the same recursion limit as cob_interp.c.
  * ------------------------------------------------------------------- */
-static int expr_uses_input(const Expr *e) {
-    int j;
-    if (!e) return 0;
-    if (e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) return 1;
-    if (expr_uses_input(e->left) || expr_uses_input(e->right)) return 1;
-    for (j = 0; j < e->argc; j++) if (expr_uses_input(e->args[j])) return 1;
-    return 0;
-}
-static int cond_uses_input(const Cond *c) { return c && (expr_uses_input(c->left) || expr_uses_input(c->right)); }
-static int program_uses_input(const Program *p) {
-    size_t i;
-    for (i = 0; i < p->count; i++) {
-        const Stmt *s = &p->items[i];
-        switch (s->kind) {
-            case STMT_POP: if (expr_uses_input(s->pop_expr)) return 1; break;
-            case STMT_SET: if (expr_uses_input(s->set_expr)) return 1; break;
-            case STMT_WHILE: if (cond_uses_input(s->while_cond) || program_uses_input(&s->while_body)) return 1; break;
-            case STMT_IF:
-                if (cond_uses_input(s->if_cond) || program_uses_input(&s->if_body) || program_uses_input(&s->else_body)) return 1;
-                break;
-            default: break;
-        }
-    }
-    return 0;
-}
-static const char *COB_INPUT_RUNTIME =
-"static char *cob_read_line_(const char *prompt, int *got) {\n"
-"    size_t cap = 128, len = 0;\n"
-"    char *buf = (char *)malloc(cap);\n"
-"    *got = 0;\n"
-"    if (!buf) return NULL;\n"
-"    if (prompt[0]) fputs(prompt, stdout);\n"
-"    fflush(stdout);\n"
-"    for (;;) {\n"
-"        if (!fgets(buf + len, (int)(cap - len), stdin)) break;\n"
-"        *got = 1;\n"
-"        len += strlen(buf + len);\n"
-"        if (len > 0 && buf[len - 1] == '\\n') break;\n"
-"        if (len + 1 >= cap) {\n"
-"            char *g;\n"
-"            cap *= 2;\n"
-"            g = (char *)realloc(buf, cap);\n"
-"            if (!g) { free(buf); return NULL; }\n"
-"            buf = g;\n"
-"        }\n"
+static const char *COB_RECIPE_RUNTIME =
+"static CobValue *cob_args = NULL;\n"
+"static size_t cob_args_n = 0, cob_args_cap = 0;\n"
+"static int cob_depth = 0;\n"
+"static void cob_argpush(CobValue v) {\n"
+"    if (cob_args_n == cob_args_cap) {\n"
+"        size_t nc = cob_args_cap ? cob_args_cap * 2 : 64;\n"
+"        CobValue *g = (CobValue *)realloc(cob_args, nc * sizeof(CobValue));\n"
+"        if (!g) { fprintf(stderr, \"[cob] out of memory\\n\"); exit(1); }\n"
+"        cob_args = g; cob_args_cap = nc;\n"
 "    }\n"
-"    if (!*got) len = 0;\n"
-"    while (len > 0 && (buf[len - 1] == '\\n' || buf[len - 1] == '\\r')) len--;\n"
-"    buf[len] = '\\0';\n"
-"    return buf;\n"
+"    cob_args[cob_args_n++] = v;\n"
 "}\n"
-"static char *cob_ask_(CobValue p, int *got) {\n"
-"    char nb[32];\n"
-"    const char *ps;\n"
-"    char *line;\n"
-"    if (p.is_str) ps = p.s ? p.s : \"\"; else { cob_long_to_str(p.i, nb, sizeof(nb)); ps = nb; }\n"
-"    line = cob_read_line_(ps, got);\n"
-"    cob_free(&p);\n"
-"    return line;\n"
-"}\n"
-"static CobValue cob_input(CobValue p) {\n"
-"    int got;\n"
-"    char *line = cob_ask_(p, &got);\n"
-"    if (!line) { fprintf(stderr, \"[cob] out of memory in input()\\n\"); return cob_str(\"\"); }\n"
-"    return cob_str_take(line);\n"
-"}\n"
-"static CobValue cob_input_int(CobValue p) {\n"
-"    int got, ok = 0;\n"
-"    long n = 0;\n"
-"    char *line = cob_ask_(p, &got);\n"
-"    const char *q;\n"
-"    char *end;\n"
-"    if (!line) { fprintf(stderr, \"[cob] out of memory in input_int()\\n\"); return cob_int(0); }\n"
-"    q = line;\n"
-"    while (*q == ' ' || *q == '\\t') q++;\n"
-"    if (*q) {\n"
-"        n = strtol(q, &end, 10);\n"
-"        while (*end == ' ' || *end == '\\t') end++;\n"
-"        ok = (end != q && *end == '\\0');\n"
-"    }\n"
-"    if (!ok) {\n"
-"        if (got) fprintf(stderr, \"[cob] warning: input_int() got non-numeric input \\\"%s\\\"; treated as 0\\n\", line);\n"
-"        n = 0;\n"
-"    }\n"
-"    free(line);\n"
-"    return cob_int(n);\n"
-"}\n";
+"static CobValue cob_argpop(void) { return cob_args[--cob_args_n]; }\n"
+"static CobValue *cob_argtop(int n) { return &cob_args[cob_args_n - (size_t)n]; }\n"
+"static CobValue cob_argdrop(CobValue r, int n) { cob_args_n -= (size_t)n; return r; }\n";
 
 /* ---------------------------------------------------------------------
  * C API / FFI (CEP-2) -- FFI CODEGEN
@@ -994,15 +1017,62 @@ static int emit_extern_adapters(StrBuf *b, const ExternSet *es) {
     return 0;
 }
 
+/* Emits one recipe as a C function. Parameters and `set` names are C locals
+ * (declared up front, starting at 0); every other name is the file-scope
+ * global of that name. The arguments were pushed by the caller, left to
+ * right, so they are popped here in reverse. A `serve` is a goto to the one
+ * exit, which frees the locals. */
+static int emit_recipe(StrBuf *b, const Stmt *r) {
+    NameSet locals; nameset_init(&locals);
+    size_t i;
+    int k, rc = -1;
+    recipe_locals(r, &locals);
+
+    if (sb_appendf(b, "static CobValue cob_fn_%s(void) {\n", r->recipe_name) != 0) goto done;
+    if (sb_append(b, "CobValue cob_retval = cob_int(0);\n") != 0) goto done;
+    for (i = 0; i < locals.count; i++)
+        if (sb_appendf(b, "CobValue cob_var_%s = cob_int(0);\n", locals.names[i]) != 0) goto done;
+    if (sb_appendf(b, "int cob_over = (cob_depth >= %d);\n", COB_MAX_CALL_DEPTH) != 0) goto done;
+    for (k = r->recipe_nparams - 1; k >= 0; k--)
+        if (sb_appendf(b, "cob_var_%s = cob_argpop();\n", r->recipe_params[k]) != 0) goto done;
+    if (sb_appendf(b,
+            "if (cob_over) { fprintf(stderr, \"[cob] warning: recipe '%s' is nested more than %d calls deep; call treated as 0\\n\"); goto cob_leave; }\n"
+            "cob_depth++;\n", r->recipe_name, COB_MAX_CALL_DEPTH) != 0) goto done;
+    if (emit_program(b, &r->recipe_body) != 0) goto done;
+    if (sb_append(b, "cob_done:\ncob_depth--;\ncob_leave:\n") != 0) goto done;
+    for (i = 0; i < locals.count; i++)
+        if (sb_appendf(b, "cob_free(&cob_var_%s);\n", locals.names[i]) != 0) goto done;
+    if (sb_append(b, "return cob_retval;\n}\n") != 0) goto done;
+    rc = 0;
+done:
+    free(locals.names);
+    return rc;
+}
+
 /* Builds the full, self-contained C translation unit for `prog`. `externs`
  * is the already-collected, conflict-checked extern table (see
- * collect_externs()) -- pass an empty ExternSet for a program that
- * doesn't use `extern` at all, which leaves the generated C identical
- * to what it was before CEP-2 (no CobFFIValue, no adapters emitted). */
+ * collect_externs()). Layout: runtime, extern adapters, file-scope globals,
+ * recipe prototypes + bodies, then main() holding the top-level statements. */
 static char *transpile(const Program *prog, const ExternSet *externs) {
     StrBuf b; sb_init(&b);
-    NameSet ns; nameset_init(&ns);
-    collect_program(prog, &ns);
+    NameSet globals; nameset_init(&globals);
+    size_t i;
+    int any_recipe = 0;
+
+    /* globals: the names main uses, plus every non-local name a recipe reads */
+    collect_program(prog, &globals);
+    for (i = 0; i < prog->count; i++) {
+        const Stmt *r = &prog->items[i];
+        NameSet locals, used; size_t j;
+        if (r->kind != STMT_RECIPE) continue;
+        any_recipe = 1;
+        nameset_init(&locals); nameset_init(&used);
+        recipe_locals(r, &locals);
+        collect_program(&r->recipe_body, &used);
+        for (j = 0; j < used.count; j++)
+            if (!nameset_has(&locals, used.names[j])) nameset_add(&globals, used.names[j]);
+        free(locals.names); free(used.names);
+    }
 
     if (sb_append(&b,
         "#include <stdio.h>\n"
@@ -1011,26 +1081,112 @@ static char *transpile(const Program *prog, const ExternSet *externs) {
         "#include <stdint.h>\n"
         "#include <string.h>\n") != 0) goto fail;
     if (sb_append(&b, COB_RUNTIME_PREAMBLE) != 0) goto fail;
-    if (program_uses_input(prog) && sb_append(&b, COB_INPUT_RUNTIME) != 0) goto fail;
+    /* the argument stack serves recipe calls AND the left-to-right sequencing
+     * of two library calls in one expression, so it is needed by any program
+     * that has either */
+    if ((any_recipe || externs->count > 0) && sb_append(&b, COB_RECIPE_RUNTIME) != 0) goto fail;
     if (emit_extern_adapters(&b, externs) != 0) goto fail;
-    if (sb_append(&b, "int main(void) {\n") != 0) goto fail;
 
-    size_t i;
-    for (i = 0; i < ns.count; i++) {
-        if (sb_appendf(&b, "CobValue cob_var_%s = cob_int(0);\n", ns.names[i]) != 0) goto fail;
-    }
+    /* file-scope globals: zero-initialised, which is exactly cob_int(0) */
+    for (i = 0; i < globals.count; i++)
+        if (sb_appendf(&b, "static CobValue cob_var_%s;\n", globals.names[i]) != 0) goto fail;
+    for (i = 0; i < prog->count; i++)
+        if (prog->items[i].kind == STMT_RECIPE &&
+            sb_appendf(&b, "static CobValue cob_fn_%s(void);\n", prog->items[i].recipe_name) != 0) goto fail;
+    for (i = 0; i < prog->count; i++)
+        if (prog->items[i].kind == STMT_RECIPE && emit_recipe(&b, &prog->items[i]) != 0) goto fail;
+
+    if (sb_append(&b, "int main(void) {\n") != 0) goto fail;
     if (emit_program(&b, prog) != 0) goto fail;
-    for (i = 0; i < ns.count; i++) {
-        if (sb_appendf(&b, "cob_free(&cob_var_%s);\n", ns.names[i]) != 0) goto fail;
-    }
+    for (i = 0; i < globals.count; i++)
+        if (sb_appendf(&b, "cob_free(&cob_var_%s);\n", globals.names[i]) != 0) goto fail;
     if (sb_append(&b, "return 0;\n}\n") != 0) goto fail;
 
-    free(ns.names);
+    free(globals.names);
     return b.data;
 fail:
-    free(ns.names);
+    free(globals.names);
     free(b.data);
     return NULL;
+}
+
+/* ---------------------------------------------------------------------
+ * RECIPE CHECKING (mirrors cob_interp.c's pre-run checks): no duplicate
+ * recipe, every call names a recipe with the right number of arguments,
+ * `serve` only inside a recipe, recipes only at the top level.
+ * ------------------------------------------------------------------- */
+static const Stmt *g_recipes[1024];
+static size_t g_recipe_count = 0;
+static const Stmt *find_recipe(const char *name) {
+    size_t i;
+    for (i = 0; i < g_recipe_count; i++) if (strcmp(g_recipes[i]->recipe_name, name) == 0) return g_recipes[i];
+    return NULL;
+}
+static int check_expr(const Expr *e) {
+    int j;
+    if (!e) return 0;
+    if (e->kind == EXPR_CALL) {
+        const Stmt *r = find_recipe(e->var);
+        if (!r) {
+            fprintf(stderr, "[popcorn_comp] error: call to '%s', which is not a recipe or a library function (did you forget a `shuck`?)\n", e->var);
+            return -1;
+        }
+        if (r->recipe_nparams != e->argc) {
+            fprintf(stderr, "[popcorn_comp] error: recipe '%s' takes %d argument%s but %d %s given\n",
+                    e->var, r->recipe_nparams, r->recipe_nparams == 1 ? "" : "s", e->argc, e->argc == 1 ? "was" : "were");
+            return -1;
+        }
+    }
+    if (check_expr(e->left) || check_expr(e->right)) return -1;
+    for (j = 0; j < e->argc; j++) if (check_expr(e->args[j])) return -1;
+    return 0;
+}
+static int check_program(const Program *p, int in_recipe, int at_top) {
+    size_t i;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        switch (s->kind) {
+            case STMT_POP: if (check_expr(s->pop_expr)) return -1; break;
+            case STMT_SET: if (check_expr(s->set_expr)) return -1; break;
+            case STMT_CALL: if (check_expr(s->call_expr)) return -1; break;
+            case STMT_SERVE:
+                if (!in_recipe) { fprintf(stderr, "[popcorn_comp] error: 'serve' outside a recipe\n"); return -1; }
+                if (check_expr(s->serve_expr)) return -1;
+                break;
+            case STMT_WHILE:
+                if (check_expr(s->while_cond->left) || check_expr(s->while_cond->right)) return -1;
+                if (check_program(&s->while_body, in_recipe, 0)) return -1;
+                break;
+            case STMT_IF:
+                if (check_expr(s->if_cond->left) || check_expr(s->if_cond->right)) return -1;
+                if (check_program(&s->if_body, in_recipe, 0) || check_program(&s->else_body, in_recipe, 0)) return -1;
+                break;
+            case STMT_RECIPE:
+                if (!at_top) { fprintf(stderr, "[popcorn_comp] error: recipe '%s' must be defined at the top level\n", s->recipe_name); return -1; }
+                if (check_program(&s->recipe_body, 1, 0)) return -1;
+                break;
+            case STMT_TRASH: case STMT_EXTERN: break;
+        }
+    }
+    return 0;
+}
+static int check_recipes(const Program *top) {
+    size_t i;
+    g_recipe_count = 0;
+    for (i = 0; i < top->count; i++) {
+        const Stmt *s = &top->items[i];
+        if (s->kind != STMT_RECIPE) continue;
+        if (find_recipe(s->recipe_name)) {
+            fprintf(stderr, "[popcorn_comp] error: recipe '%s' is defined twice\n", s->recipe_name);
+            return -1;
+        }
+        if (g_recipe_count >= sizeof(g_recipes) / sizeof(g_recipes[0])) {
+            fprintf(stderr, "[popcorn_comp] error: too many recipes\n");
+            return -1;
+        }
+        g_recipes[g_recipe_count++] = s;
+    }
+    return check_program(top, 0, 1);
 }
 
 /* ---------------------------------------------------------------------
@@ -1361,7 +1517,7 @@ static int sb_append_quoted(StrBuf *b, const char *s) {
 static char *build_extern_link_args(const ExternSet *es, const char *out_cwd) {
     StrBuf b; sb_init(&b);
     size_t i;
-    int any_path_lib = 0;
+    int any_path_lib = 0, any_bare_lib = 0;
     NameSet seen_libs; nameset_init(&seen_libs); /* dedupe identical libraries across distinct names */
 
     for (i = 0; i < es->count; i++) {
@@ -1376,10 +1532,26 @@ static char *build_extern_link_args(const ExternSet *es, const char *out_cwd) {
             any_path_lib = 1;
             if (sb_append_quoted(&b, lib) != 0) { free(seen_libs.names); free(b.data); return NULL; }
         } else {
+            any_bare_lib = 1;
             if (sb_appendf(&b, "-l%s", lib) != 0) { free(seen_libs.names); free(b.data); return NULL; }
         }
     }
     free(seen_libs.names);
+
+    /* A bare module name ("porch", "pantry") is a STANDARD LIBRARY shared
+     * library (or a system one like "m"): look for it in the standard
+     * library directory at link time, and record that directory as an rpath
+     * so the finished program finds the same library when it runs. */
+    if (any_bare_lib) {
+        char stdlib_dir[1024];
+        if (cob_stdlib_dir(stdlib_dir, sizeof(stdlib_dir)) == 0) {
+            if (b.len > 0 && sb_append(&b, " ") != 0) { free(b.data); return NULL; }
+            if (sb_append(&b, "-L") != 0 || sb_append_quoted(&b, stdlib_dir) != 0) { free(b.data); return NULL; }
+            if (!target_is_windows()) {
+                if (sb_append(&b, " -Wl,-rpath,") != 0 || sb_append_quoted(&b, stdlib_dir) != 0) { free(b.data); return NULL; }
+            }
+        }
+    }
 
     /* A bare filename like "math_ext.so" (no directory component) links
      * fine, but the resulting binary's DT_NEEDED is just that bare name,
@@ -1483,6 +1655,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (check_recipes(&prog) != 0) return 1; /* check_recipes() already said why */
+
     /* --- C API / FFI (CEP-2): collect extern declarations, conflict-check --- */
     ExternSet externs; externset_init(&externs);
     if (collect_externs(&prog, &externs) != 0) {
@@ -1502,7 +1676,7 @@ int main(int argc, char **argv) {
     char *c_source = transpile(&prog, &externs);
     externset_free(&externs);
     if (!c_source) {
-        fprintf(stderr, "[popcorn_comp] error: out of memory generating C source\n");
+        fprintf(stderr, "[popcorn_comp] error: could not generate C source (unsupported construct in the program, or out of memory)\n");
         free(extra_link_args);
         return 1;
     }

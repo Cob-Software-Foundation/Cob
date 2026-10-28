@@ -17,24 +17,34 @@ embed a Cob *runtime* to execute scripts on its behalf.
 ## What's in here
 
 ```
-cob(.exe)          The interpreter. cob_interp_full under the hood --
-                    SQLite (sql_open/sql_exec/sql_query/sql_close) and
-                    a native window with widgets (window_open/label/
-                    wait/close/button/slider/textbox) both built in.
-                    No Tcl/Tk -- see "Why cob_interp_full and not one
-                    of the other builds?" below.
+cob(.exe)          The interpreter (the core language only; `cob_interp`
+                    under the hood -- the `make embed` target builds it
+                    under the name cob_interp_full for historical
+                    reasons).
+lib/                The STANDARD LIBRARY: one shared library per module
+                    (lib<name>.so / lib<name>.dylib / <name>.dll) plus
+                    its <name>.cob wrapper. `shuck porch`, `shuck pantry`
+                    and the rest load from here. It MUST stay next to
+                    cob(.exe) as `lib/` (or set the COB_STDLIB environment
+                    variable to wherever you put it) -- without it every
+                    `shuck <module>` fails with a "could not load
+                    library" warning. Modules: porch (console input),
+                    cornmath, kernels (text), almanac (time), granary
+                    (files), pantry (SQLite) and barn (a native window
+                    with widgets). Not tassel (Tcl/Tk) -- see "Why no
+                    tassel?" below.
 LICENSE.md          Cob's own license (PolyForm Noncommercial 1.0.0)
                     -- read "License" below before embedding this in
                     anything. This file must travel with the package
                     wherever it goes; don't strip it out.
 legal/              Third-party license text for what's actually
-                    compiled into cob(.exe): raylib and raygui, both
-                    zlib License. (SQLite is public domain -- no
-                    separate license file exists for it. Tcl/Tk and
-                    miniz aren't in this binary at all, so their
-                    license terms don't apply here the way they would
-                    to the full release archive.)
-VERSION              Plain text, e.g. "0.0.5" -- check this before
+                    compiled into the library modules: raylib and raygui
+                    (inside barn), both zlib License. (SQLite, inside
+                    pantry, is public domain -- no separate license file
+                    exists for it. Tcl/Tk and miniz aren't in this
+                    package at all, so their license terms don't apply
+                    here the way they would to the full release archive.)
+VERSION              Plain text, e.g. "0.0.9" -- check this before
                     assuming a `.strawberry` cache or feature set.
 README.md           This file.
 ```
@@ -52,14 +62,14 @@ cob <script.cob> [--no-cache] [--no-gc]
 - **stdout**: exactly what the `.cob` script itself printed via
   `pop()`, nothing else. Safe to capture and treat as the script's own
   output.
-- **stderr**: `[cob_interp] warning: ...` lines -- both real runtime
-  warnings (a bad SQL handle, a widget on a closed window, etc.) and,
-  in this specific binary, `window_*`/`sql_*` never print a
-  "compiled without X support" stub warning, because `cob_interp_full`
-  has both built in. If you ever swap in a different build variant,
-  expect those stub warnings to reappear on stderr for the calls that
-  build doesn't support -- they're deliberately non-fatal warnings,
-  not crashes.
+- **stderr**: `[cob_interp] warning: ...` lines for the interpreter
+  itself, and `[<module>] warning: ...` lines (`[pantry] warning: ...`,
+  `[barn] warning: ...`, `[porch] warning: ...`) for the standard
+  library modules -- a bad SQL handle, a widget on a closed window, a
+  non-numeric answer to `porch_ask_int()`, and so on. All are
+  deliberately non-fatal warnings, not crashes. If a module's library
+  is missing from `lib/`, you get ONE warning naming it (`could not
+  load library 'pantry' ...`) and the module's functions return 0 / "".
 - **`--no-cache`**: skips the `.strawberry` fast-boot cache for this
   run. A script can also disable caching for itself by making
   `_MakeCache = False` its literal first line -- prefer that over the
@@ -73,24 +83,25 @@ cob <script.cob> [--no-cache] [--no-gc]
   application is exactly the kind of caller that might want to check
   this programmatically.
 - A real, native OS window opens for any script that calls
-  `window_open()` -- if your host application invokes `cob` in a
-  headless/server context with no display available, `window_open()`
-  fails cleanly (prints a warning, returns `0`) rather than crashing,
-  the same way it does today in CI (see the project's `build.yml` for
-  the Xvfb-based pattern this was verified against).
+  `barn_open()` -- if your host application invokes `cob` in a
+  headless/server context with no display available, `barn_open()`
+  fails cleanly (prints a warning, returns `0`) rather than crashing.
+- **Console input** is `porch_ask()` / `porch_ask_int()` (`shuck porch`),
+  reading the process's standard input -- so a host that wants to answer
+  a script's questions writes to the child's stdin.
+- **No REPL, unless you ask for one**: `cob` with no script starts the
+  interactive REPL. An embedding host should always pass a script path.
 
-## Why `cob_interp_full` and not one of the other builds?
+## Why no tassel?
 
-Cob's interpreter has four build variants (`cob_interp`,
-`cob_interp_window`, `cob_interp_full`, `cob_interp_db` -- see the
-main README). This package standardizes on `cob_interp_full`
-specifically because it's the one built with zero autoconf/configure
-anywhere in its own dependency chain (SQLite's single-file
-amalgamation, raylib/raygui's plain Makefiles) -- the same property
-that makes it the default `make` target for the toolchain as a whole.
-`cob_interp_db` (Tcl/Tk) was deliberately left out of this embeddable
-package: it needs `TCL_LIBRARY` pointed at a real Tcl standard library
-directory to work, which doesn't fit "extract one folder and run."
+Before 0.0.9 the interpreter had several build variants with different
+features compiled in. Now there is one interpreter, and features are
+standard library modules in `lib/`. This package ships the ones that
+build with zero autoconf/configure anywhere in their dependency chain
+(SQLite's single-file amalgamation, raylib/raygui's plain Makefiles).
+`tassel` (Tcl/Tk) was deliberately left out: it needs `TCL_LIBRARY`
+pointed at a real Tcl standard library directory to work, which doesn't
+fit "extract one folder and run."
 
 ## What's not in here, on purpose
 
@@ -131,8 +142,8 @@ version, not a substitute for actually reading `LICENSE.md`:
 
 - This package also carries **raylib** and **raygui** (both zlib
   License, text in `legal/`) as statically-linked third-party
-  components of `cob(.exe)` itself -- their license terms apply
-  alongside Cob's own, not instead of it.
+  components of the `barn` library in `lib/` -- their license terms
+  apply alongside Cob's own, not instead of it.
 
 None of the above is legal advice; if you're not sure whether your use
 case qualifies, ask the Cob Software Foundation before shipping.

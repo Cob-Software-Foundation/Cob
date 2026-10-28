@@ -1,3 +1,164 @@
+# Cob Language v0.0.9
+
+## Overview
+
+Three headline features, and one big reorganisation.
+
+**Functions.** Cob has `recipe` and `serve` (a function and its return):
+
+```
+recipe fact(n):
+    if n <= 1:
+        serve 1
+    serve n * fact(n - 1)
+
+pop(fact(10))
+```
+
+**A REPL.** Run `cob_interp` with no file for an interactive session; a
+bare expression prints its value, blocks continue with `...`, and
+variables and recipes persist. `cob_interp file.cob -i` runs a file and
+then stays in the REPL with everything it defined. (Interpreter only.)
+
+**A real standard library.** Everything that is not the core language is
+now a separate shared library (`.so` / `.dylib` / `.dll`) loaded with
+`shuck`, and every module and function in it is corn themed:
+`porch` (console input), `cornmath`, `kernels` (text), `almanac` (time),
+`granary` (files), `pantry` (SQLite), `barn` (windows), `tassel`
+(Tcl/Tk) and `silo` (the everyday five in one `shuck`).
+
+## Added
+
+* **`recipe <name>(<params>):` / `serve [<expr>]`**: functions, with
+  recursion (up to 500 calls deep, then a warning and a result of 0
+  instead of a crash). Parameters and every name a recipe `set`s are
+  local to it; any other name reads the global; a recipe cannot assign a
+  global. Recipes are defined at the top level and are hoisted, so a
+  call may appear above its recipe and recipes may call each other.
+  A call can also stand alone on a line (`greet("Ada")`).
+* **Call checking before anything runs**: a call to a name that does not
+  exist, or with the wrong number of arguments, is an error with its
+  line number, so a typo fails up front, not halfway through the run.
+  A forgotten `shuck` gets a hint naming the module to add.
+* **The REPL** in `cob_interp` (no file, `--repl`, or `-i` after a file):
+  commands `:help`, `:vars`, `:recipes`, `:load <file>`, `:reset`,
+  `:quit`; typing a recipe again replaces it; mistakes print an error
+  and the session carries on. Prompts and the banner appear only on a
+  terminal, so `cob_interp --repl < script.txt` is scriptable.
+* **The standard library** (`stdlib/`, built to `bin/lib/` by
+  `make stdlib`): `porch`, `cornmath`, `kernels`, `almanac`, `granary`,
+  `pantry`, `barn`, `tassel`, `silo`. 40+ functions, listed in the README.
+  `shuck <module>` finds the wrapper in the standard library directory
+  (`$COB_STDLIB`, else `<the tool's directory>/lib`) after the current
+  directory and `cob_modules/`; `extern ... from "<module>"` finds the
+  library there too.
+* **`popcorn_comp` gains recipes and the whole standard library**,
+  including SQLite and windows, which it could never compile before. It
+  links `-l<module>` and records the standard library directory as an
+  rpath.
+* `make test` and `tools/tests/run_tests.sh`: 17 checks, with every
+  program test run through the interpreter AND the compiler against the
+  same expected output.
+* **A Docker image**, built, smoke-tested and published to
+  `ghcr.io/cob-software-foundation/cob` (linux/amd64 + linux/arm64) by
+  the new `.github/workflows/docker.yml`: the interpreter and REPL, the
+  compiler, `farmer` and the standard library (without `barn` and
+  `tassel`). `docker run -it --rm ghcr.io/cob-software-foundation/cob`
+  starts the REPL; see the README for running and compiling programs.
+  The image build runs `make test`, and `tools/docker/smoke_test.sh`
+  checks the finished image. The old stress-test image moved to
+  `Dockerfile.stress` (ci.yml was updated to match).
+* `make cob_interp_static`: a build with the browser-capable modules
+  compiled in, which is also what the WebAssembly build now uses.
+
+## Changed (BREAKING)
+
+* **`input`, `input_int`, the SQLite keywords, the window keywords and
+  `tcl_eval` / `tk_eval` are no longer built into the interpreter.**
+  They are standard library functions now and must be `shuck`ed:
+
+      input(p)                      ->  shuck porch;   porch_ask(p)
+      input_int(p)                  ->  shuck porch;   porch_ask_int(p)
+      sql_open/exec/query/close     ->  shuck pantry;  pantry_open/exec/query/close
+      window_open/label/wait/close/button/slider/textbox
+                                    ->  shuck barn;    barn_open/label/wait/close/button/slider/textbox
+      tcl_eval / tk_eval            ->  shuck tassel;  tassel_tcl / tassel_tk
+
+  An old name gives an error that says exactly what to write instead.
+  `shuck cobwindow` is gone with the keywords it acknowledged.
+* `recipe` and `serve` are new reserved words (so an `extern` cannot be
+  named either); `input`, `input_int` and the others are no longer
+  reserved.
+* One interpreter instead of three. `cob_interp` is the core language
+  only and builds in about a second with no vendor libraries.
+  `cob_interp_full`, `cob_interp_db` and `cob_interp_window` remain as
+  `make` targets so old scripts keep working: each builds the same
+  interpreter under the old name plus the modules that build used to
+  contain.
+* Plain `make` no longer needs X11/OpenGL: it builds `cob_interp`,
+  `popcorn_comp`, `farmer` and the standard library (which includes
+  `pantry`). `barn` (raylib) and `tassel` (Tcl/Tk) are opt-in:
+  `make stdlib-barn`, `make stdlib-tassel`.
+* A program or library file in the current directory shadows a standard
+  library module of the same name (`porch.cob` is found before the real
+  `porch`). Name your own files accordingly.
+* **`.strawberry` cache format bumped from `COBSTRW9` to `COBSTRW10`**
+  (the magic is one character longer). The built-in expression kinds
+  were removed and the survivors renumbered; `recipe`, `serve` and
+  call-statement kinds were added. Old caches are detected as stale and
+  rebuilt automatically.
+* Library warnings are tagged by module (`[porch] warning: ...`,
+  `[pantry] warning: ...`), and are now identical in the interpreter
+  and in compiled programs, because both call the same library.
+* The harvest/trash `--no-gc` check now also looks inside `pop(...)`
+  and conditions, in both tools.
+* In the WebAssembly build the sandbox notice is printed once per
+  library, not once per function.
+
+## Fixed
+
+* **`popcorn_comp`: `set s = s + "x"` lost the old value** (the variable
+  was freed before its own right-hand side was read), so a string built
+  up in a loop ended up as just the last piece. The right-hand side is
+  now evaluated first.
+* **`popcorn_comp`: operand evaluation order.** C leaves the order of
+  function arguments unspecified, so `a() + b()` or a comparison of two
+  calls that print could run `b` first in a compiled program. Compiled
+  code now evaluates left to right, like the interpreter, whenever both
+  operands do something observable.
+
+## Notes
+
+* `barn` and `tassel` are ports of the old built-in window and Tcl/Tk
+  code. They compile against the vendored headers, but could not be
+  built and run in the environment this release was developed in (no
+  X11 extension headers for raylib; Tcl/Tk is a long from-source build),
+  so they have not been run. Please try `make stdlib-barn` /
+  `make stdlib-tassel` on a real desktop.
+* The release workflows (`.github/workflows/build.yml`) still package a
+  single `cob` binary. Releases must also ship the `lib/` directory
+  next to it (`cp -r bin/lib dist/`), or `shuck porch` and friends will
+  not find their libraries. `make embed` already includes it.
+* The standard library is loaded with dlopen()/LoadLibrary(), so
+  `cob_interp` must be a dynamically linked executable, and a program
+  compiled by `popcorn_comp` that uses it must be too: a statically
+  linked program (such as a static-musl cross-compile target) cannot use
+  shared libraries. Cross-compiling a program that shucks stdlib modules
+  also needs those modules built for the target, with `COB_STDLIB`
+  pointing at them. Check how the release binaries are linked before
+  publishing 0.0.9. Programs that use only the core language are
+  unaffected.
+* The Dockerfile and docker.yml could not be run in the environment this
+  release was developed in (no Docker there). The build stage's commands
+  were run by hand in a context filtered by `.dockerignore`, the runtime
+  layout was reproduced and exercised, and the smoke test was dry-run
+  (including a deliberately broken image, which it caught), but the first
+  real image build will be the one on GitHub Actions. The arm64 half is
+  built under QEMU and runs the full test suite there.
+* Tested here on Linux x86-64 with gcc, including under
+  AddressSanitizer and UBSan. The macOS and Windows code paths (library
+  naming, `GetModuleFileName`, `.dll` loading) are written but untested.
+
 # Cob Language v0.0.8
 
 ## Overview

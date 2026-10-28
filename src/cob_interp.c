@@ -2,129 +2,64 @@
  * cob_interp.c
  * ---------------------------------------------------------------------
  * Project Obsidian Falcon / Cob Language Toolchain
- * The Cob interpreter binary: `cob_interp <file.cob> [--no-cache] [--no-gc]`
+ * The Cob interpreter: `cob_interp [file.cob] [--no-cache] [--no-gc] [-i]`
+ * With no file (or with --repl) it starts the interactive REPL.
  *
  * ---------------------------------------------------------------------
- * v0.0.5 SCOPE -- fully working:
+ * THE CORE LANGUAGE (everything built in)
  * ---------------------------------------------------------------------
- *   pop(<expr>)               writes text to stdout + newline. Accepts
- *                             any expression, not just a literal --
- *                             pop(x) prints an int variable's decimal
- *                             value or a string variable's contents.
- *                             String literals use \\ \" \n \t escapes.
- *   set <name> = <expr>       integer OR string variables -- a
- *                             variable's "type" is just whatever it
- *                             was last set to; there's no declaration.
- *   "text" + "text"           string concatenation via '+'. If either
- *                             side of '+' is a string, the other side
- *                             is stringified (an int becomes its
- *                             decimal digits) and both are joined.
- *                             '-' '*' '/' still require two numbers.
- *   while <condition>:        real looping, real nested block bodies.
- *                             ==/!= /</></<=/>= work on two strings
- *                             (strcmp-based) or two numbers; comparing
- *                             a string to a number is a warning and
- *                             evaluates to false rather than guessing.
- *   if <condition>:           conditional block, same condition grammar
- *   [elif <condition>:]       as `while` (==, !=, <, >, <=, >=, or a bare
- *   [else:]                   truthiness test). Bodies are indented.
- *                             `elif`/`else` must sit at the same
- *                             indentation as their `if`. `elif` is
- *                             desugared to a nested if inside else.
- *   shuck <library_name>      loads <library_name>.cob (or
- *                             cob_modules/<library_name>/<library_name>.cob,
- *                             matching farmer's install layout) and
- *                             splices its statements in at that point,
- *                             like a textual include. Cyclic/too-deep
- *                             shucks are rejected with a clear error.
- *   harvest(<bytes>)          ONLY when --no-gc is passed: an expression
- *                             that allocates <bytes> raw memory and
- *                             returns an opaque handle (a plain integer,
- *                             not a real pointer -- Cob code can't do
- *                             pointer arithmetic with it, only pass it
- *                             to trash()).
- *   trash(<variable>)         ONLY when --no-gc is passed: frees the
- *                             handle held in <variable>. Double-free
- *                             and use of an unknown handle are reported
- *                             as warnings, not crashes.
- *   _MakeCache = False        as the literal first line of a .cob file
- *                             disables the .strawberry cache for that
- *                             file entirely (neither read nor written).
- *   sql_open(<path>)          SQLite3 binding (v0.0.5). Opens/creates
- *                             the database file at <path>, returns an
- *                             opaque int handle (0 on failure).
- *   sql_exec(<h>, <sql>)      Runs a non-query statement (CREATE,
- *                             INSERT, UPDATE, ...) against handle <h>.
- *                             Returns 0 on success, non-zero on error.
- *   sql_query(<h>, <sql>)     Runs a SELECT against handle <h>, returns
- *                             the first column of the first row as a
- *                             string ("" if no rows or on error).
- *   sql_close(<h>)            Closes a handle opened by sql_open().
- *   tcl_eval(<script>)        Tcl binding (v0.0.5). Evaluates <script>
- *                             in a lazily-created, process-wide Tcl
- *                             interpreter; returns Tcl's string result.
- *   tk_eval(<script>)         Tk binding (v0.0.5). Same as tcl_eval(),
- *                             but first loads Tk into that interpreter
- *                             (needs a real X11 $DISPLAY at runtime;
- *                             without one this evaluates to a normal
- *                             Tcl error string, same as real Tk would
- *                             report -- it doesn't crash the program).
+ *   pop(<expr>)               writes text to stdout + newline.
+ *   set <name> = <expr>       integer OR string variables; a variable's
+ *                             "type" is whatever it was last set to.
+ *   + - * /                   arithmetic; '+' with a string joins text.
+ *   while <condition>:        loops (== != < > <= >=, or a truthiness test)
+ *   if / elif / else          conditionals
+ *   recipe <name>(<params>):  defines a function (top level only), like
+ *                             Python's `def`. Parameters and every name a
+ *                             recipe `set`s are local to it; other names
+ *                             read the globals.
+ *   serve [<expr>]            hands a value back from a recipe (like
+ *                             `return`); a recipe that ends without it
+ *                             gives 0. Calls: name(a, b), in any
+ *                             expression or on a line of their own.
+ *   shuck <library>           loads <library>.cob (current directory, then
+ *                             cob_modules/<library>/, then the standard
+ *                             library directory) and splices it in.
+ *   extern <f>(<params>) from "<lib>"
+ *                             binds a C function from a shared library
+ *                             (CEP-2). The standard library is built on it.
+ *   harvest(<bytes>) / trash(<var>)   raw memory, only with --no-gc.
+ *   _MakeCache = False        first line: skip the .strawberry cache.
  *
- * The six keywords above only do real work in a binary built with
- * COB_WITH_SQLITE / COB_WITH_TCL / COB_WITH_TK defined (`make
- * cob_interp_db`, after `make sqlite tcl tk`). A plain `make cob_interp`
- * still builds with zero extra dependencies, same as always; calling
- * one of these keywords there prints a one-line warning and evaluates
- * to a harmless default (0 or "") instead of failing to build.
+ * EVERYTHING ELSE IS THE STANDARD LIBRARY (v0.0.9). Console input, text,
+ * time, files, SQLite, windows and Tcl/Tk are no longer built into this
+ * program: each is a shared library (.so / .dylib / .dll) in the standard
+ * library directory, loaded with `shuck`. Every name in it is corn themed:
+ *     shuck porch      porch_ask(), porch_ask_int()      (console input)
+ *     shuck cornmath   husk_abs(), ear_max(), stalk_pow(), silk_mod() ...
+ *     shuck kernels    kernel_len(), kernel_upper(), kernel_slice() ...
+ *     shuck almanac    almanac_now(), almanac_ticks(), almanac_nap() ...
+ *     shuck granary    granary_read(), granary_write() ...
+ *     shuck pantry     pantry_open(), pantry_exec(), pantry_query() ...
+ *     shuck barn       barn_open(), barn_label(), barn_button() ... (window)
+ *     shuck tassel     tassel_tcl(), tassel_tk()
+ *     shuck silo       porch + cornmath + kernels + almanac + granary
+ * The directory is $COB_STDLIB, else <this program's directory>/lib.
  *
- *   input(<prompt>)           Console input. Prints <prompt> (no newline,
- *                             flushed), reads one line from stdin and
- *                             returns it as a string without the line
- *                             ending. Returns "" at end of input. The
- *                             prompt is optional: input() is allowed.
- *   input_int(<prompt>)       Same, but parses the line as a base-10
- *                             integer. A non-numeric line (or end of
- *                             input) warns on stderr and returns 0.
+ * NOTE ON popcorn_comp: it has its own copy of this AST and its own C code
+ * generator. Recipes, serve and every stdlib module work there too (it
+ * links the same shared libraries). The cache tags line up with the enums
+ * below; keep the two files in sync.
  *
- *   window_button(<h>,<label>)   raygui binding (this session). Draws/
- *                             updates a button below the window_label()
- *                             text; returns 1 if it was clicked since
- *                             the last read of that same label, else 0.
- *   window_slider(<h>,<label>,<max>)  Draws/updates a 0..<max> slider;
- *                             returns its current value as an int.
- *   window_textbox(<h>,<label>)  Draws/updates an always-editable text
- *                             box; returns its current string contents.
+ * grammar:  expr := term (('+'|'-') term)*
+ *           term := primary (('*'|'/') primary)*
+ *           primary := NUMBER | STRING | IDENT | 'harvest' '(' expr ')'
+ *                      | IDENT '(' [expr (',' expr)*] ')'   (a call)
+ * cond grammar:  expr (('=='|'!='|'<'|'>'|'<='|'>=') expr)?
  *
- * These three raygui-backed keywords only do real work in a binary
- * built with COB_WITH_COBWINDOW defined (`make cob_interp_window` or
- * `make cob_interp_full`) -- same "warns and returns a harmless
- * default in a plain `make cob_interp`" rule as window_open() and
- * friends, see the _cobwindow section further down for the full
- * picture (raylib backend, one-window-per-process limit, etc).
- *
- * NOTE ON popcorn_comp: it has its own separate copy of this AST and its
- * own C code generator (tagged int/string values, see popcorn_comp.c).
- * Strings and input()/input_int() compile to native binaries with the
- * same behavior as here; the SQL/window/Tcl keywords remain
- * cob_interp-only. Expression kinds are appended in the same order in
- * both files so the .strawberry tags line up.
- *
- * If a program uses harvest()/trash() but --no-gc was not passed on the
- * command line, cob_interp refuses to run it with a clear error instead
- * of silently ignoring the memory keywords -- "unlock" is a real gate,
- * not just documentation.
- *
- * expr grammar:  expr := term (('+'|'-') term)*
- *                term := primary (('*'|'/') primary)*
- *                primary := NUMBER | STRING | IDENT
- *                           | 'harvest' '(' expr ')'
- *                           | ('input' | 'input_int') '(' [expr] ')'
- * cond grammar:  expr (('=='|'!='|'<'|'>'|'<='|'>=') expr)?  (bare expr
- *                is a truthiness/nonzero test; for a string, truthy
- *                means non-empty, matching non-zero for numbers)
- *
- * SAFETY: a `while` loop is capped at COB_MAX_LOOP_ITERATIONS so a
- * buggy/infinite .cob program can't hang the interpreter forever.
+ * SAFETY: a `while` loop is capped at COB_MAX_LOOP_ITERATIONS, and
+ * recipe calls at COB_MAX_CALL_DEPTH, so a buggy program cannot hang or
+ * crash the interpreter.
  *
  * License: PolyForm Noncommercial License 1.0.0 - see LICENSE.md
  * ===================================================================== */
@@ -147,64 +82,27 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdarg.h>
+
+/* REPL: is stdin a terminal? (prompts and the banner only show on a real
+ * terminal, so `cob_interp --repl < script` is quiet and scriptable.) */
+#if !defined(COB_WASM)
+#  if defined(_WIN32)
+#    include <io.h>
+#    define COB_STDIN_IS_TTY() _isatty(_fileno(stdin))
+#  else
+#    include <unistd.h>
+#    define COB_STDIN_IS_TTY() isatty(0)
+#  endif
+#endif
 
 #include "cob.h"   /* CEP-2: CobValue / CobFFIFunc -- the native-extension ABI */
 
-/* v0.0.5 SQLite/Tcl/Tk bindings -- only pulled in by `make cob_interp_db`
- * (see Makefile). A plain `make cob_interp` defines none of these and
- * stays exactly as dependency-free as every prior release. */
-#ifdef COB_WITH_SQLITE
-#include <sqlite3.h>
-#endif
-#ifdef COB_WITH_TCL
-#include <tcl.h>
-#endif
-#ifdef COB_WITH_TK
-#include <tk.h>
-#ifndef COB_WITH_TCL
-#error "COB_WITH_TK requires COB_WITH_TCL (Tk is a Tcl extension) -- define both, see `make cob_interp_db`"
-#endif
-#endif
-
-/* _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of raw
- * Win32/Xlib -- same OS-native windowing underneath (raylib's GLFW
- * backend uses Win32 on Windows, X11 on Linux/BSD, Cocoa on macOS),
- * but one build recipe and one code path for every platform instead
- * of maintaining separate Win32 and Xlib implementations by hand.
- * raygui (vendor/raygui, header-only) is vendored alongside it and,
- * as of this session, wired up as window_button()/window_slider()/
- * window_textbox() -- see their section further down. */
-#ifdef COB_WITH_COBWINDOW
-#include "raylib.h"
-#define COB_COBWINDOW_RAYLIB 1
-/* raygui (vendor/raygui, header-only): wired to Cob syntax this
- * session as window_button()/window_slider()/window_textbox(). Must
- * come after raylib.h so raygui reuses raylib's own Vector2/Rectangle/
- * Color types instead of falling back to RAYGUI_STANDALONE's own
- * copies. RAYGUI_IMPLEMENTATION belongs in exactly one translation
- * unit -- this file is the only one that ever includes it. */
-#define RAYGUI_IMPLEMENTATION
-#include "raygui.h"
-#endif
-
-/* ---------------------------------------------------------------------
- * COB_WASM -- the browser-sandbox build (see `make wasm`). Only the pure
- * language core is compiled: no SQLite, no Tcl/Tk, no _cobwindow, no
- * dlopen(). Those keywords still *parse*, and evaluate as silent no-op
- * stubs (see cob_web_warn_once() below) so a script written for the
- * desktop keeps running its pure-language logic instead of crashing.
- * ------------------------------------------------------------------- */
-#if defined(COB_WASM) && (defined(COB_WITH_SQLITE) || defined(COB_WITH_TCL) || \
-                          defined(COB_WITH_TK) || defined(COB_WITH_COBWINDOW))
-#error "COB_WASM is the dependency-free sandbox build: do not combine it with COB_WITH_SQLITE/TCL/TK/COBWINDOW"
-#endif
-
-/* Dynamic loading for `extern` (CEP-2): dlopen()/dlsym() on POSIX,
- * LoadLibraryA()/GetProcAddress() on Windows. Declared by hand on
- * Windows instead of #including <windows.h> because raylib.h (pulled in
- * above under COB_WITH_COBWINDOW) defines Rectangle/CloseWindow/ShowCursor,
- * which collide with <windows.h>'s -- if something already included it,
- * its own prototypes are used instead. Not compiled for COB_WASM. */
+/* Dynamic loading for `extern` (CEP-2) -- and so for the whole standard
+ * library: dlopen()/dlsym() on POSIX, LoadLibraryA()/GetProcAddress() on
+ * Windows (declared by hand so <windows.h> is not needed). Not compiled
+ * for COB_WASM, which has no dlopen(): the browser build binds the stdlib
+ * modules that can run there (COB_STDLIB_STATIC) and stubs the rest. */
 #if defined(COB_WASM)
 /* nothing: the sandbox cannot load native code */
 #elif defined(_WIN32)
@@ -240,32 +138,16 @@ static void value_free(Value *v) { if (v->kind == VAL_STR) { free(v->s); v->s = 
  * ------------------------------------------------------------------- */
 typedef enum {
     EXPR_NUM, EXPR_STR, EXPR_VAR, EXPR_BINOP, EXPR_HARVEST,
-    /* v0.0.5 SQLite/Tcl/Tk call-style builtins -- see COB_KW_SQL_* /
-     * COB_KW_TCL_EVAL / COB_KW_TK_EVAL in common.h. One-arg builtins
-     * (SQL_OPEN, SQL_CLOSE, TCL_EVAL, TK_EVAL) use `left` only; two-arg
-     * builtins (SQL_EXEC, SQL_QUERY) use `left` for the handle and
-     * `right` for the SQL text, same slot reuse pattern EXPR_BINOP
-     * already uses. */
-    EXPR_SQL_OPEN, EXPR_SQL_EXEC, EXPR_SQL_QUERY, EXPR_SQL_CLOSE,
-    EXPR_TCL_EVAL, EXPR_TK_EVAL,
-    /* _cobwindow (v0.0.5). One-arg: WINDOW_OPEN, WINDOW_CLOSE (left
-     * only). Two-arg: WINDOW_LABEL, WINDOW_WAIT (left=handle,
-     * right=text-or-seconds). */
-    EXPR_WINDOW_OPEN, EXPR_WINDOW_LABEL, EXPR_WINDOW_WAIT, EXPR_WINDOW_CLOSE,
-    /* raygui widgets, wired to Cob syntax this session. Two-arg:
-     * WINDOW_BUTTON, WINDOW_TEXTBOX (left=handle, right=label). Three-
-     * arg: WINDOW_SLIDER (left=handle, right=label, arg3=max). */
-    EXPR_WINDOW_BUTTON, EXPR_WINDOW_SLIDER, EXPR_WINDOW_TEXTBOX,
     /* C API / FFI (CEP-2): a call to a name bound by an `extern`
-     * statement. The name lives in `var`, the arguments in args[0..argc-1].
-     * Appended last so every earlier kind keeps its numeric value --
-     * popcorn_comp.c's reader depends on that (it hard-codes this one as
-     * 18; keep the two in sync). */
+     * statement (this is how every standard-library function is called).
+     * The name lives in `var`, the arguments in args[0..argc-1]. */
     EXPR_EXTERN_CALL,
-    /* Console input (v0.0.8, cache format COBSTRW9). One-arg (`left` =
-     * prompt). Appended after EXPR_EXTERN_CALL so every earlier kind keeps
-     * its numeric value; popcorn_comp.c mirrors both kinds. */
-    EXPR_INPUT, EXPR_INPUT_INT
+    /* Functions (v0.0.9, cache format COBSTRW10): a call to a `recipe`.
+     * Same shape as EXPR_EXTERN_CALL. popcorn_comp.c mirrors both tags
+     * (5 and 6) -- keep the two in sync. v0.0.9 removed the built-in
+     * SQL/Tcl/Tk/window/input kinds, so the tags were renumbered with the
+     * cache format bump. */
+    EXPR_CALL
 } ExprKind;
 
 typedef struct Expr {
@@ -282,8 +164,11 @@ typedef struct Expr {
     struct Expr *arg3;    /* three-arg builtin's third arg (currently only
                             * window_slider's <max>) -- NULL otherwise */
     struct Expr **args;   /* EXPR_EXTERN_CALL: owned array of owned Exprs */
-    int argc;             /* EXPR_EXTERN_CALL: number of entries in args */
+    int argc;             /* EXPR_EXTERN_CALL / EXPR_CALL: number of entries in args */
+    int line;             /* EXPR_CALL: source line (diagnostics only; not cached) */
 } Expr;
+static int g_parse_line = 0;    /* line of the statement being parsed */
+static int g_recipe_depth = 0;  /* >0 while parsing a recipe body (where `serve` is legal) */
 
 static Expr *expr_new_num(long n) {
     Expr *e = (Expr *)calloc(1, sizeof(Expr));
@@ -315,37 +200,17 @@ static Expr *expr_new_harvest(Expr *bytes_expr) {
     e->kind = EXPR_HARVEST; e->left = bytes_expr;
     return e;
 }
-/* One-arg v0.0.5 builtins: sql_open, sql_close, tcl_eval, tk_eval. */
-static Expr *expr_new_call1(ExprKind kind, Expr *arg) {
-    Expr *e = (Expr *)calloc(1, sizeof(Expr));
-    if (!e) return NULL;
-    e->kind = kind; e->left = arg;
-    return e;
-}
-/* Two-arg v0.0.5 builtins: sql_exec(handle, sql), sql_query(handle, sql). */
-static Expr *expr_new_call2(ExprKind kind, Expr *arg1, Expr *arg2) {
-    Expr *e = (Expr *)calloc(1, sizeof(Expr));
-    if (!e) return NULL;
-    e->kind = kind; e->left = arg1; e->right = arg2;
-    return e;
-}
-/* Three-arg builtins: window_slider(handle, label, max). */
-static Expr *expr_new_call3(ExprKind kind, Expr *arg1, Expr *arg2, Expr *arg3) {
-    Expr *e = (Expr *)calloc(1, sizeof(Expr));
-    if (!e) return NULL;
-    e->kind = kind; e->left = arg1; e->right = arg2; e->arg3 = arg3;
-    return e;
-}
 /* CEP-2: takes ownership of `owned_name` and of `args` (and each Expr in it). */
-static Expr *expr_new_extern_call(char *owned_name, Expr **args, int argc) {
+static Expr *expr_new_named_call(ExprKind kind, char *owned_name, Expr **args, int argc) {
     Expr *e = (Expr *)calloc(1, sizeof(Expr));
     if (!e) return NULL;
-    e->kind = EXPR_EXTERN_CALL; e->var = owned_name; e->args = args; e->argc = argc;
+    e->kind = kind; e->var = owned_name; e->args = args; e->argc = argc;
+    e->line = g_parse_line;
     return e;
 }
 static void expr_free(Expr *e) {
     if (!e) return;
-    if (e->kind == EXPR_EXTERN_CALL) {
+    if (e->kind == EXPR_EXTERN_CALL || e->kind == EXPR_CALL) {
         int i;
         free(e->var);
         for (i = 0; i < e->argc; i++) expr_free(e->args[i]);
@@ -355,44 +220,16 @@ static void expr_free(Expr *e) {
     if (e->kind == EXPR_VAR) free(e->var);
     if (e->kind == EXPR_BINOP) { expr_free(e->left); expr_free(e->right); }
     if (e->kind == EXPR_HARVEST) { expr_free(e->left); }
-    if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
-        e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
-        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE ||
-        e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) {
-        expr_free(e->left);
-    }
-    if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
-        e->kind == EXPR_WINDOW_LABEL || e->kind == EXPR_WINDOW_WAIT ||
-        e->kind == EXPR_WINDOW_BUTTON || e->kind == EXPR_WINDOW_TEXTBOX) {
-        expr_free(e->left); expr_free(e->right);
-    }
-    if (e->kind == EXPR_WINDOW_SLIDER) {
-        expr_free(e->left); expr_free(e->right); expr_free(e->arg3);
-    }
     free(e);
 }
 static int expr_uses_harvest(const Expr *e) {
     if (!e) return 0;
     if (e->kind == EXPR_HARVEST) return 1;
     if (e->kind == EXPR_BINOP) return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
-    if (e->kind == EXPR_EXTERN_CALL) {
+    if (e->kind == EXPR_EXTERN_CALL || e->kind == EXPR_CALL) {
         int i;
         for (i = 0; i < e->argc; i++) if (expr_uses_harvest(e->args[i])) return 1;
         return 0;
-    }
-    if (e->kind == EXPR_SQL_OPEN || e->kind == EXPR_SQL_CLOSE ||
-        e->kind == EXPR_TCL_EVAL || e->kind == EXPR_TK_EVAL ||
-        e->kind == EXPR_WINDOW_OPEN || e->kind == EXPR_WINDOW_CLOSE ||
-        e->kind == EXPR_INPUT || e->kind == EXPR_INPUT_INT) {
-        return expr_uses_harvest(e->left);
-    }
-    if (e->kind == EXPR_SQL_EXEC || e->kind == EXPR_SQL_QUERY ||
-        e->kind == EXPR_WINDOW_LABEL || e->kind == EXPR_WINDOW_WAIT ||
-        e->kind == EXPR_WINDOW_BUTTON || e->kind == EXPR_WINDOW_TEXTBOX) {
-        return expr_uses_harvest(e->left) || expr_uses_harvest(e->right);
-    }
-    if (e->kind == EXPR_WINDOW_SLIDER) {
-        return expr_uses_harvest(e->left) || expr_uses_harvest(e->right) || expr_uses_harvest(e->arg3);
     }
     return 0;
 }
@@ -423,7 +260,9 @@ static void cond_free(Cond *c) {
 /* STMT_IF is appended after STMT_EXTERN for the same reason. `elif` is
  * not its own kind: the parser desugars `elif` into an STMT_IF nested as
  * the sole statement of the previous if's else_body. */
-typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF } StmtKind;
+/* Functions (v0.0.9) append STMT_RECIPE / STMT_SERVE / STMT_CALL the same way. */
+typedef enum { STMT_POP, STMT_SET, STMT_WHILE, STMT_TRASH, STMT_EXTERN, STMT_IF,
+               STMT_RECIPE, STMT_SERVE, STMT_CALL } StmtKind;
 
 typedef struct Program {
     struct Stmt *items;
@@ -438,6 +277,9 @@ typedef struct Stmt {
     char *trash_name;                         /* STMT_TRASH */
     char *ext_name; char *ext_lib;            /* STMT_EXTERN: C symbol name, library path */
     Cond *if_cond; Program if_body; Program else_body;  /* STMT_IF (else_body may be empty) */
+    char *recipe_name; char **recipe_params; int recipe_nparams; Program recipe_body; int recipe_line; /* STMT_RECIPE */
+    Expr *serve_expr;                           /* STMT_SERVE (a bare `serve` holds the number 0) */
+    Expr *call_expr;                          /* STMT_CALL: a call used as a statement, result dropped */
 } Stmt;
 
 static void program_init(Program *p) { p->items = NULL; p->count = 0; p->capacity = 0; }
@@ -456,6 +298,12 @@ static int program_uses_harvest_or_trash(const Program *p) {
                 if (program_uses_harvest_or_trash(&s->if_body)) return 1;
                 if (program_uses_harvest_or_trash(&s->else_body)) return 1;
                 break;
+            case STMT_RECIPE:
+                if (program_uses_harvest_or_trash(&s->recipe_body)) return 1;
+                break;
+            case STMT_POP: if (expr_uses_harvest(s->pop_expr)) return 1; break;
+            case STMT_SERVE: if (expr_uses_harvest(s->serve_expr)) return 1; break;
+            case STMT_CALL: if (expr_uses_harvest(s->call_expr)) return 1; break;
             default: break;
         }
     }
@@ -475,6 +323,18 @@ static void stmt_free_contents(Stmt *s) {
             free(s->while_body.items);
             break;
         }
+        case STMT_RECIPE: {
+            size_t i;
+            int k;
+            free(s->recipe_name);
+            for (k = 0; k < s->recipe_nparams; k++) free(s->recipe_params[k]);
+            free(s->recipe_params);
+            for (i = 0; i < s->recipe_body.count; i++) stmt_free_contents(&s->recipe_body.items[i]);
+            free(s->recipe_body.items);
+            break;
+        }
+        case STMT_SERVE: expr_free(s->serve_expr); break;
+        case STMT_CALL: expr_free(s->call_expr); break;
         case STMT_IF: {
             size_t i;
             cond_free(s->if_cond);
@@ -639,6 +499,11 @@ typedef struct {
     VarTable *vars;
     HandleTable *handles;
     int no_gc; /* 1 if --no-gc was passed on the command line */
+    /* Functions (v0.0.9) */
+    VarTable *locals;  /* NULL at top level; the running recipe's variables otherwise */
+    int call_depth;    /* how many recipes are currently running */
+    Value ret;         /* value of the `serve` that is unwinding (VAL_INT 0 otherwise) */
+    int fell_off;      /* set by the last recipe call: 1 if it ended without `serve` */
 } EvalCtx;
 
 /* ---------------------------------------------------------------------
@@ -756,11 +621,7 @@ static int cob_is_reserved_word(const char *name) {
     static const char *const reserved[] = {
         COB_KW_WHILE, COB_KW_SET, COB_KW_POP, COB_KW_SHUCK, COB_KW_HARVEST,
         COB_KW_TRASH, COB_KW_EXTERN, COB_KW_IF, COB_KW_ELIF, COB_KW_ELSE,
-        COB_KW_SQL_OPEN, COB_KW_SQL_EXEC, COB_KW_SQL_QUERY, COB_KW_SQL_CLOSE,
-        COB_KW_TCL_EVAL, COB_KW_TK_EVAL,
-        COB_KW_WINDOW_OPEN, COB_KW_WINDOW_LABEL, COB_KW_WINDOW_WAIT, COB_KW_WINDOW_CLOSE,
-        COB_KW_WINDOW_BUTTON, COB_KW_WINDOW_SLIDER, COB_KW_WINDOW_TEXTBOX,
-        COB_KW_INPUT, COB_KW_INPUT_INT
+        COB_KW_RECIPE, COB_KW_SERVE
     };
     size_t i;
     for (i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
@@ -768,9 +629,10 @@ static int cob_is_reserved_word(const char *name) {
     return 0;
 }
 
-/* `p` points just past the '(' of an already-declared extern's call.
- * Takes ownership of `name`. Returns the position after ')' or NULL. */
-static const char *parse_extern_call(char *name, const char *p, Expr **out) {
+/* `p` points just past the '(' of a call: an already-declared extern
+ * (EXPR_EXTERN_CALL) or a call to a `recipe` (EXPR_CALL). Takes ownership of
+ * `name`. Returns the position after ')' or NULL. */
+static const char *parse_named_call(ExprKind kind, char *name, const char *p, Expr **out) {
     Expr **args = NULL; int argc = 0, cap = 0, i;
     p = skip_blank(p);
     if (*p != ')') {
@@ -792,7 +654,7 @@ static const char *parse_extern_call(char *name, const char *p, Expr **out) {
         }
         if (*p != ')') goto fail;
     }
-    *out = expr_new_extern_call(name, args, argc);
+    *out = expr_new_named_call(kind, name, args, argc);
     if (!*out) goto fail;
     return p + 1;
 fail:
@@ -838,84 +700,6 @@ static const char *parse_primary(const char *p, Expr **out) {
         }
     }
 
-    /* v0.0.5 SQLite/Tcl/Tk/_cobwindow call-style builtins. Same shape as
-     * harvest() above: keyword directly followed by '(' (no blank
-     * skipped between them mattering, since we check after skip_blank
-     * on the keyword's tail) means a call; otherwise the identifier
-     * falls through to the plain variable-reference case below.
-     * argc-arg builtins parse argc comma-separated exprs (1, 2, or 3 --
-     * window_slider(<h>, <label>, <max>) is the one 3-arg case so far). */
-    {
-        struct { const char *kw; ExprKind kind; int argc; } calls[] = {
-            { COB_KW_SQL_OPEN,  EXPR_SQL_OPEN,  1 },
-            { COB_KW_SQL_EXEC,  EXPR_SQL_EXEC,  2 },
-            { COB_KW_SQL_QUERY, EXPR_SQL_QUERY, 2 },
-            { COB_KW_SQL_CLOSE, EXPR_SQL_CLOSE, 1 },
-            { COB_KW_TCL_EVAL,  EXPR_TCL_EVAL,  1 },
-            { COB_KW_TK_EVAL,   EXPR_TK_EVAL,   1 },
-            { COB_KW_WINDOW_OPEN,  EXPR_WINDOW_OPEN,  1 },
-            { COB_KW_WINDOW_LABEL, EXPR_WINDOW_LABEL, 2 },
-            { COB_KW_WINDOW_WAIT,  EXPR_WINDOW_WAIT,  2 },
-            { COB_KW_WINDOW_CLOSE, EXPR_WINDOW_CLOSE, 1 },
-            { COB_KW_WINDOW_BUTTON,  EXPR_WINDOW_BUTTON,  2 },
-            { COB_KW_WINDOW_SLIDER,  EXPR_WINDOW_SLIDER,  3 },
-            { COB_KW_WINDOW_TEXTBOX, EXPR_WINDOW_TEXTBOX, 2 },
-            { COB_KW_INPUT,     EXPR_INPUT,     1 },
-            { COB_KW_INPUT_INT, EXPR_INPUT_INT, 1 },
-        };
-        size_t i;
-        for (i = 0; i < sizeof(calls) / sizeof(calls[0]); i++) {
-            size_t kw_len = strlen(calls[i].kw);
-            if (strncmp(p, calls[i].kw, kw_len) != 0) continue;
-            /* don't match a longer identifier that merely starts with
-             * this keyword, e.g. a variable named "sql_open_result" */
-            if (is_ident_char((unsigned char)p[kw_len])) continue;
-            {
-                const char *after_kw = skip_blank(p + kw_len);
-                if (*after_kw != '(') continue;
-                {
-                    Expr *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
-                    const char *cur = skip_blank(after_kw + 1);
-                    if ((calls[i].kind == EXPR_INPUT || calls[i].kind == EXPR_INPUT_INT) && *cur == ')') {
-                        /* input() -- no prompt: use an empty string literal */
-                        char *empty = cob_strdup("");
-                        if (!empty) return NULL;
-                        arg1 = expr_new_str(empty, 0);
-                        if (!arg1) { free(empty); return NULL; }
-                    } else {
-                        cur = parse_expr(cur, &arg1);
-                        if (!cur) return NULL;
-                    }
-                    cur = skip_blank(cur);
-                    if (calls[i].argc >= 2) {
-                        if (*cur != ',') { expr_free(arg1); return NULL; }
-                        cur = skip_blank(cur + 1);
-                        cur = parse_expr(cur, &arg2);
-                        if (!cur) { expr_free(arg1); return NULL; }
-                        cur = skip_blank(cur);
-                    }
-                    if (calls[i].argc >= 3) {
-                        if (*cur != ',') { expr_free(arg1); expr_free(arg2); return NULL; }
-                        cur = skip_blank(cur + 1);
-                        cur = parse_expr(cur, &arg3);
-                        if (!cur) { expr_free(arg1); expr_free(arg2); return NULL; }
-                        cur = skip_blank(cur);
-                    }
-                    if (*cur != ')') {
-                        expr_free(arg1); expr_free(arg2); expr_free(arg3); return NULL;
-                    }
-                    switch (calls[i].argc) {
-                        case 1: *out = expr_new_call1(calls[i].kind, arg1); break;
-                        case 2: *out = expr_new_call2(calls[i].kind, arg1, arg2); break;
-                        default: *out = expr_new_call3(calls[i].kind, arg1, arg2, arg3); break;
-                    }
-                    if (!*out) { expr_free(arg1); expr_free(arg2); expr_free(arg3); return NULL; }
-                    return cur + 1;
-                }
-            }
-        }
-    }
-
     if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)*(p + 1)))) {
         char *end;
         long v = strtol(p, &end, 10);
@@ -929,7 +713,15 @@ static const char *parse_primary(const char *p, Expr **out) {
         /* CEP-2: a declared extern directly followed by '(' is a native call */
         if (cob_extern_is_declared(name)) {
             const char *paren = skip_blank(after);
-            if (*paren == '(') return parse_extern_call(name, paren + 1, out);
+            if (*paren == '(') return parse_named_call(EXPR_EXTERN_CALL, name, paren + 1, out);
+        }
+        /* v0.0.9: any other name directly followed by '(' is a call to a
+         * `recipe`. (A bare name followed by '(' was never valid Cob, so this
+         * takes nothing away.) Whether the recipe exists is checked after the
+         * whole program is parsed, so a call may appear above its recipe. */
+        {
+            const char *paren = skip_blank(after);
+            if (*paren == '(') return parse_named_call(EXPR_CALL, name, paren + 1, out);
         }
         *out = expr_new_var(name);
         if (!*out) { free(name); return NULL; }
@@ -1007,557 +799,285 @@ static const char *parse_condition(const char *p, Cond **out) {
 }
 
 /* ---------------------------------------------------------------------
+ * FUNCTIONS (v0.0.9) -- registry, checking and calls
+ *
+ * `recipe` statements are HOISTED: every top-level recipe is registered before
+ * the program starts running, so a recipe may be called from above where it
+ * is written (and recipes may call each other freely). popcorn_comp does the
+ * same, because C functions are hoisted too.
+ *
+ * Scoping, kept deliberately simple and identical in both tools:
+ *   - a recipe's PARAMETERS and every name it assigns with `set` are LOCAL
+ *     to it, for the whole body (assigning to a name makes it local, as in
+ *     Python). They start at 0 and vanish when the recipe returns.
+ *   - every other name is read from the global (top-level) variables.
+ *   - a recipe cannot assign a global; it hands results back with `serve`.
+ * ------------------------------------------------------------------- */
+typedef struct { const Stmt *def; char **locals; int nlocals; } FuncEntry;
+static FuncEntry *g_funcs = NULL;
+static size_t g_func_count = 0, g_func_cap = 0;
+
+static FuncEntry *func_find(const char *name) {
+    size_t i;
+    for (i = 0; i < g_func_count; i++)
+        if (strcmp(g_funcs[i].def->recipe_name, name) == 0) return &g_funcs[i];
+    return NULL;
+}
+static int cob_func_exists(const char *name) { return func_find(name) != NULL; }
+
+static void funcs_free(void) {
+    size_t i;
+    int k;
+    for (i = 0; i < g_func_count; i++) {
+        for (k = 0; k < g_funcs[i].nlocals; k++) free(g_funcs[i].locals[k]);
+        free(g_funcs[i].locals);
+    }
+    free(g_funcs);
+    g_funcs = NULL; g_func_count = g_func_cap = 0;
+}
+
+static int names_add(char ***arr, int *n, int *cap, const char *name) {
+    int i;
+    for (i = 0; i < *n; i++) if (strcmp((*arr)[i], name) == 0) return 0;
+    if (*n == *cap) {
+        int new_cap = *cap ? *cap * 2 : 8;
+        char **grown = (char **)realloc(*arr, (size_t)new_cap * sizeof(char *));
+        if (!grown) return -1;
+        *arr = grown; *cap = new_cap;
+    }
+    (*arr)[*n] = cob_strdup(name);
+    if (!(*arr)[*n]) return -1;
+    (*n)++;
+    return 0;
+}
+static int recipe_collect_sets(const Program *p, char ***arr, int *n, int *cap) {
+    size_t i;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        if (s->kind == STMT_SET && names_add(arr, n, cap, s->set_name) != 0) return -1;
+        if (s->kind == STMT_WHILE && recipe_collect_sets(&s->while_body, arr, n, cap) != 0) return -1;
+        if (s->kind == STMT_IF) {
+            if (recipe_collect_sets(&s->if_body, arr, n, cap) != 0) return -1;
+            if (recipe_collect_sets(&s->else_body, arr, n, cap) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
+/* Registers (or, with an existing name, replaces) one recipe. */
+static int func_register(const Stmt *d) {
+    char **locals = NULL;
+    int n = 0, cap = 0, k;
+    FuncEntry *f;
+    for (k = 0; k < d->recipe_nparams; k++)
+        if (names_add(&locals, &n, &cap, d->recipe_params[k]) != 0) goto oom;
+    if (recipe_collect_sets(&d->recipe_body, &locals, &n, &cap) != 0) goto oom;
+    f = func_find(d->recipe_name);
+    if (f) {
+        for (k = 0; k < f->nlocals; k++) free(f->locals[k]);
+        free(f->locals);
+    } else {
+        if (g_func_count == g_func_cap) {
+            size_t new_cap = g_func_cap ? g_func_cap * 2 : 8;
+            FuncEntry *grown = (FuncEntry *)realloc(g_funcs, new_cap * sizeof(FuncEntry));
+            if (!grown) goto oom;
+            g_funcs = grown; g_func_cap = new_cap;
+        }
+        f = &g_funcs[g_func_count++];
+    }
+    f->def = d; f->locals = locals; f->nlocals = n;
+    return 0;
+oom:
+    for (k = 0; k < n; k++) free(locals[k]);
+    free(locals);
+    return -1;
+}
+
+static void cob_report(int line, const char *what, const char *fmt, ...) {
+    va_list ap;
+    if (line > 0) fprintf(stderr, "[cob_interp] %s at line %d: ", what, line);
+    else          fprintf(stderr, "[cob_interp] %s: ", what);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+
+/* Checks the top-level recipes of `top` BEFORE anything is registered, so a
+ * failure leaves the registry untouched. allow_redefine is the REPL's
+ * "typing a recipe again replaces it" rule. */
+static int cob_recipes_validate(const Program *top, int allow_redefine) {
+    size_t i, j;
+    for (i = 0; i < top->count; i++) {
+        const Stmt *s = &top->items[i];
+        if (s->kind != STMT_RECIPE) continue;
+        if (cob_extern_is_declared(s->recipe_name)) {
+            cob_report(s->recipe_line, "error", "recipe '%s' clashes with an extern of the same name", s->recipe_name);
+            return -1;
+        }
+        if (!allow_redefine && func_find(s->recipe_name)) {
+            cob_report(s->recipe_line, "error", "recipe '%s' is already defined", s->recipe_name);
+            return -1;
+        }
+        for (j = 0; j < i; j++) {
+            const Stmt *o = &top->items[j];
+            if (o->kind == STMT_RECIPE && strcmp(o->recipe_name, s->recipe_name) == 0) {
+                cob_report(s->recipe_line, "error", "recipe '%s' is already defined (line %d)", s->recipe_name, o->recipe_line);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+static int cob_recipes_register(const Program *top) {
+    size_t i;
+    for (i = 0; i < top->count; i++) {
+        if (top->items[i].kind != STMT_RECIPE) continue;
+        if (func_register(&top->items[i]) != 0) {
+            fprintf(stderr, "[cob_interp] out of memory registering recipe '%s'\n", top->items[i].recipe_name);
+            return -1;
+        }
+    }
+    return 0;
+}
+static int program_has_recipe(const Program *p) {
+    size_t i;
+    for (i = 0; i < p->count; i++) if (p->items[i].kind == STMT_RECIPE) return 1;
+    return 0;
+}
+
+/* Call checking: every EXPR_CALL must name a recipe and pass the right number
+ * of arguments. `g_check_top` is the program being checked: its own recipes
+ * count even though they are not registered yet. `lenient` (REPL) lets a
+ * call to a recipe that does not exist yet through -- it may be typed later. */
+/* Which standard-library module a (corn-themed) function name belongs to,
+ * so a missing `shuck` gets a helpful message instead of a bare "undefined". */
+static const char *cob_stdlib_module_for(const char *name) {
+    static const struct { const char *prefix; const char *module; } table[] = {
+        { "porch_", "porch" }, { "kernel_", "kernels" }, { "almanac_", "almanac" },
+        { "granary_", "granary" }, { "pantry_", "pantry" }, { "barn_", "barn" },
+        { "tassel_", "tassel" }, { "husk_", "cornmath" }, { "ear_", "cornmath" },
+        { "stalk_", "cornmath" }, { "silk_", "cornmath" }, { "scatter_", "cornmath" }
+    };
+    size_t i;
+    for (i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+        if (strncmp(name, table[i].prefix, strlen(table[i].prefix)) == 0) return table[i].module;
+    return NULL;
+}
+/* Names that were built-in keywords before v0.0.9 and are standard-library
+ * functions now -- so an upgrading program gets told exactly what to write. */
+static const char *cob_moved_builtin(const char *name, const char **module) {
+    static const struct { const char *old; const char *now; const char *module; } moved[] = {
+        { "input", "porch_ask", "porch" }, { "input_int", "porch_ask_int", "porch" },
+        { "sql_open", "pantry_open", "pantry" }, { "sql_exec", "pantry_exec", "pantry" },
+        { "sql_query", "pantry_query", "pantry" }, { "sql_close", "pantry_close", "pantry" },
+        { "window_open", "barn_open", "barn" }, { "window_label", "barn_label", "barn" },
+        { "window_wait", "barn_wait", "barn" }, { "window_close", "barn_close", "barn" },
+        { "window_button", "barn_button", "barn" }, { "window_slider", "barn_slider", "barn" },
+        { "window_textbox", "barn_textbox", "barn" },
+        { "tcl_eval", "tassel_tcl", "tassel" }, { "tk_eval", "tassel_tk", "tassel" }
+    };
+    size_t i;
+    for (i = 0; i < sizeof(moved) / sizeof(moved[0]); i++)
+        if (strcmp(name, moved[i].old) == 0) { *module = moved[i].module; return moved[i].now; }
+    return NULL;
+}
+static const Program *g_check_top = NULL;
+static int check_lookup(const char *name, int *nparams) {
+    size_t i;
+    FuncEntry *f;
+    if (g_check_top) {
+        for (i = 0; i < g_check_top->count; i++) {
+            const Stmt *s = &g_check_top->items[i];
+            if (s->kind == STMT_RECIPE && strcmp(s->recipe_name, name) == 0) { *nparams = s->recipe_nparams; return 1; }
+        }
+    }
+    f = func_find(name);
+    if (f) { *nparams = f->def->recipe_nparams; return 1; }
+    return 0;
+}
+static int check_expr(const Expr *e, int lenient) {
+    int i;
+    if (!e) return 0;
+    if (e->kind == EXPR_CALL) {
+        int np;
+        if (!check_lookup(e->var, &np)) {
+            if (!lenient) {
+                const char *mod = cob_stdlib_module_for(e->var), *moved_mod = NULL;
+                const char *moved_to = cob_moved_builtin(e->var, &moved_mod);
+                if (moved_to) cob_report(e->line, "error", "'%s' is now %s() in the standard library: add `shuck %s` at the top and call %s(...)", e->var, moved_to, moved_mod, moved_to);
+                else if (mod) cob_report(e->line, "error", "'%s' is not defined -- it is in the standard library: add `shuck %s` at the top", e->var, mod);
+                else cob_report(e->line, "error", "call to '%s', which is not a recipe or a library function", e->var);
+                return -1;
+            }
+        } else if (np != e->argc) {
+            cob_report(e->line, "error", "recipe '%s' takes %d argument%s but %d %s given",
+                       e->var, np, np == 1 ? "" : "s", e->argc, e->argc == 1 ? "was" : "were");
+            return -1;
+        }
+    }
+    if (check_expr(e->left, lenient) || check_expr(e->right, lenient) || check_expr(e->arg3, lenient)) return -1;
+    for (i = 0; i < e->argc; i++) if (check_expr(e->args[i], lenient)) return -1;
+    return 0;
+}
+/* `lenient` (REPL) applies ONLY inside recipe bodies, where a call may name
+ * a recipe that will be typed later; anything that runs immediately must
+ * already resolve. */
+static int check_program(const Program *p, int lenient, int in_recipe) {
+    size_t i;
+    int l = in_recipe ? lenient : 0;
+    for (i = 0; i < p->count; i++) {
+        const Stmt *s = &p->items[i];
+        switch (s->kind) {
+            case STMT_POP: if (check_expr(s->pop_expr, l)) return -1; break;
+            case STMT_SET: if (check_expr(s->set_expr, l)) return -1; break;
+            case STMT_SERVE: if (check_expr(s->serve_expr, l)) return -1; break;
+            case STMT_CALL: if (check_expr(s->call_expr, l)) return -1; break;
+            case STMT_WHILE:
+                if (check_expr(s->while_cond->left, l) || check_expr(s->while_cond->right, l)) return -1;
+                if (check_program(&s->while_body, lenient, in_recipe)) return -1;
+                break;
+            case STMT_IF:
+                if (check_expr(s->if_cond->left, l) || check_expr(s->if_cond->right, l)) return -1;
+                if (check_program(&s->if_body, lenient, in_recipe) || check_program(&s->else_body, lenient, in_recipe)) return -1;
+                break;
+            case STMT_RECIPE: if (check_program(&s->recipe_body, lenient, 1)) return -1; break;
+            case STMT_TRASH: case STMT_EXTERN: break;
+        }
+    }
+    return 0;
+}
+static int cob_check_calls(const Program *top, int lenient) {
+    int rc;
+    g_check_top = top;
+    rc = check_program(top, lenient, 0);
+    g_check_top = NULL;
+    return rc;
+}
+
+#if !defined(COB_WASM) /* only the REPL checks a lone expression */
+static int cob_check_calls_expr(const Expr *e, int lenient) {
+    g_check_top = NULL;
+    return check_expr(e, lenient);
+}
+#endif
+
+/* ---------------------------------------------------------------------
  * EVALUATION
  * ------------------------------------------------------------------- */
+static int execute(const Program *prog, EvalCtx *ctx); /* fwd: a call runs a recipe body */
+static Value call_recipe(const Expr *e, EvalCtx *ctx);
+
+/* A variable lookup inside a recipe sees its locals first, then the globals. */
+static int ctx_get(EvalCtx *ctx, const char *name, Value *out) {
+    if (ctx->locals && vars_get(ctx->locals, name, out)) return 1;
+    return vars_get(ctx->vars, name, out);
+}
 /* Renders an int as decimal text for string concatenation (e.g.
  * "score: " + 7). Buffer is comfortably large for any long. */
 static void long_to_str(long n, char *buf, size_t bufsize) {
     snprintf(buf, bufsize, "%ld", n);
 }
-
-/* ---------------------------------------------------------------------
- * V0.0.5 SQLITE / TCL / TK BINDINGS
- *
- * Deliberately minimal, matching the rest of Cob's stdlib: a handful
- * of call-style builtins rather than a full driver API. State lives in
- * process-wide statics because Cob programs are single-threaded and
- * run one script per process -- same reasoning as ctx->handles for
- * harvest(), just not threaded through EvalCtx since these binaries
- * are opt-in (COB_WITH_*) and don't need to participate in the
- * harvest/trash --no-gc bookkeeping.
- * ------------------------------------------------------------------- */
-#ifdef COB_WASM
-/* The sandbox's "No-Op Stub" notice. Printed to *stdout* (so it lands in
- * the playground terminal next to the script's own pop() output), once
- * per run no matter how many desktop-only calls follow, and never fatal:
- * the stub that triggered it just returns its harmless default and the
- * script keeps running. */
-static int g_web_warned = 0;
-static void cob_web_warn_once(void) {
-    if (g_web_warned) return;
-    g_web_warned = 1;
-    fputs(COB_WEB_WARNING_LINE1 "\n", stdout);
-    fputs(COB_WEB_WARNING_LINE2 "\n", stdout);
-    fflush(stdout);
-}
-#endif
-
-#ifdef COB_WITH_SQLITE
-#define COB_SQL_MAX_HANDLES 16
-static sqlite3 *cob_sql_handles[COB_SQL_MAX_HANDLES];
-
-/* Returns a 1-based handle id (0 means "failed"), matching harvest()'s
- * own "0 is failure" convention. */
-static long cob_sql_open(const char *path) {
-    int i;
-    for (i = 0; i < COB_SQL_MAX_HANDLES; i++) {
-        if (cob_sql_handles[i] != NULL) continue;
-        if (sqlite3_open(path, &cob_sql_handles[i]) != SQLITE_OK) {
-            fprintf(stderr, "[cob_interp] warning: sql_open(\"%s\") failed: %s\n",
-                    path, cob_sql_handles[i] ? sqlite3_errmsg(cob_sql_handles[i]) : "unknown error");
-            if (cob_sql_handles[i]) { sqlite3_close(cob_sql_handles[i]); cob_sql_handles[i] = NULL; }
-            return 0;
-        }
-        return (long)(i + 1);
-    }
-    fprintf(stderr, "[cob_interp] warning: sql_open(\"%s\") failed: too many open handles (max %d)\n",
-            path, COB_SQL_MAX_HANDLES);
-    return 0;
-}
-static sqlite3 *cob_sql_get(long handle) {
-    if (handle < 1 || handle > COB_SQL_MAX_HANDLES) return NULL;
-    return cob_sql_handles[handle - 1];
-}
-static long cob_sql_exec(long handle, const char *sql) {
-    sqlite3 *db = cob_sql_get(handle);
-    char *errmsg = NULL;
-    if (!db) {
-        fprintf(stderr, "[cob_interp] warning: sql_exec() on invalid/closed handle %ld\n", handle);
-        return -1;
-    }
-    if (sqlite3_exec(db, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
-        fprintf(stderr, "[cob_interp] warning: sql_exec() failed: %s\n", errmsg ? errmsg : "unknown error");
-        sqlite3_free(errmsg);
-        return -1;
-    }
-    return 0;
-}
-/* sqlite3_exec() callback for sql_query(): stashes the first column of
- * the first row into userdata, then aborts the walk -- Cob's query
- * result is deliberately "one scalar", not a result set. */
-static int cob_sql_query_cb(void *userdata, int argc, char **argv, char **col_names) {
-    char **out = (char **)userdata;
-    (void)col_names;
-    if (argc > 0 && argv[0]) *out = cob_strdup(argv[0]);
-    return 1; /* non-zero makes sqlite3_exec() stop after this row */
-}
-/* Returns an owned string (caller/value_str_take takes it); "" on no
- * rows, missing handle, or error. */
-static char *cob_sql_query(long handle, const char *sql) {
-    sqlite3 *db = cob_sql_get(handle);
-    char *result = NULL, *errmsg = NULL;
-    int rc;
-    if (!db) {
-        fprintf(stderr, "[cob_interp] warning: sql_query() on invalid/closed handle %ld\n", handle);
-        return cob_strdup("");
-    }
-    rc = sqlite3_exec(db, sql, cob_sql_query_cb, &result, &errmsg);
-    if (rc != SQLITE_OK && rc != SQLITE_ABORT) {
-        fprintf(stderr, "[cob_interp] warning: sql_query() failed: %s\n", errmsg ? errmsg : "unknown error");
-        sqlite3_free(errmsg);
-    }
-    return result ? result : cob_strdup("");
-}
-static void cob_sql_close(long handle) {
-    sqlite3 *db = cob_sql_get(handle);
-    if (!db) return;
-    sqlite3_close(db);
-    cob_sql_handles[handle - 1] = NULL;
-}
-static void cob_sql_shutdown(void) {
-    int i;
-    for (i = 0; i < COB_SQL_MAX_HANDLES; i++) {
-        if (cob_sql_handles[i]) { sqlite3_close(cob_sql_handles[i]); cob_sql_handles[i] = NULL; }
-    }
-}
-#else
-static long cob_sql_open(const char *path) {
-    (void)path;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: sql_open() is a stub in this build "
-                     "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
-#endif
-    return 0;
-}
-static long cob_sql_exec(long handle, const char *sql) {
-    (void)handle; (void)sql;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: sql_exec() is a stub in this build "
-                     "(compiled without SQLite support -- see `make cob_interp_db`); returned 0\n");
-#endif
-    return 0;
-}
-static char *cob_sql_query(long handle, const char *sql) {
-    (void)handle; (void)sql;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: sql_query() is a stub in this build "
-                     "(compiled without SQLite support -- see `make cob_interp_db`); returned \"\"\n");
-#endif
-    return cob_strdup("");
-}
-static void cob_sql_close(long handle) {
-    (void)handle;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: sql_close() is a stub in this build "
-                     "(compiled without SQLite support -- see `make cob_interp_db`)\n");
-#endif
-}
-static void cob_sql_shutdown(void) {}
-#endif /* COB_WITH_SQLITE */
-
-#ifdef COB_WITH_TCL
-static Tcl_Interp *cob_tcl_interp = NULL;
-#ifdef COB_WITH_TK
-static int cob_tk_ready = 0; /* 1 once Tk_Init() has been attempted */
-#endif
-static Tcl_Interp *cob_tcl_get(void) {
-    if (!cob_tcl_interp) {
-        cob_tcl_interp = Tcl_CreateInterp();
-        if (cob_tcl_interp && Tcl_Init(cob_tcl_interp) != TCL_OK) {
-            fprintf(stderr, "[cob_interp] warning: Tcl_Init() failed: %s\n",
-                    Tcl_GetStringResult(cob_tcl_interp));
-        }
-    }
-    return cob_tcl_interp;
-}
-static char *cob_tcl_eval(const char *script) {
-    Tcl_Interp *interp = cob_tcl_get();
-    if (!interp) {
-        fprintf(stderr, "[cob_interp] warning: tcl_eval() failed: could not create Tcl interpreter\n");
-        return cob_strdup("");
-    }
-    if (Tcl_Eval(interp, script) != TCL_OK) {
-        fprintf(stderr, "[cob_interp] warning: tcl_eval() error: %s\n", Tcl_GetStringResult(interp));
-    }
-    return cob_strdup(Tcl_GetStringResult(interp));
-}
-static void cob_tcl_shutdown(void) {
-    if (cob_tcl_interp) { Tcl_DeleteInterp(cob_tcl_interp); cob_tcl_interp = NULL; }
-}
-#else
-static char *cob_tcl_eval(const char *script) {
-    (void)script;
-    fprintf(stderr, "[cob_interp] warning: tcl_eval() is a stub in this build "
-                     "(compiled without Tcl support -- see `make cob_interp_db`); returned \"\"\n");
-    return cob_strdup("");
-}
-static void cob_tcl_shutdown(void) {}
-#endif /* COB_WITH_TCL */
-
-#ifdef COB_WITH_TK
-/* tk_eval() reuses the same Tcl interpreter tcl_eval() does, so a
- * script can freely mix plain Tcl and Tk commands, and state (widgets,
- * variables) built up over several tk_eval()/tcl_eval() calls persists
- * for the life of the process. Tk_Init() needs a real X11 $DISPLAY at
- * call time; without one it fails the same way `wish` would headless,
- * and that failure is surfaced as an ordinary Tcl error string rather
- * than crashing the interpreter. */
-static char *cob_tk_eval(const char *script) {
-    Tcl_Interp *interp = cob_tcl_get();
-    if (!interp) {
-        fprintf(stderr, "[cob_interp] warning: tk_eval() failed: could not create Tcl interpreter\n");
-        return cob_strdup("");
-    }
-    if (!cob_tk_ready) {
-        cob_tk_ready = 1;
-        if (Tk_Init(interp) != TCL_OK) {
-            fprintf(stderr, "[cob_interp] warning: tk_eval(): Tk_Init() failed: %s\n",
-                    Tcl_GetStringResult(interp));
-        }
-    }
-    if (Tcl_Eval(interp, script) != TCL_OK) {
-        fprintf(stderr, "[cob_interp] warning: tk_eval() error: %s\n", Tcl_GetStringResult(interp));
-    }
-    return cob_strdup(Tcl_GetStringResult(interp));
-}
-#else
-static char *cob_tk_eval(const char *script) {
-    (void)script;
-    fprintf(stderr, "[cob_interp] warning: tk_eval() is a stub in this build "
-                     "(compiled without Tk support -- see `make cob_interp_db`); returned \"\"\n");
-    return cob_strdup("");
-}
-#endif /* COB_WITH_TK */
-
-/* ---------------------------------------------------------------------
- * _COBWINDOW -- native GUI, no vendor tree
- *
- * window_open(<title>)          -> handle (int, 0 on failure)
- * window_label(<handle>, <text>)-> 0 (sets/replaces the in-window text)
- * window_wait(<handle>, <secs>) -> 0 (pumps the OS message loop for
- *                                  ~<secs> seconds so the window stays
- *                                  responsive/repaints; the close [X]
- *                                  button is intentionally swallowed --
- *                                  Cob has no callback mechanism to
- *                                  notify, so the window just keeps
- *                                  running until window_close() or time
- *                                  runs out, same "explicit close only"
- *                                  model harvest()/trash() already use)
- * window_close(<handle>)        -> 0
- *
- * Exists because building the full vendored Tcl/Tk from source needs a
- * real autoconf/sh environment, and on some Windows toolchains that
- * assumption doesn't hold (see Release.txt for the busybox-ash PATH
- * issues that kept breaking it under w64devkit). Backed by raylib
- * (vendor/raylib) instead: no configure, no autoconf, just a plain
- * Makefile that builds cleanly with a bare C compiler on every
- * platform raylib supports.
- *
- * raylib only supports one native window per process (InitWindow()/
- * CloseWindow() are process-global, not per-handle), so unlike
- * sql_open()'s multi-handle table, this backend really only ever
- * hands out handle 1 -- window_open() called again before the first
- * window is closed warns and returns 0, same "0 means failure"
- * convention every other handle-returning keyword here uses.
- * ------------------------------------------------------------------- */
-#define COB_WINDOW_LABEL_MAX   512
-
-/* raygui widgets (this session): each widget is identified by its own
- * label text -- the first window_button()/window_slider()/
- * window_textbox() call with a given label creates it and auto-stacks
- * it below the window_label() text; every later call with that same
- * label (and kind -- a button and a slider can share a label without
- * colliding) reads/updates that same widget. This is deliberately the
- * same shape as sql_open()'s handle table, just keyed by string
- * instead of an int, because Cob has no arrays/structs to hold a
- * widget handle in yet. Fixed-size, like the rest of this file's
- * "small, bounded, no silent unbounded growth" style. */
-#define COB_WINDOW_MAX_WIDGETS   16
-#define COB_WINDOW_WIDGET_LABEL_MAX 128
-#define COB_WINDOW_WIDGET_TEXT_MAX  256
-
-#ifdef COB_WITH_COBWINDOW
-
-static int  cob_window_is_open = 0;
-static char cob_window_label_text[COB_WINDOW_LABEL_MAX];
-
-typedef enum { COB_WIDGET_BUTTON, COB_WIDGET_SLIDER, COB_WIDGET_TEXTBOX } CobWidgetKind;
-
-typedef struct {
-    CobWidgetKind kind;
-    char  label[COB_WINDOW_WIDGET_LABEL_MAX]; /* identity key + on-screen caption */
-    float y;                                  /* auto-stacked position, set once at creation */
-    int   clicked_since_read;                 /* COB_WIDGET_BUTTON */
-    int   slider_ready;                       /* COB_WIDGET_SLIDER: has min/max been set yet? */
-    float value, min_value, max_value;        /* COB_WIDGET_SLIDER */
-    char  text[COB_WINDOW_WIDGET_TEXT_MAX];   /* COB_WIDGET_TEXTBOX */
-} CobWidget;
-
-static CobWidget cob_widgets[COB_WINDOW_MAX_WIDGETS];
-static int   cob_widget_count = 0;
-static float cob_widget_next_y = 60.0f; /* window_label() text sits at y=20, 20px tall */
-
-static void cob_widgets_reset(void) {
-    cob_widget_count = 0;
-    cob_widget_next_y = 60.0f;
-}
-/* Finds the widget with this (kind, label) pair, or creates it (auto-
- * stacked at the next free row) if this is the first time it's been
- * mentioned. Returns NULL (with a warning already printed) once
- * COB_WINDOW_MAX_WIDGETS is reached. */
-static CobWidget *cob_widget_find_or_create(CobWidgetKind kind, const char *label) {
-    int i;
-    for (i = 0; i < cob_widget_count; i++) {
-        if (cob_widgets[i].kind == kind && strcmp(cob_widgets[i].label, label) == 0)
-            return &cob_widgets[i];
-    }
-    if (cob_widget_count >= COB_WINDOW_MAX_WIDGETS) {
-        fprintf(stderr, "[cob_interp] warning: too many _cobwindow widgets (max %d); \"%s\" ignored\n",
-                COB_WINDOW_MAX_WIDGETS, label);
-        return NULL;
-    }
-    {
-        CobWidget *w = &cob_widgets[cob_widget_count++];
-        memset(w, 0, sizeof(*w));
-        w->kind = kind;
-        snprintf(w->label, sizeof(w->label), "%s", label);
-        w->y = cob_widget_next_y;
-        cob_widget_next_y += 40.0f;
-        return w;
-    }
-}
-
-static void cob_window_redraw(void) {
-    int i;
-    BeginDrawing();
-    ClearBackground(RAYWHITE);
-    DrawText(cob_window_label_text, 20, 20, 20, BLACK);
-    for (i = 0; i < cob_widget_count; i++) {
-        CobWidget *w = &cob_widgets[i];
-        Rectangle bounds = { 20, w->y, 240, 30 };
-        switch (w->kind) {
-            case COB_WIDGET_BUTTON:
-                if (GuiButton(bounds, w->label)) w->clicked_since_read = 1;
-                break;
-            case COB_WIDGET_SLIDER: {
-                /* raygui draws textLeft to the left of `bounds` and
-                 * textRight to the right -- textLeft would get clipped
-                 * off-window at our x=20 left margin, so the caption
-                 * goes on the right, where there's room. */
-                char caption[COB_WINDOW_WIDGET_LABEL_MAX + 32];
-                snprintf(caption, sizeof(caption), "%s: %d", w->label, (int)(w->value + 0.5f));
-                GuiSliderBar(bounds, NULL, caption, &w->value, w->min_value, w->max_value);
-                break;
-            }
-            case COB_WIDGET_TEXTBOX:
-                GuiTextBox(bounds, w->text, (int)sizeof(w->text), true);
-                break;
-        }
-    }
-    EndDrawing();
-}
-static long cob_window_open(const char *title) {
-    if (cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: a window is already open "
-                         "(the raylib backend only supports one window per process); "
-                         "call window_close() first\n", title);
-        return 0;
-    }
-    InitWindow(600, 400, title);
-    if (!IsWindowReady()) {
-        fprintf(stderr, "[cob_interp] warning: window_open(\"%s\") failed: raylib's InitWindow() "
-                         "didn't produce a ready window (no display available?)\n", title);
-        return 0;
-    }
-    SetTargetFPS(30);
-    cob_window_label_text[0] = '\0';
-    cob_widgets_reset();
-    cob_window_is_open = 1;
-    cob_window_redraw();
-    return 1;
-}
-static long cob_window_label(long handle, const char *text) {
-    if (handle != 1 || !cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_label() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    snprintf(cob_window_label_text, COB_WINDOW_LABEL_MAX, "%s", text);
-    cob_window_redraw();
-    return 0;
-}
-static long cob_window_wait(long handle, long seconds) {
-    double start;
-    if (handle != 1 || !cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_wait() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    start = GetTime();
-    do {
-        /* WindowShouldClose() going true (user clicked the [X], or
-         * pressed ESC) is intentionally NOT acted on here -- same
-         * "swallow the close button, only an explicit window_close()
-         * really closes it" model documented above. raylib keeps the
-         * window fully usable after this returns true; it's just a
-         * flag, not an actual close. */
-        (void)WindowShouldClose();
-        cob_window_redraw();
-    } while (GetTime() - start < (double)seconds);
-    return 0;
-}
-/* window_button(<h>, <label>) -> 1 if clicked since the last read of
- * this same label, else 0 (and the flag resets on read, so a click is
- * reported exactly once). Declaring the button (first call with a new
- * label) and reading its click state happen in the same call -- Cob
- * has no separate "declare once, poll every frame" mechanism, so this
- * redraws once per call the same way window_label() already does. */
-static long cob_window_button(long handle, const char *label) {
-    CobWidget *w;
-    if (handle != 1 || !cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_button() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    w = cob_widget_find_or_create(COB_WIDGET_BUTTON, label);
-    if (!w) return 0;
-    cob_window_redraw();
-    {
-        long clicked = w->clicked_since_read;
-        w->clicked_since_read = 0;
-        return clicked;
-    }
-}
-/* window_slider(<h>, <label>, <max>) -> current value as an int,
- * 0..<max>. First call with a given label creates it (starting at 0);
- * later calls just read the current position raygui's slider has been
- * dragged to. Passing a different <max> on a later call re-ranges it
- * (and clamps the current value into the new range) rather than being
- * ignored, since Cob has no separate "configure" step. */
-static long cob_window_slider(long handle, const char *label, long max_value) {
-    CobWidget *w;
-    if (handle != 1 || !cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_slider() on invalid/closed handle %ld\n", handle);
-        return 0;
-    }
-    if (max_value <= 0) {
-        fprintf(stderr, "[cob_interp] warning: window_slider() needs a positive <max>, got %ld; treated as 1\n", max_value);
-        max_value = 1;
-    }
-    w = cob_widget_find_or_create(COB_WIDGET_SLIDER, label);
-    if (!w) return 0;
-    if (!w->slider_ready || w->max_value != (float)max_value) {
-        w->min_value = 0.0f;
-        w->max_value = (float)max_value;
-        if (!w->slider_ready) w->value = 0.0f;
-        else if (w->value > w->max_value) w->value = w->max_value;
-        w->slider_ready = 1;
-    }
-    cob_window_redraw();
-    return (long)(w->value + 0.5f);
-}
-/* window_textbox(<h>, <label>) -> current string contents of the box.
- * Always editable (raygui's editMode=true) -- Cob has no focus/click-
- * to-edit concept to hook a toggle to, so typing into it works as soon
- * as it's on screen, same "no extra ceremony" spirit as the other
- * widgets here. */
-static char *cob_window_textbox(long handle, const char *label) {
-    CobWidget *w;
-    if (handle != 1 || !cob_window_is_open) {
-        fprintf(stderr, "[cob_interp] warning: window_textbox() on invalid/closed handle %ld\n", handle);
-        return cob_strdup("");
-    }
-    w = cob_widget_find_or_create(COB_WIDGET_TEXTBOX, label);
-    if (!w) return cob_strdup("");
-    cob_window_redraw();
-    return cob_strdup(w->text);
-}
-static void cob_window_close(long handle) {
-    if (handle != 1 || !cob_window_is_open) return;
-    CloseWindow();
-    cob_window_is_open = 0;
-}
-static void cob_window_shutdown(void) {
-    if (cob_window_is_open) cob_window_close(1);
-}
-
-#else /* !COB_WITH_COBWINDOW -- stub, matches the sql_ and tcl_eval() stub pattern */
-static long cob_window_open(const char *title) {
-    (void)title;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_open() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`); returned 0\n");
-#endif
-    return 0;
-}
-static long cob_window_label(long handle, const char *text) {
-    (void)handle; (void)text;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_label() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
-#endif
-    return 0;
-}
-static long cob_window_wait(long handle, long seconds) {
-    (void)handle; (void)seconds;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_wait() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
-#endif
-    return 0;
-}
-static long cob_window_button(long handle, const char *label) {
-    (void)handle; (void)label;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_button() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
-#endif
-    return 0;
-}
-static long cob_window_slider(long handle, const char *label, long max_value) {
-    (void)handle; (void)label; (void)max_value;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_slider() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
-#endif
-    return 0;
-}
-static char *cob_window_textbox(long handle, const char *label) {
-    (void)handle; (void)label;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_textbox() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`); returned \"\"\n");
-#endif
-    return cob_strdup("");
-}
-static void cob_window_close(long handle) {
-    (void)handle;
-#ifdef COB_WASM
-    cob_web_warn_once();
-#else
-    fprintf(stderr, "[cob_interp] warning: window_close() is a stub in this build "
-                     "(compiled without _cobwindow support -- see `make cob_interp_window`)\n");
-#endif
-}
-static void cob_window_shutdown(void) {}
-#endif /* COB_WITH_COBWINDOW */
 
 /* ---------------------------------------------------------------------
  * C API / FFI (CEP-2) -- RUN-TIME SIDE
@@ -1566,17 +1086,31 @@ static void cob_window_shutdown(void) {}
  * runs (not on first call): a missing library or a misspelled symbol
  * should fail at the line that named it, not at some later, possibly
  * never-executed call site. On failure a warning goes to stderr and `f`
- * is bound to a stub that evaluates to 0 -- same "warn and return a
- * harmless default, never crash the interpreter" convention sql_open()
- * and the _cobwindow keywords use in a build that lacks that feature.
+ * is bound to a stub that evaluates to 0 -- "warn and return a harmless
+ * default, never crash the interpreter". The whole standard library
+ * (porch, kernels, pantry, barn ...) is loaded through this.
  *
  * Every native function has the one signature in include/cob.h
  * (CobFFIFunc), so a call is always: evaluate args -> CobValue[] ->
  * one call through one function pointer -> convert the result back.
  *
- * In the COB_WASM sandbox there is no dlopen(): the name is registered
- * as a permanent stub and the sandbox notice is printed once per name.
+ * In the COB_WASM sandbox there is no dlopen(). Standard library modules
+ * that can run in a browser (porch, cornmath, kernels, almanac) are
+ * compiled in (COB_STDLIB_STATIC) and bound by name; any other extern is a
+ * permanent stub, and the sandbox notice is printed once per library.
  * ------------------------------------------------------------------- */
+#if defined(COB_STDLIB_STATIC)
+/* Generated by the Makefile from the stdlib C sources: declarations plus
+ * cob_static_table[] = { { "name", fn }, ... }. */
+#include "stdlib_static.h"
+static CobFFIFunc cob_static_find(const char *name) {
+    size_t i;
+    for (i = 0; i < sizeof(cob_static_table) / sizeof(cob_static_table[0]); i++)
+        if (strcmp(cob_static_table[i].name, name) == 0) return cob_static_table[i].fn;
+    return NULL;
+}
+#endif
+
 typedef struct { char *name; CobFFIFunc fn; void *lib; } ExternBinding;
 static ExternBinding *g_externs = NULL;
 static size_t g_extern_count = 0, g_extern_cap = 0;
@@ -1597,6 +1131,11 @@ static void *cob_lib_open(const char *path) {
     if (!has_sep && snprintf(local, sizeof(local), ".\\%s", path) < (int)sizeof(local))
         h = (void *)LoadLibraryA(local);
     if (!h) h = (void *)LoadLibraryA(path);
+    /* a bare module name ("porch"): look in the standard library directory */
+    if (!h && !has_sep && strchr(path, '.') == NULL) {
+        char sp[1100];
+        if (cob_stdlib_lib_path(path, sp, sizeof(sp)) == 0) h = (void *)LoadLibraryA(sp);
+    }
 #else
     /* dlopen() with a slash-free name searches the system library path,
      * not the current directory -- so `from "math_ext.so"` would never
@@ -1605,6 +1144,11 @@ static void *cob_lib_open(const char *path) {
     if (strchr(path, '/') == NULL && snprintf(local, sizeof(local), "./%s", path) < (int)sizeof(local))
         h = dlopen(local, RTLD_NOW | RTLD_LOCAL);
     if (!h) h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    /* a bare module name ("porch"): look in the standard library directory */
+    if (!h && strchr(path, '/') == NULL && strchr(path, '.') == NULL) {
+        char sp[1100];
+        if (cob_stdlib_lib_path(path, sp, sizeof(sp)) == 0) h = dlopen(sp, RTLD_NOW | RTLD_LOCAL);
+    }
 #endif
     return h;
 }
@@ -1631,66 +1175,104 @@ static void cob_lib_close(void *lib) {
 }
 #endif /* !COB_WASM */
 
-static void cob_extern_bind(const char *name, const char *lib_path) {
+#if !defined(COB_WASM)
+/* Libraries that failed to load, so the warning is printed once each. */
+static char *g_missing_libs[16];
+static int g_missing_count = 0;
+static int cob_lib_known_missing(const char *lib_path) {
+    int i;
+    for (i = 0; i < g_missing_count; i++) if (strcmp(g_missing_libs[i], lib_path) == 0) return 1;
+    return 0;
+}
+static void cob_lib_note_missing(const char *lib_path) {
+    if (g_missing_count < 16) g_missing_libs[g_missing_count++] = cob_strdup(lib_path);
+}
+static void cob_lib_forget_missing(void) {
+    int i;
+    for (i = 0; i < g_missing_count; i++) free(g_missing_libs[i]);
+    g_missing_count = 0;
+}
+#endif
+
+/* Finds or creates the binding slot for `name`; an existing one is reset
+ * (the same `extern` line may run again, e.g. inside a while loop: drop
+ * the previous library handle rather than leak it). NULL on OOM. */
+static ExternBinding *cob_extern_slot(const char *name) {
     ExternBinding *b = cob_extern_find(name);
-#ifdef COB_WASM
-    (void)lib_path;
     if (!b) {
         if (g_extern_count == g_extern_cap) {
             size_t new_cap = g_extern_cap ? g_extern_cap * 2 : 8;
             ExternBinding *grown = (ExternBinding *)realloc(g_externs, new_cap * sizeof(ExternBinding));
-            if (!grown) return;
+            if (!grown) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return NULL; }
             g_externs = grown; g_extern_cap = new_cap;
         }
         b = &g_externs[g_extern_count];
         memset(b, 0, sizeof(*b));
         b->name = cob_strdup(name);
-        if (!b->name) return;
-        g_extern_count++;
-        printf(COB_WEB_WARNING_EXTERN_LINE1_FMT, name);
-        fputs(COB_WEB_WARNING_EXTERN_LINE2 "\n", stdout);
-        fflush(stdout);
-    }
-#else
-    void *lib; CobFFIFunc fn = NULL;
-    if (!b) {
-        if (g_extern_count == g_extern_cap) {
-            size_t new_cap = g_extern_cap ? g_extern_cap * 2 : 8;
-            ExternBinding *grown = (ExternBinding *)realloc(g_externs, new_cap * sizeof(ExternBinding));
-            if (!grown) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return; }
-            g_externs = grown; g_extern_cap = new_cap;
-        }
-        b = &g_externs[g_extern_count];
-        memset(b, 0, sizeof(*b));
-        b->name = cob_strdup(name);
-        if (!b->name) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return; }
+        if (!b->name) { fprintf(stderr, "[cob_interp] out of memory binding extern '%s'\n", name); return NULL; }
         g_extern_count++;
     } else {
-        /* the same `extern` line ran again (e.g. inside a while loop):
-         * drop the previous binding rather than leak its library handle */
+#if !defined(COB_WASM)
         cob_lib_close(b->lib);
+#endif
         b->lib = NULL; b->fn = NULL;
     }
-    lib = cob_lib_open(lib_path);
-    if (!lib) {
-#if defined(_WIN32)
-        fprintf(stderr, "[cob_interp] warning: extern %s -- could not load library '%s'; calls to it will return 0\n",
-                name, lib_path);
-#else
-        const char *why = dlerror();
-        fprintf(stderr, "[cob_interp] warning: extern %s -- could not load library '%s' (%s); calls to it will return 0\n",
-                name, lib_path, why ? why : "unknown error");
+    return b;
+}
+
+#if defined(COB_WASM)
+/* The sandbox notice, once per library no matter how many functions it declares. */
+static char *g_web_warned_libs[32];
+static int g_web_warned_count = 0;
+static void cob_web_warn_lib(const char *lib_path) {
+    int i;
+    for (i = 0; i < g_web_warned_count; i++) if (strcmp(g_web_warned_libs[i], lib_path) == 0) return;
+    if (g_web_warned_count < 32) g_web_warned_libs[g_web_warned_count++] = cob_strdup(lib_path);
+    printf(COB_WEB_WARNING_EXTERN_LINE1_FMT, lib_path);
+    fputs(COB_WEB_WARNING_EXTERN_LINE2 "\n", stdout);
+    fflush(stdout);
+}
 #endif
-        return;
+
+static void cob_extern_bind(const char *name, const char *lib_path) {
+    ExternBinding *b = cob_extern_slot(name);
+    if (!b) return;
+#if defined(COB_STDLIB_STATIC)
+    /* stdlib modules compiled into this build bind by name, no library needed */
+    {
+        CobFFIFunc sfn = cob_static_find(name);
+        if (sfn) { b->fn = sfn; return; }
     }
-    fn = cob_lib_sym(lib, name);
-    if (!fn) {
-        fprintf(stderr, "[cob_interp] warning: extern %s -- symbol '%s' not found in '%s'; calls to it will return 0\n",
-                name, name, lib_path);
-        cob_lib_close(lib);
-        return;
+#endif
+#if defined(COB_WASM)
+    cob_web_warn_lib(lib_path);
+#else
+    {
+        void *lib; CobFFIFunc fn = NULL;
+        if (cob_lib_known_missing(lib_path)) return; /* already reported: stay a silent stub */
+        lib = cob_lib_open(lib_path);
+        if (!lib) {
+            /* said once per library, not once per function it declares */
+#if defined(_WIN32)
+            fprintf(stderr, "[cob_interp] warning: could not load library '%s' (needed by extern %s and the other functions it declares); calls to them will return 0\n",
+                    lib_path, name);
+#else
+            const char *why = dlerror();
+            fprintf(stderr, "[cob_interp] warning: could not load library '%s' (%s); calls to extern %s and the other functions it declares will return 0\n",
+                    lib_path, why ? why : "unknown error", name);
+#endif
+            cob_lib_note_missing(lib_path);
+            return;
+        }
+        fn = cob_lib_sym(lib, name);
+        if (!fn) {
+            fprintf(stderr, "[cob_interp] warning: extern %s -- symbol '%s' not found in '%s'; calls to it will return 0\n",
+                    name, name, lib_path);
+            cob_lib_close(lib);
+            return;
+        }
+        b->lib = lib; b->fn = fn;
     }
-    b->lib = lib; b->fn = fn;
 #endif
 }
 
@@ -1704,6 +1286,9 @@ static void cob_extern_shutdown(void) {
     }
     free(g_externs);
     g_externs = NULL; g_extern_count = g_extern_cap = 0;
+#if !defined(COB_WASM)
+    cob_lib_forget_missing();
+#endif
     cob_extern_decl_free();
 }
 
@@ -1711,15 +1296,15 @@ static void cob_extern_shutdown(void) {
  * paths in main()) so valgrind sees clean teardown of any open SQLite
  * handles / the Tcl interpreter, same spirit as the rest of this file. */
 static void cob_ext_shutdown(void) {
-    cob_sql_shutdown();
-    cob_tcl_shutdown();
-    cob_window_shutdown();
+    funcs_free();
     cob_extern_shutdown();
 }
 
 /* ---------------------------------------------------------------------
- * CONSOLE INPUT (v0.0.8): input() / input_int()
+ * LINE READING -- used by the REPL (console input for programs is the
+ * standard library's `porch` module now)
  * ------------------------------------------------------------------- */
+#if !defined(COB_WASM)
 /* Prints `prompt` (no newline, flushed), then reads one line from stdin.
  * Returns a malloc'd string with the trailing "\n" / "\r\n" removed; ""
  * at EOF. *got_line is set to 1 if a line (even an empty one) was read,
@@ -1749,6 +1334,7 @@ static char *cob_read_line(const char *prompt, int *got_line) {
     buf[len] = '\0';
     return buf;
 }
+#endif /* !COB_WASM */
 
 static Value eval_expr(const Expr *e, EvalCtx *ctx) {
     switch (e->kind) {
@@ -1756,7 +1342,7 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
         case EXPR_STR: return value_str_take(cob_strdup(e->str_lit));
         case EXPR_VAR: {
             Value v;
-            if (vars_get(ctx->vars, e->var, &v)) return v;
+            if (ctx_get(ctx, e->var, &v)) return v;
             fprintf(stderr, "[cob_interp] warning: undefined variable '%s', treated as 0\n", e->var);
             return value_int(0);
         }
@@ -1818,209 +1404,7 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
             }
             return value_int(id);
         }
-        case EXPR_SQL_OPEN: {
-            Value pathV = eval_expr(e->left, ctx);
-            const char *path;
-            char numbuf[32];
-            long id;
-            if (pathV.kind == VAL_STR) { path = pathV.s; }
-            else { long_to_str(pathV.i, numbuf, sizeof(numbuf)); path = numbuf; }
-            id = cob_sql_open(path);
-            value_free(&pathV);
-            return value_int(id);
-        }
-        case EXPR_SQL_EXEC: {
-            Value hV = eval_expr(e->left, ctx);
-            Value sqlV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            long rc;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: sql_exec() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (sqlV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: sql_exec() needs a string SQL statement, got a number; treated as \"\"\n");
-            }
-            rc = cob_sql_exec(handle, sqlV.kind == VAL_STR ? sqlV.s : "");
-            value_free(&hV); value_free(&sqlV);
-            return value_int(rc);
-        }
-        case EXPR_SQL_QUERY: {
-            Value hV = eval_expr(e->left, ctx);
-            Value sqlV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            char *result;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: sql_query() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (sqlV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: sql_query() needs a string SQL statement, got a number; treated as \"\"\n");
-            }
-            result = cob_sql_query(handle, sqlV.kind == VAL_STR ? sqlV.s : "");
-            value_free(&hV); value_free(&sqlV);
-            return value_str_take(result);
-        }
-        case EXPR_SQL_CLOSE: {
-            Value hV = eval_expr(e->left, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: sql_close() needs a numeric handle, got a string; treated as 0\n");
-            }
-            cob_sql_close(handle);
-            value_free(&hV);
-            return value_int(0);
-        }
-        case EXPR_TCL_EVAL: {
-            Value scriptV = eval_expr(e->left, ctx);
-            char *result;
-            if (scriptV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: tcl_eval() needs a string script, got a number; treated as \"\"\n");
-            }
-            result = cob_tcl_eval(scriptV.kind == VAL_STR ? scriptV.s : "");
-            value_free(&scriptV);
-            return value_str_take(result);
-        }
-        case EXPR_TK_EVAL: {
-            Value scriptV = eval_expr(e->left, ctx);
-            char *result;
-            if (scriptV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: tk_eval() needs a string script, got a number; treated as \"\"\n");
-            }
-            result = cob_tk_eval(scriptV.kind == VAL_STR ? scriptV.s : "");
-            value_free(&scriptV);
-            return value_str_take(result);
-        }
-        case EXPR_WINDOW_OPEN: {
-            Value titleV = eval_expr(e->left, ctx);
-            long id;
-            if (titleV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_open() needs a string title, got a number; treated as \"\"\n");
-            }
-            id = cob_window_open(titleV.kind == VAL_STR ? titleV.s : "");
-            value_free(&titleV);
-            return value_int(id);
-        }
-        case EXPR_WINDOW_LABEL: {
-            Value hV = eval_expr(e->left, ctx);
-            Value textV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_label() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (textV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_label() needs a string label, got a number; treated as \"\"\n");
-            }
-            cob_window_label(handle, textV.kind == VAL_STR ? textV.s : "");
-            value_free(&hV); value_free(&textV);
-            return value_int(0);
-        }
-        case EXPR_WINDOW_WAIT: {
-            Value hV = eval_expr(e->left, ctx);
-            Value secV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            long seconds = (secV.kind == VAL_STR) ? 0 : secV.i;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_wait() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (secV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_wait() needs a numeric seconds value, got a string; treated as 0\n");
-            }
-            cob_window_wait(handle, seconds);
-            value_free(&hV); value_free(&secV);
-            return value_int(0);
-        }
-        case EXPR_WINDOW_CLOSE: {
-            Value hV = eval_expr(e->left, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_close() needs a numeric handle, got a string; treated as 0\n");
-            }
-            cob_window_close(handle);
-            value_free(&hV);
-            return value_int(0);
-        }
-        case EXPR_WINDOW_BUTTON: {
-            Value hV = eval_expr(e->left, ctx);
-            Value labelV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            long clicked;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_button() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (labelV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_button() needs a string label, got a number; treated as \"\"\n");
-            }
-            clicked = cob_window_button(handle, labelV.kind == VAL_STR ? labelV.s : "");
-            value_free(&hV); value_free(&labelV);
-            return value_int(clicked);
-        }
-        case EXPR_WINDOW_SLIDER: {
-            Value hV = eval_expr(e->left, ctx);
-            Value labelV = eval_expr(e->right, ctx);
-            Value maxV = eval_expr(e->arg3, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            long max_value = (maxV.kind == VAL_STR) ? 0 : maxV.i;
-            long value;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_slider() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (labelV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_slider() needs a string label, got a number; treated as \"\"\n");
-            }
-            if (maxV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_slider() needs a numeric max, got a string; treated as 0\n");
-            }
-            value = cob_window_slider(handle, labelV.kind == VAL_STR ? labelV.s : "", max_value);
-            value_free(&hV); value_free(&labelV); value_free(&maxV);
-            return value_int(value);
-        }
-        case EXPR_WINDOW_TEXTBOX: {
-            Value hV = eval_expr(e->left, ctx);
-            Value labelV = eval_expr(e->right, ctx);
-            long handle = (hV.kind == VAL_STR) ? 0 : hV.i;
-            char *result;
-            if (hV.kind == VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_textbox() needs a numeric handle, got a string; treated as 0\n");
-            }
-            if (labelV.kind != VAL_STR) {
-                fprintf(stderr, "[cob_interp] warning: window_textbox() needs a string label, got a number; treated as \"\"\n");
-            }
-            result = cob_window_textbox(handle, labelV.kind == VAL_STR ? labelV.s : "");
-            value_free(&hV); value_free(&labelV);
-            return value_str_take(result);
-        }
-        case EXPR_INPUT:
-        case EXPR_INPUT_INT: {
-            Value pV = eval_expr(e->left, ctx);
-            const char *prompt;
-            char numbuf[32];
-            char *line;
-            int got;
-            if (pV.kind == VAL_STR) { prompt = pV.s ? pV.s : ""; }
-            else { long_to_str(pV.i, numbuf, sizeof(numbuf)); prompt = numbuf; }
-            line = cob_read_line(prompt, &got);
-            value_free(&pV);
-            if (!line) {
-                fprintf(stderr, "[cob_interp] out of memory in %s()\n", e->kind == EXPR_INPUT ? "input" : "input_int");
-                return e->kind == EXPR_INPUT ? value_str_take(cob_strdup("")) : value_int(0);
-            }
-            if (e->kind == EXPR_INPUT) return value_str_take(line);
-            {
-                char *end; long n = 0; int ok = 0;
-                const char *q = line;
-                while (*q == ' ' || *q == '\t') q++;
-                if (*q) {
-                    n = strtol(q, &end, 10);
-                    while (*end == ' ' || *end == '\t') end++;
-                    ok = (end != q && *end == '\0');
-                }
-                if (!ok) {
-                    if (got) fprintf(stderr, "[cob_interp] warning: input_int() got non-numeric input \"%s\"; treated as 0\n", line);
-                    n = 0;
-                }
-                free(line);
-                return value_int(n);
-            }
-        }
+        case EXPR_CALL: return call_recipe(e, ctx);
         case EXPR_EXTERN_CALL: {
             int n = e->argc, i;
             Value *vals = (Value *)calloc((size_t)(n > 0 ? n : 1), sizeof(Value));
@@ -2061,6 +1445,61 @@ static Value eval_expr(const Expr *e, EvalCtx *ctx) {
 }
 
 
+/* Runs a recipe: arguments are evaluated left to right in the CALLER'S
+ * scope, a fresh set of local variables is built (every local starts at 0,
+ * parameters take the argument values), the body runs, and whatever
+ * `serve` handed back is the value of the call (0 if the body ran off its
+ * end). Arity was checked before the program started; the runtime checks
+ * below only matter for hand-made caches and the REPL. */
+static Value call_recipe(const Expr *e, EvalCtx *ctx) {
+    FuncEntry *f = func_find(e->var);
+    const Stmt *d;
+    Value *argv = NULL;
+    VarTable locals, *saved_locals;
+    Value saved_ret, result;
+    int i, returned;
+
+    if (!f) {
+        cob_report(0, "warning", "call to undefined recipe '%s', treated as 0", e->var);
+        return value_int(0);
+    }
+    d = f->def;
+    if (e->argc != d->recipe_nparams) {
+        cob_report(0, "warning", "recipe '%s' takes %d argument(s) but %d given; call treated as 0",
+                   e->var, d->recipe_nparams, e->argc);
+        return value_int(0);
+    }
+    if (e->argc > 0) {
+        argv = (Value *)calloc((size_t)e->argc, sizeof(Value));
+        if (!argv) { fprintf(stderr, "[cob_interp] out of memory calling recipe '%s'\n", e->var); return value_int(0); }
+    }
+    for (i = 0; i < e->argc; i++) argv[i] = eval_expr(e->args[i], ctx);
+
+    if (ctx->call_depth >= COB_MAX_CALL_DEPTH) {
+        cob_report(0, "warning", "recipe '%s' is nested more than %d calls deep; call treated as 0",
+                   e->var, COB_MAX_CALL_DEPTH);
+        for (i = 0; i < e->argc; i++) value_free(&argv[i]);
+        free(argv);
+        return value_int(0);
+    }
+
+    vars_init(&locals);
+    for (i = 0; i < f->nlocals; i++) vars_set(&locals, f->locals[i], value_int(0));
+    for (i = 0; i < d->recipe_nparams; i++) {
+        if (vars_set(&locals, d->recipe_params[i], argv[i]) != 0) value_free(&argv[i]);
+    }
+    free(argv);
+
+    saved_locals = ctx->locals; saved_ret = ctx->ret;
+    ctx->locals = &locals; ctx->ret = value_int(0); ctx->call_depth++;
+    returned = execute(&d->recipe_body, ctx);
+    result = ctx->ret;
+    ctx->ret = saved_ret; ctx->locals = saved_locals; ctx->call_depth--;
+    ctx->fell_off = !returned;
+    vars_free(&locals);
+    return result;
+}
+
 static int eval_cond(const Cond *c, EvalCtx *ctx) {
     Value l = eval_expr(c->left, ctx);
     if (c->op == COND_TRUTHY) {
@@ -2099,7 +1538,9 @@ static int eval_cond(const Cond *c, EvalCtx *ctx) {
     return result;
 }
 
-static void execute(const Program *prog, EvalCtx *ctx) {
+/* Runs a block. Returns 1 if a `serve` ran inside it (the caller must stop
+ * and hand the value up through ctx->ret), 0 if it simply finished. */
+static int execute(const Program *prog, EvalCtx *ctx) {
     size_t i;
     for (i = 0; i < prog->count; i++) {
         const Stmt *s = &prog->items[i];
@@ -2124,7 +1565,8 @@ static void execute(const Program *prog, EvalCtx *ctx) {
             }
             case STMT_SET: {
                 Value v = eval_expr(s->set_expr, ctx);
-                if (vars_set(ctx->vars, s->set_name, v) != 0) {
+                /* inside a recipe, every `set` target is one of its locals */
+                if (vars_set(ctx->locals ? ctx->locals : ctx->vars, s->set_name, v) != 0) {
                     fprintf(stderr, "[cob_interp] out of memory setting variable '%s'\n", s->set_name);
                     value_free(&v); /* vars_set didn't take ownership on this failure path */
                 }
@@ -2132,7 +1574,7 @@ static void execute(const Program *prog, EvalCtx *ctx) {
             }
             case STMT_TRASH: {
                 Value v;
-                if (!vars_get(ctx->vars, s->trash_name, &v)) {
+                if (!ctx_get(ctx, s->trash_name, &v)) {
                     fprintf(stderr, "[cob_interp] warning: trash() on undefined variable '%s'\n", s->trash_name);
                     break;
                 }
@@ -2152,13 +1594,26 @@ static void execute(const Program *prog, EvalCtx *ctx) {
                 cob_extern_bind(s->ext_name, s->ext_lib);
                 break;
             case STMT_IF:
-                if (eval_cond(s->if_cond, ctx)) execute(&s->if_body, ctx);
-                else execute(&s->else_body, ctx);
+                if (eval_cond(s->if_cond, ctx)) { if (execute(&s->if_body, ctx)) return 1; }
+                else { if (execute(&s->else_body, ctx)) return 1; }
                 break;
+            case STMT_RECIPE:
+                break; /* hoisted: already registered before the program started */
+            case STMT_SERVE: {
+                Value v = eval_expr(s->serve_expr, ctx);
+                value_free(&ctx->ret);
+                ctx->ret = v;
+                return 1;
+            }
+            case STMT_CALL: {
+                Value v = eval_expr(s->call_expr, ctx);
+                value_free(&v);
+                break;
+            }
             case STMT_WHILE: {
                 unsigned long iterations = 0;
                 while (eval_cond(s->while_cond, ctx)) {
-                    execute(&s->while_body, ctx);
+                    if (execute(&s->while_body, ctx)) return 1;
                     iterations++;
                     if (iterations >= COB_MAX_LOOP_ITERATIONS) {
                         fprintf(stderr,
@@ -2171,6 +1626,7 @@ static void execute(const Program *prog, EvalCtx *ctx) {
             }
         }
     }
+    return 0;
 }
 
 /* ---------------------------------------------------------------------
@@ -2291,6 +1747,8 @@ static int parse_trash_statement(const char *after_kw, int line_no, char **out_n
  * value (int or string) it evaluates to, and arity is deliberately not
  * checked against the native function (CEP-2 3.5). Registers <name> so
  * later calls parse as extern calls. */
+static int cob_func_exists(const char *name); /* defined with the function registry below */
+
 static int parse_extern_statement(const char *after_kw, int line_no, char **out_name, char **out_lib) {
     const char *p = skip_blank(after_kw);
     char *name = NULL, *lib = NULL, *param = NULL;
@@ -2303,6 +1761,10 @@ static int parse_extern_statement(const char *after_kw, int line_no, char **out_
     }
     if (cob_is_reserved_word(name)) {
         fprintf(stderr, "[cob_interp] syntax error at line %d: extern cannot reuse the reserved name '%s'\n", line_no, name);
+        goto fail;
+    }
+    if (cob_func_exists(name)) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: extern cannot reuse the name '%s' of a recipe\n", line_no, name);
         goto fail;
     }
     p = skip_blank(p);
@@ -2463,36 +1925,32 @@ static int g_shuck_depth = 0;
 
 static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program *out_prog);
 
-/* Loads and fully parses <name>.cob (trying the current directory, then
- * cob_modules/<name>/<name>.cob -- the layout `farmer harvest` installs
- * packages into), returning its top-level statements in *out_prog. */
+/* Embedded stdlib wrappers (COB_STDLIB_STATIC builds, e.g. the browser):
+ * a generated table of { module name, wrapper source }. Native builds
+ * read the wrappers from the standard library directory instead. */
+#if defined(COB_STDLIB_STATIC)
+#include "stdlib_embed.h"
+static const char *cob_stdlib_embedded(const char *name) {
+    size_t i;
+    for (i = 0; i < sizeof(cob_embedded_wrappers) / sizeof(cob_embedded_wrappers[0]); i++)
+        if (strcmp(cob_embedded_wrappers[i].name, name) == 0) return cob_embedded_wrappers[i].source;
+    return NULL;
+}
+#endif
+
+/* Loads and fully parses <name>.cob, returning its top-level statements in
+ * *out_prog. Search order: the current directory, then
+ * cob_modules/<name>/<name>.cob (the layout `farmer harvest` installs
+ * packages into), then the STANDARD LIBRARY directory ($COB_STDLIB, else
+ * <this program>/lib) -- which is where `shuck porch`, `shuck cornmath`,
+ * `shuck pantry` ... come from. */
 static int cob_load_library(const char *name, int line_no, Program *out_prog) {
-    char path_a[512], path_b[600];
+    char path_a[512], path_b[600], path_c[1200];
+    char std_dir[1024];
     CobFileBuffer buf;
     CobFileStatus status;
-    int i;
-
-    /* _cobwindow special case: not a real .cob file on disk. `shuck
-     * cobwindow` reads naturally at the top of a script that wants
-     * window_open()/window_label()/window_wait()/window_close(), but
-     * there's nothing to load -- those four keywords are always
-     * parseable (see the call-style builtin table above), gated only
-     * at runtime by whether this binary was built with
-     * COB_WITH_COBWINDOW. Acknowledge and move on. */
-    if (strcmp(name, "cobwindow") == 0) {
-        program_init(out_prog);
-#if defined(COB_WASM)
-        (void)line_no;
-        cob_web_warn_once();
-#elif !defined(COB_WITH_COBWINDOW)
-        fprintf(stderr,
-            "[cob_interp] warning at line %d: shuck cobwindow -- this binary wasn't built with "
-            "window_open()/window_label()/window_wait()/window_close() support (see "
-            "`make cob_interp_window`); those keywords will warn and no-op instead of opening a real window\n",
-            line_no);
-#endif
-        return 0;
-    }
+    const char *source = NULL;
+    int i, have_buf = 0;
 
     for (i = 0; i < g_shuck_depth; i++) {
         if (strcmp(g_shuck_stack[i], name) == 0) {
@@ -2508,21 +1966,31 @@ static int cob_load_library(const char *name, int line_no, Program *out_prog) {
     snprintf(path_a, sizeof(path_a), "%s%s", name, COB_SOURCE_EXTENSION);
     snprintf(path_b, sizeof(path_b), "cob_modules%c%s%c%s%s",
              COB_PATH_SEP, name, COB_PATH_SEP, name, COB_SOURCE_EXTENSION);
+    path_c[0] = '\0';
 
     status = cob_file_read_all(path_a, &buf);
     if (status != COB_FILE_OK) status = cob_file_read_all(path_b, &buf);
-    if (status != COB_FILE_OK) {
-        fprintf(stderr,
-            "[cob_interp] error at line %d: shuck '%s' failed -- tried '%s' and '%s'\n",
-            line_no, name, path_a, path_b);
+    if (status != COB_FILE_OK && cob_stdlib_dir(std_dir, sizeof(std_dir)) == 0) {
+        snprintf(path_c, sizeof(path_c), "%s%c%s%s", std_dir, COB_PATH_SEP, name, COB_SOURCE_EXTENSION);
+        status = cob_file_read_all(path_c, &buf);
+    }
+    if (status == COB_FILE_OK) { source = buf.data; have_buf = 1; }
+#if defined(COB_STDLIB_STATIC)
+    if (!source) source = cob_stdlib_embedded(name);
+#endif
+    if (!source) {
+        fprintf(stderr, "[cob_interp] error at line %d: shuck '%s' failed -- tried '%s' and '%s'",
+                line_no, name, path_a, path_b);
+        if (path_c[0]) fprintf(stderr, " and '%s'", path_c);
+        fputs("\n", stderr);
         return -1;
     }
 
     g_shuck_stack[g_shuck_depth++] = name;
 
     PhysLines lib_lines;
-    int rc = cob_split_lines(buf.data, 1, &lib_lines);
-    cob_file_free(&buf);
+    int rc = cob_split_lines(source, 1, &lib_lines);
+    if (have_buf) cob_file_free(&buf);
     if (rc != 0) { g_shuck_depth--; return -1; }
 
     size_t pos = 0;
@@ -2531,6 +1999,84 @@ static int cob_load_library(const char *name, int line_no, Program *out_prog) {
 
     g_shuck_depth--;
     return rc;
+}
+
+/* ---------------------------------------------------------------------
+ * `recipe` HEADER:  recipe <name>(<param>, <param>, ...):
+ * ------------------------------------------------------------------- */
+static int parse_recipe_header(const char *after_kw, int line_no, char **out_name, char ***out_params, int *out_np) {
+    const char *p = skip_blank(after_kw);
+    char *name = NULL, **params = NULL;
+    int np = 0, cap = 0, i;
+
+    p = parse_identifier(p, &name);
+    if (!p) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected a name after 'recipe'\n", line_no);
+        return -1;
+    }
+    if (cob_is_reserved_word(name)) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: '%s' is a Cob keyword and cannot name a recipe\n", line_no, name);
+        goto fail;
+    }
+    p = skip_blank(p);
+    if (*p != '(') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected '(' after recipe %s\n", line_no, name);
+        goto fail;
+    }
+    p = skip_blank(p + 1);
+    if (*p != ')') {
+        for (;;) {
+            char *param = NULL;
+            p = parse_identifier(p, &param);
+            if (!p) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: expected a parameter name in recipe %s\n", line_no, name);
+                goto fail;
+            }
+            for (i = 0; i < np; i++) {
+                if (strcmp(params[i], param) == 0) {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: recipe %s has two parameters named '%s'\n", line_no, name, param);
+                    free(param);
+                    goto fail;
+                }
+            }
+            if (np >= COB_MAX_EXTERN_ARGS) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: recipe %s has too many parameters (max %d)\n", line_no, name, COB_MAX_EXTERN_ARGS);
+                free(param);
+                goto fail;
+            }
+            if (np == cap) {
+                int new_cap = cap ? cap * 2 : 4;
+                char **grown = (char **)realloc(params, (size_t)new_cap * sizeof(char *));
+                if (!grown) { free(param); goto fail; }
+                params = grown; cap = new_cap;
+            }
+            params[np++] = param;
+            p = skip_blank(p);
+            if (*p == ',') { p = skip_blank(p + 1); continue; }
+            break;
+        }
+        if (*p != ')') {
+            fprintf(stderr, "[cob_interp] syntax error at line %d: expected ',' or ')' in the parameters of recipe %s\n", line_no, name);
+            goto fail;
+        }
+    }
+    p = skip_blank(p + 1);
+    if (*p != COB_BLOCK_COLON) {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: expected ':' at the end of the recipe line\n", line_no);
+        goto fail;
+    }
+    p = skip_blank(p + 1);
+    if (*p != '\0') {
+        fprintf(stderr, "[cob_interp] syntax error at line %d: unexpected text after ':' on the recipe line\n", line_no);
+        goto fail;
+    }
+    *out_name = name; *out_params = params; *out_np = np;
+    return 0;
+fail:
+    free(name);
+    for (i = 0; i < np; i++) free(params[i]);
+    free(params);
+    return -1;
 }
 
 /* ---------------------------------------------------------------------
@@ -2548,6 +2094,7 @@ static int parse_if_chain(PhysLines *lines, size_t *pos, size_t kw_len, const ch
     int this_indent = pl->indent;
     Cond *cond;
     Program body;
+    g_parse_line = line_no;
 
     if (parse_if_header(pl->content + kw_len, line_no, kw_name, &cond) != 0) return -1;
     (*pos)++;
@@ -2601,6 +2148,7 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
         const char *trimmed = pl->content;
         int line_no = pl->line_no;
         size_t kw_len;
+        g_parse_line = line_no;
 
         kw_len = strlen(COB_KW_POP);
         if (strncmp(trimmed, COB_KW_POP, kw_len) == 0 &&
@@ -2678,6 +2226,77 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
             continue;
         }
 
+        kw_len = strlen(COB_KW_RECIPE);
+        if (strncmp(trimmed, COB_KW_RECIPE, kw_len) == 0 && trimmed[kw_len] == ' ') {
+            char *rname = NULL, **rparams = NULL;
+            int rnp = 0, k, this_indent = pl->indent, brc;
+            Program body;
+            Stmt s;
+            if (parent_indent != -1) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: a recipe can only be defined at the top level of a program, not inside another block\n", line_no);
+                program_free(out_prog);
+                return -1;
+            }
+            if (parse_recipe_header(trimmed + kw_len, line_no, &rname, &rparams, &rnp) != 0) { program_free(out_prog); return -1; }
+            (*pos)++;
+            g_recipe_depth++;
+            brc = parse_block(lines, pos, this_indent, &body);
+            g_recipe_depth--;
+            if (brc == 0 && body.count == 0) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: recipe %s needs an indented body\n", line_no, rname);
+                program_free(&body);
+                brc = -1;
+            }
+            if (brc != 0) {
+                free(rname);
+                for (k = 0; k < rnp; k++) free(rparams[k]);
+                free(rparams);
+                program_free(out_prog);
+                return -1;
+            }
+            memset(&s, 0, sizeof(s));
+            s.kind = STMT_RECIPE; s.recipe_name = rname; s.recipe_params = rparams;
+            s.recipe_nparams = rnp; s.recipe_body = body; s.recipe_line = line_no;
+            if (program_push(out_prog, s) != 0) { stmt_free_contents(&s); program_free(out_prog); return -1; }
+            continue;
+        }
+
+        kw_len = strlen(COB_KW_SERVE);
+        if (strncmp(trimmed, COB_KW_SERVE, kw_len) == 0 && (trimmed[kw_len] == ' ' || trimmed[kw_len] == '\0')) {
+            Expr *e = NULL;
+            const char *p;
+            Stmt s;
+            if (g_recipe_depth == 0) {
+                fprintf(stderr, "[cob_interp] syntax error at line %d: 'serve' can only be used inside a recipe\n", line_no);
+                program_free(out_prog);
+                return -1;
+            }
+            p = skip_blank(trimmed + kw_len);
+            if (*p == '\0') {
+                e = expr_new_num(0);
+            } else {
+                p = parse_expr(p, &e);
+                if (!p) {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: bad expression after 'serve'\n", line_no);
+                    program_free(out_prog);
+                    return -1;
+                }
+                p = skip_blank(p);
+                if (*p != '\0') {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: unexpected text after the serve expression: %s\n", line_no, p);
+                    expr_free(e);
+                    program_free(out_prog);
+                    return -1;
+                }
+            }
+            if (!e) { fprintf(stderr, "[cob_interp] out of memory parsing serve\n"); program_free(out_prog); return -1; }
+            memset(&s, 0, sizeof(s));
+            s.kind = STMT_SERVE; s.serve_expr = e;
+            if (program_push(out_prog, s) != 0) { expr_free(e); program_free(out_prog); return -1; }
+            (*pos)++;
+            continue;
+        }
+
         kw_len = strlen(COB_KW_SHUCK);
         if (strncmp(trimmed, COB_KW_SHUCK, kw_len) == 0 && trimmed[kw_len] == ' ') {
             char *lib_name;
@@ -2691,6 +2310,13 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
             Program lib_prog;
             int rc = cob_load_library(lib_name, line_no, &lib_prog);
             if (rc != 0) { free(lib_name); program_free(out_prog); return -1; }
+            if (parent_indent != -1 && program_has_recipe(&lib_prog)) {
+                fprintf(stderr, "[cob_interp] error at line %d: shuck '%s' defines recipes, so it must be at the top level of the program\n", line_no, lib_name);
+                program_free(&lib_prog);
+                free(lib_name);
+                program_free(out_prog);
+                return -1;
+            }
             int append_rc = program_append_move(out_prog, &lib_prog);
             /* Whether the move fully succeeded or partially rolled back,
              * lib_prog's own array shell (and any un-moved remainder on
@@ -2707,6 +2333,41 @@ static int parse_block(PhysLines *lines, size_t *pos, int parent_indent, Program
             free(lib_name);
             (*pos)++;
             continue;
+        }
+
+        /* a call standing alone: greet("Ada")  /  porch_ask("name? ")  (result dropped) */
+        if (is_ident_start(*trimmed)) {
+            const char *q = trimmed;
+            while (is_ident_char((unsigned char)*q)) q++;
+            q = skip_blank(q);
+            if (*q == '(') {
+                Expr *e = NULL;
+                const char *p = parse_expr(trimmed, &e);
+                Stmt s;
+                if (!p) {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: malformed call: %s\n", line_no, trimmed);
+                    program_free(out_prog);
+                    return -1;
+                }
+                p = skip_blank(p);
+                if (*p != '\0') {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: unexpected text after the call: %s\n", line_no, p);
+                    expr_free(e);
+                    program_free(out_prog);
+                    return -1;
+                }
+                if (e->kind != EXPR_CALL && e->kind != EXPR_EXTERN_CALL) {
+                    fprintf(stderr, "[cob_interp] syntax error at line %d: only a call to a recipe or a library function can stand alone as a statement: %s\n", line_no, trimmed);
+                    expr_free(e);
+                    program_free(out_prog);
+                    return -1;
+                }
+                memset(&s, 0, sizeof(s));
+                s.kind = STMT_CALL; s.call_expr = e;
+                if (program_push(out_prog, s) != 0) { expr_free(e); program_free(out_prog); return -1; }
+                (*pos)++;
+                continue;
+            }
         }
 
         fprintf(stderr, "[cob_interp] syntax error at line %d: unrecognized statement: %s\n", line_no, trimmed);
@@ -2788,34 +2449,14 @@ static int write_expr(ByteBuf *b, const Expr *e) {
             return write_expr(b, e->right);
         case EXPR_HARVEST:
             return write_expr(b, e->left);
-        case EXPR_EXTERN_CALL: {
+        case EXPR_EXTERN_CALL:
+        case EXPR_CALL: {
             int i;
             if (bytebuf_bytes(b, e->var, strlen(e->var)) != 0) return -1;
             if (bytebuf_u32(b, (uint32_t)e->argc) != 0) return -1;
             for (i = 0; i < e->argc; i++) if (write_expr(b, e->args[i]) != 0) return -1;
             return 0;
         }
-        case EXPR_SQL_OPEN:
-        case EXPR_SQL_CLOSE:
-        case EXPR_TCL_EVAL:
-        case EXPR_TK_EVAL:
-        case EXPR_WINDOW_OPEN:
-        case EXPR_WINDOW_CLOSE:
-        case EXPR_INPUT:
-        case EXPR_INPUT_INT:
-            return write_expr(b, e->left);
-        case EXPR_SQL_EXEC:
-        case EXPR_SQL_QUERY:
-        case EXPR_WINDOW_LABEL:
-        case EXPR_WINDOW_WAIT:
-        case EXPR_WINDOW_BUTTON:
-        case EXPR_WINDOW_TEXTBOX:
-            if (write_expr(b, e->left) != 0) return -1;
-            return write_expr(b, e->right);
-        case EXPR_WINDOW_SLIDER:
-            if (write_expr(b, e->left) != 0) return -1;
-            if (write_expr(b, e->right) != 0) return -1;
-            return write_expr(b, e->arg3);
     }
     return -1;
 }
@@ -2844,6 +2485,16 @@ static int write_stmt(ByteBuf *b, const Stmt *s) {
             if (write_cond(b, s->if_cond) != 0) return -1;
             if (write_program(b, &s->if_body) != 0) return -1;
             return write_program(b, &s->else_body);
+        case STMT_RECIPE: {
+            int k;
+            if (bytebuf_bytes(b, s->recipe_name, strlen(s->recipe_name)) != 0) return -1;
+            if (bytebuf_u32(b, (uint32_t)s->recipe_nparams) != 0) return -1;
+            for (k = 0; k < s->recipe_nparams; k++)
+                if (bytebuf_bytes(b, s->recipe_params[k], strlen(s->recipe_params[k])) != 0) return -1;
+            return write_program(b, &s->recipe_body);
+        }
+        case STMT_SERVE: return write_expr(b, s->serve_expr);
+        case STMT_CALL: return write_expr(b, s->call_expr);
     }
     return -1;
 }
@@ -2947,7 +2598,8 @@ static int read_expr(ByteReader *r, Expr **out) {
             if (!*out) { expr_free(inner); return -1; }
             return 0;
         }
-        case EXPR_EXTERN_CALL: {
+        case EXPR_EXTERN_CALL:
+        case EXPR_CALL: {
             char *name; uint32_t argc, i; Expr **args = NULL;
             if (reader_bytes_alloc(r, &name, NULL) != 0) return -1;
             if (reader_u32(r, &argc) != 0 || argc > COB_MAX_EXTERN_ARGS) { free(name); return -1; }
@@ -2963,48 +2615,12 @@ static int read_expr(ByteReader *r, Expr **out) {
                     return -1;
                 }
             }
-            *out = expr_new_extern_call(name, args, (int)argc);
+            *out = expr_new_named_call((ExprKind)kind, name, args, (int)argc);
             if (!*out) {
                 for (i = 0; i < argc; i++) expr_free(args[i]);
                 free(args); free(name);
                 return -1;
             }
-            return 0;
-        }
-        case EXPR_SQL_OPEN:
-        case EXPR_SQL_CLOSE:
-        case EXPR_TCL_EVAL:
-        case EXPR_TK_EVAL:
-        case EXPR_WINDOW_OPEN:
-        case EXPR_WINDOW_CLOSE:
-        case EXPR_INPUT:
-        case EXPR_INPUT_INT: {
-            Expr *inner;
-            if (read_expr(r, &inner) != 0) return -1;
-            *out = expr_new_call1((ExprKind)kind, inner);
-            if (!*out) { expr_free(inner); return -1; }
-            return 0;
-        }
-        case EXPR_SQL_EXEC:
-        case EXPR_SQL_QUERY:
-        case EXPR_WINDOW_LABEL:
-        case EXPR_WINDOW_WAIT:
-        case EXPR_WINDOW_BUTTON:
-        case EXPR_WINDOW_TEXTBOX: {
-            Expr *l, *rr;
-            if (read_expr(r, &l) != 0) return -1;
-            if (read_expr(r, &rr) != 0) { expr_free(l); return -1; }
-            *out = expr_new_call2((ExprKind)kind, l, rr);
-            if (!*out) { expr_free(l); expr_free(rr); return -1; }
-            return 0;
-        }
-        case EXPR_WINDOW_SLIDER: {
-            Expr *l, *rr, *a3;
-            if (read_expr(r, &l) != 0) return -1;
-            if (read_expr(r, &rr) != 0) { expr_free(l); return -1; }
-            if (read_expr(r, &a3) != 0) { expr_free(l); expr_free(rr); return -1; }
-            *out = expr_new_call3((ExprKind)kind, l, rr, a3);
-            if (!*out) { expr_free(l); expr_free(rr); expr_free(a3); return -1; }
             return 0;
         }
         default: return -1;
@@ -3051,6 +2667,33 @@ static int read_stmt(ByteReader *r, Stmt *out) {
                 return -1;
             }
             return 0;
+        case STMT_RECIPE: {
+            uint32_t np, k;
+            if (reader_bytes_alloc(r, &out->recipe_name, NULL) != 0) return -1;
+            if (reader_u32(r, &np) != 0 || np > COB_MAX_EXTERN_ARGS) { free(out->recipe_name); out->recipe_name = NULL; return -1; }
+            if (np > 0) {
+                out->recipe_params = (char **)calloc(np, sizeof(char *));
+                if (!out->recipe_params) { free(out->recipe_name); out->recipe_name = NULL; return -1; }
+            }
+            for (k = 0; k < np; k++) {
+                if (reader_bytes_alloc(r, &out->recipe_params[k], NULL) != 0) {
+                    out->recipe_nparams = (int)k;
+                    stmt_free_contents(out);
+                    memset(out, 0, sizeof(*out));
+                    return -1;
+                }
+            }
+            out->recipe_nparams = (int)np;
+            if (read_program(r, &out->recipe_body) != 0) {
+                program_init(&out->recipe_body);
+                stmt_free_contents(out);
+                memset(out, 0, sizeof(*out));
+                return -1;
+            }
+            return 0;
+        }
+        case STMT_SERVE: return read_expr(r, &out->serve_expr);
+        case STMT_CALL: return read_expr(r, &out->call_expr);
         default: return -1;
     }
 }
@@ -3088,42 +2731,337 @@ static int cob_load_strawberry_cache(const char *cache_path, Program *out_prog) 
  * ------------------------------------------------------------------- */
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-        "Usage: %s <file.cob> [--no-cache] [--no-gc]\n"
+        "Usage: %s [file.cob] [--no-cache] [--no-gc] [-i]\n"
         "       %s --license\n"
         "       %s --version\n"
+        "  (no file)    start the interactive REPL\n"
+        "  -i, --repl   run the file (if any), then stay in the REPL with its state\n"
         "  --no-cache   ignore/skip the .strawberry fast-boot cache\n"
         "  --no-gc      unlock harvest(<bytes>) / trash(<variable>)\n"
         "  --license    print the short license notice and exit\n"
         "\n"
         "If a .cob file's first line is exactly `_MakeCache = False`\n"
         "(whitespace/case-insensitive), the .strawberry cache is\n"
-        "disabled for that file automatically.\n",
+        "disabled for that file automatically.\n"
+        "\n"
+        "Console input, text, time, files, SQLite and windows are in the\n"
+        "standard library: add e.g. `shuck porch` to a program to use them.\n",
         argv0, argv0, argv0);
 }
+
+/* ---------------------------------------------------------------------
+ * REPL (v0.0.9) -- `cob_interp` with no file, or `-i` after a file
+ *
+ * Reads Cob a line at a time. A line ending in ':' starts a block: keep
+ * typing indented lines and finish with a blank line. A bare expression
+ * (1 + 2, name, greet("Ada")) prints its value, like Python; a recipe call
+ * that ends without `serve` prints nothing. Variables and recipes persist
+ * from one input to the next, and typing a recipe again replaces it.
+ * Commands start with ':' -- try :help. Prompts and the banner only show
+ * on a real terminal, so `cob_interp --repl < script.txt` is scriptable.
+ * Not part of the browser (COB_WASM) build.
+ * ------------------------------------------------------------------- */
+#if !defined(COB_WASM)
+static Program *g_repl_kept = NULL;
+static size_t g_repl_kept_n = 0, g_repl_kept_cap = 0;
+
+/* Programs that define recipes must outlive their input: the recipe table
+ * points into them. Everything else is freed right after it runs. */
+static int repl_keep(Program *p) {
+    if (g_repl_kept_n == g_repl_kept_cap) {
+        size_t new_cap = g_repl_kept_cap ? g_repl_kept_cap * 2 : 8;
+        Program *grown = (Program *)realloc(g_repl_kept, new_cap * sizeof(Program));
+        if (!grown) return -1;
+        g_repl_kept = grown; g_repl_kept_cap = new_cap;
+    }
+    g_repl_kept[g_repl_kept_n++] = *p;
+    program_init(p);
+    return 0;
+}
+static void repl_free_kept(void) {
+    size_t i;
+    for (i = 0; i < g_repl_kept_n; i++) program_free(&g_repl_kept[i]);
+    free(g_repl_kept);
+    g_repl_kept = NULL; g_repl_kept_n = g_repl_kept_cap = 0;
+}
+
+/* numbers plain, strings in quotes (so "5" and 5 look different) */
+static void repl_print_value(const Value *v) {
+    if (v->kind == VAL_STR) {
+        const char *c;
+        putchar('"');
+        for (c = v->s; *c; c++) {
+            switch (*c) {
+                case '"':  fputs("\\\"", stdout); break;
+                case '\\': fputs("\\\\", stdout); break;
+                case '\n': fputs("\\n", stdout); break;
+                case '\t': fputs("\\t", stdout); break;
+                default: putchar(*c);
+            }
+        }
+        putchar('"');
+    } else {
+        printf("%ld", v->i);
+    }
+    putchar('\n');
+}
+
+static int repl_is_statement_line(const char *t) {
+    static const char *const kws[] = {
+        COB_KW_POP, COB_KW_SET, COB_KW_WHILE, COB_KW_IF, COB_KW_ELIF, COB_KW_ELSE,
+        COB_KW_SHUCK, COB_KW_RECIPE, COB_KW_SERVE, COB_KW_EXTERN, COB_KW_TRASH
+    };
+    size_t i;
+    for (i = 0; i < sizeof(kws) / sizeof(kws[0]); i++) {
+        size_t n = strlen(kws[i]);
+        if (strncmp(t, kws[i], n) == 0 && !is_ident_char(t[n])) return 1;
+    }
+    return 0;
+}
+/* `x = 5` -- a common slip; Cob wants `set x = 5` */
+static int repl_looks_like_assignment(const char *t) {
+    const char *q = t;
+    if (!is_ident_start(*q)) return 0;
+    while (is_ident_char(*q)) q++;
+    q = skip_blank(q);
+    return (*q == '=' && q[1] != '=');
+}
+
+/* Registers + runs an already-parsed program, then keeps or frees it. */
+static void repl_run_program(EvalCtx *ctx, Program *prog, int lenient) {
+    if (cob_recipes_validate(prog, 1) != 0 || cob_check_calls(prog, lenient) != 0) { program_free(prog); return; }
+    if (!ctx->no_gc && program_uses_harvest_or_trash(prog)) {
+        fprintf(stderr, "[cob_interp] error: harvest()/trash() need the REPL started with --no-gc\n");
+        program_free(prog);
+        return;
+    }
+    if (cob_recipes_register(prog) != 0) { program_free(prog); return; }
+    execute(prog, ctx);
+    value_free(&ctx->ret);
+    ctx->ret = value_int(0);
+    if (program_has_recipe(prog)) {
+        if (repl_keep(prog) != 0) fprintf(stderr, "[cob_interp] out of memory keeping recipes\n");
+    } else {
+        program_free(prog);
+    }
+}
+
+static void repl_eval_text(EvalCtx *ctx, const char *src) {
+    const char *t = skip_blank(src);
+    int multiline = (strchr(t, '\n') != NULL && strchr(t, '\n')[1] != '\0');
+
+    /* 1. a lone expression prints its value */
+    if (!multiline && !repl_is_statement_line(t)) {
+        Expr *e = NULL;
+        const char *p;
+        g_parse_line = 0; /* REPL input has no line numbers to report */
+        p = parse_expr(t, &e);
+        if (p) {
+            p = skip_blank(p);
+            if (*p == '\0' || *p == '\n') {
+                Value v;
+                int is_call = (e->kind == EXPR_CALL);
+                if (cob_check_calls_expr(e, 0) != 0) { expr_free(e); return; }
+                if (!ctx->no_gc && expr_uses_harvest(e)) {
+                    fprintf(stderr, "[cob_interp] error: harvest() needs the REPL started with --no-gc\n");
+                    expr_free(e);
+                    return;
+                }
+                ctx->fell_off = 0;
+                v = eval_expr(e, ctx);
+                if (!(is_call && ctx->fell_off)) repl_print_value(&v);
+                value_free(&v);
+                expr_free(e);
+                return;
+            }
+            expr_free(e);
+        }
+    }
+    /* 2. otherwise one or more statements */
+    if (!multiline && repl_looks_like_assignment(t)) {
+        size_t tl = strlen(t);
+        while (tl > 0 && (t[tl - 1] == '\n' || t[tl - 1] == '\r')) tl--;
+        fprintf(stderr, "[cob_interp] syntax error: unrecognized statement: %.*s\n"
+                        "  hint: assign with `set`, e.g. `set x = 5`\n", (int)tl, t);
+        return;
+    }
+    {
+        PhysLines lines;
+        Program prog;
+        size_t pos = 0;
+        int rc;
+        if (cob_split_lines(src, 1, &lines) != 0) return;
+        g_recipe_depth = 0;
+        rc = parse_block(&lines, &pos, -1, &prog);
+        physlines_free(&lines);
+        if (rc != 0) return;
+        repl_run_program(ctx, &prog, 1);
+    }
+}
+
+static void repl_help(void) {
+    puts("Type Cob at the prompt. A line ending in ':' starts a block -- finish it with a blank line.");
+    puts("A bare expression prints its value:   1 + 2    name    greet(\"Ada\")");
+    puts("Commands:");
+    puts("  :help             this text");
+    puts("  :vars             the variables you have set");
+    puts("  :recipes          the recipes you have defined (also :funcs)");
+    puts("  :load <file.cob>  run a file inside this session");
+    puts("  :reset            forget all variables, recipes and loaded libraries");
+    puts("  :quit             leave (or press Ctrl-D)");
+    puts("Libraries: shuck porch | cornmath | kernels | almanac | granary | pantry | barn | tassel | silo");
+}
+
+/* Returns 1 to leave the REPL. */
+static int repl_command(EvalCtx *ctx, const char *cmd) {
+    const char *arg = cmd;
+    while (*arg && *arg != ' ' && *arg != '\t') arg++;
+    arg = skip_blank(arg);
+    {
+        size_t n = (size_t)(arg - cmd);
+        while (n > 0 && (cmd[n - 1] == ' ' || cmd[n - 1] == '\t')) n--;
+#define REPL_IS(word) (n == strlen(word) && strncmp(cmd, word, n) == 0)
+        if (REPL_IS(":quit") || REPL_IS(":q") || REPL_IS(":exit")) return 1;
+        if (REPL_IS(":help") || REPL_IS(":h") || REPL_IS(":?")) { repl_help(); return 0; }
+        if (REPL_IS(":vars")) {
+            size_t i;
+            if (ctx->vars->count == 0) puts("(no variables yet)");
+            for (i = 0; i < ctx->vars->count; i++) {
+                printf("%s = ", ctx->vars->items[i].name);
+                repl_print_value(&ctx->vars->items[i].value);
+            }
+            return 0;
+        }
+        if (REPL_IS(":recipes") || REPL_IS(":funcs")) {
+            size_t i;
+            int k;
+            if (g_func_count == 0) puts("(no recipes yet)");
+            for (i = 0; i < g_func_count; i++) {
+                const Stmt *d = g_funcs[i].def;
+                printf("recipe %s(", d->recipe_name);
+                for (k = 0; k < d->recipe_nparams; k++) printf("%s%s", k ? ", " : "", d->recipe_params[k]);
+                puts(")");
+            }
+            return 0;
+        }
+        if (REPL_IS(":reset")) {
+            vars_free(ctx->vars); vars_init(ctx->vars);
+            handles_free_all(ctx->handles); handles_init(ctx->handles);
+            funcs_free();
+            cob_extern_shutdown();
+            repl_free_kept();
+            puts("(reset)");
+            return 0;
+        }
+        if (REPL_IS(":load")) {
+            CobFileBuffer buf;
+            Program prog;
+            int disable = 0;
+            if (*arg == '\0') { fprintf(stderr, "[cob_interp] usage: :load <file.cob>\n"); return 0; }
+            if (cob_file_read_all(arg, &buf) != COB_FILE_OK) {
+                fprintf(stderr, "[cob_interp] error: could not read '%s'\n", arg);
+                return 0;
+            }
+            g_recipe_depth = 0;
+            if (cob_parse_source(buf.data, &prog, &disable) == 0) repl_run_program(ctx, &prog, 0);
+            cob_file_free(&buf);
+            return 0;
+        }
+#undef REPL_IS
+    }
+    fprintf(stderr, "[cob_interp] unknown command '%s' -- try :help\n", cmd);
+    return 0;
+}
+
+static int cob_repl(EvalCtx *ctx, int banner) {
+    int interactive = COB_STDIN_IS_TTY();
+    if (interactive && banner) {
+        printf("Cob %s REPL -- :help for help, :quit or Ctrl-D to leave\n", COB_VERSION_STRING);
+    }
+    for (;;) {
+        int got = 0;
+        char *line = cob_read_line(interactive ? "cob> " : "", &got);
+        const char *t;
+        size_t len;
+        if (!line) { fprintf(stderr, "[cob_interp] out of memory\n"); break; }
+        if (!got) { free(line); if (interactive) putchar('\n'); break; }
+        t = skip_blank(line);
+        if (*t == '\0') { free(line); continue; }
+        if (*t == ':') {
+            int quit = repl_command(ctx, t);
+            free(line);
+            fflush(stdout);
+            if (quit) break;
+            continue;
+        }
+        len = strlen(t);
+        while (len > 0 && (t[len - 1] == ' ' || t[len - 1] == '\t')) len--;
+        {
+            int starts_block = (len > 0 && t[len - 1] == ':'); /* read before `line` is freed */
+            size_t cap = strlen(line) + 2, used;
+            char *text = (char *)malloc(cap);
+            if (!text) { free(line); break; }
+            used = (size_t)snprintf(text, cap, "%s\n", line);
+            free(line);
+            if (starts_block) {
+                /* a block: read indented lines until a blank line */
+                for (;;) {
+                    int more = 0;
+                    char *next = cob_read_line(interactive ? "...  " : "", &more);
+                    char *grown;
+                    size_t need;
+                    if (!next) break;
+                    if (!more || *skip_blank(next) == '\0') { free(next); break; }
+                    need = used + strlen(next) + 2;
+                    grown = (char *)realloc(text, need);
+                    if (!grown) { free(next); break; }
+                    text = grown;
+                    used += (size_t)snprintf(text + used, need - used, "%s\n", next);
+                    free(next);
+                }
+            }
+            repl_eval_text(ctx, text);
+            free(text);
+        }
+        fflush(stdout);
+        fflush(stderr);
+    }
+    repl_free_kept();
+    return 0;
+}
+#endif /* !COB_WASM */
 
 int main(int argc, char **argv) {
     const char *src_path = NULL;
     int use_cache = 1;
     int no_gc = 0;
+    int enter_repl = 0;
     char cache_path[1024];
     Program prog;
     EvalCtx ctx;
     VarTable vars;
     HandleTable handles;
-    int i;
+    int i, exit_code = 0;
 
     if (cob_check_hidden_version_flag(argc, argv)) return 0;
     if (cob_check_hidden_license_flag(argc, argv)) return 0;
 #ifdef COB_ENTERPRISE
     if (cob_lic_require("cob_interp") != 0) return 1;
 #endif
+#if defined(COB_WASM)
     if (argc < 2) { print_usage(argv[0]); return 1; }
+#endif
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-cache") == 0) {
             use_cache = 0;
         } else if (strcmp(argv[i], COB_FLAG_NO_GC) == 0) {
             no_gc = 1;
+#if !defined(COB_WASM)
+        } else if (strcmp(argv[i], "--repl") == 0 || strcmp(argv[i], "-i") == 0 ||
+                   strcmp(argv[i], "--interactive") == 0) {
+            enter_repl = 1;
+#endif
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "[cob_interp] error: unrecognized flag '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -3136,10 +3074,25 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
+
+    program_init(&prog);
+    vars_init(&vars);
+    handles_init(&handles);
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.vars = &vars; ctx.handles = &handles; ctx.no_gc = no_gc;
+    ctx.ret = value_int(0);
+
     if (src_path == NULL) {
+#if !defined(COB_WASM)
+        cob_repl(&ctx, 1);
+        vars_free(&vars); handles_free_all(&handles);
+        cob_ext_shutdown();
+        return 0;
+#else
         fprintf(stderr, "[cob_interp] error: no source file given\n");
         print_usage(argv[0]);
         return 1;
+#endif
     }
     if (!cob_str_ends_with(src_path, COB_SOURCE_EXTENSION)) {
         fprintf(stderr, "[cob_interp] error: expected a %s file, got '%s'\n", COB_SOURCE_EXTENSION, src_path);
@@ -3162,11 +3115,7 @@ int main(int argc, char **argv) {
         disable_cache_directive = cob_strip_leading_makecache_directive(&peek);
     }
     if (disable_cache_directive) use_cache = 0;
-
-    program_init(&prog);
-    vars_init(&vars);
-    handles_init(&handles);
-    ctx.vars = &vars; ctx.handles = &handles; ctx.no_gc = no_gc;
+    if (enter_repl) use_cache = 0; /* the REPL needs the live program, not a cached copy */
 
     if (use_cache && cob_file_exists(cache_path)) {
         if (cob_load_strawberry_cache(cache_path, &prog) == 0) {
@@ -3174,9 +3123,16 @@ int main(int argc, char **argv) {
             if (!no_gc && program_uses_harvest_or_trash(&prog)) {
                 fprintf(stderr, "[cob_interp] error: this program uses harvest()/trash() -- rerun with --no-gc\n");
                 program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+                cob_ext_shutdown();
+                return 1;
+            }
+            if (cob_recipes_register(&prog) != 0) {
+                program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+                cob_ext_shutdown();
                 return 1;
             }
             execute(&prog, &ctx);
+            value_free(&ctx.ret);
             program_free(&prog); vars_free(&vars); handles_free_all(&handles);
             cob_ext_shutdown();
             return 0;
@@ -3193,19 +3149,35 @@ int main(int argc, char **argv) {
     }
     cob_file_free(&source);
 
+    /* recipes are hoisted: validate and register them, and check every
+     * call, BEFORE anything runs -- so a typo fails up front, not halfway */
+    if (cob_recipes_validate(&prog, 0) != 0 || cob_check_calls(&prog, 0) != 0 ||
+        cob_recipes_register(&prog) != 0) {
+        program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+        cob_ext_shutdown();
+        return 1;
+    }
+
     if (!no_gc && program_uses_harvest_or_trash(&prog)) {
         fprintf(stderr, "[cob_interp] error: this program uses harvest()/trash() -- rerun with --no-gc\n");
         program_free(&prog); vars_free(&vars); handles_free_all(&handles);
+        cob_ext_shutdown();
         return 1;
     }
 
     execute(&prog, &ctx);
+    value_free(&ctx.ret);
+    ctx.ret = value_int(0);
 
     if (use_cache) cob_write_strawberry_cache(cache_path, &prog);
+
+#if !defined(COB_WASM)
+    if (enter_repl) cob_repl(&ctx, 1);
+#endif
 
     program_free(&prog);
     vars_free(&vars);
     handles_free_all(&handles);
     cob_ext_shutdown();
-    return 0;
+    return exit_code;
 }

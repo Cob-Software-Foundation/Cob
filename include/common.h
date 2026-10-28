@@ -40,7 +40,7 @@ extern "C" {
 #define COB_VERSION_MAJOR       0
 #define COB_VERSION_MINOR       0
 #define COB_VERSION_PATCH       2
-#define COB_VERSION_STRING      "0.0.8"
+#define COB_VERSION_STRING      "0.0.9"
 #define COB_AUTHOR_HANDLE       "Pixel-Pulse"
 #define COB_REPO_URL            "https://github.com/Cob-Software-Foundation/Cob"
 
@@ -175,52 +175,12 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
 #define COB_KW_ELIF           "elif"     /* elif <condition>:             */
 #define COB_KW_ELSE           "else"     /* else:                         */
 
-/* SQLite3 / Tcl / Tk bindings (v0.0.5). Each is a call-style builtin
- * expression, same shape as harvest(<bytes>): a keyword directly
- * followed by '(' and one or more comma-separated expressions. Only
- * meaningful in a build compiled with COB_WITH_SQLITE / COB_WITH_TCL /
- * COB_WITH_TK -- see `make cob_interp_db` in the Makefile. A plain
- * `make cob_interp` still builds with none of these and stays
- * dependency-free; calling one of these keywords in that build prints
- * a warning and evaluates to a harmless default (0 / "") rather than
- * failing to compile or crashing at runtime. */
-#define COB_KW_SQL_OPEN       "sql_open"   /* sql_open(<path>) -> handle        */
-#define COB_KW_SQL_EXEC       "sql_exec"   /* sql_exec(<handle>, <sql>) -> rc   */
-#define COB_KW_SQL_QUERY      "sql_query"  /* sql_query(<handle>, <sql>) -> str */
-#define COB_KW_SQL_CLOSE      "sql_close"  /* sql_close(<handle>) -> 0          */
-#define COB_KW_TCL_EVAL       "tcl_eval"   /* tcl_eval(<script>) -> str         */
-#define COB_KW_TK_EVAL        "tk_eval"    /* tk_eval(<script>) -> str          */
+/* Functions (v0.0.9). `recipe name(a, b):` defines a function (top level
+ * only) -- it works like Python's `def`; `serve <expr>` hands a value back
+ * to whoever called it, like `return`. */
+#define COB_KW_RECIPE         "recipe"   /* recipe <n>(<params>):          */
+#define COB_KW_SERVE          "serve"    /* serve [<expr>]                 */
 
-/* _cobwindow (v0.0.5): a small, native, dependency-free GUI wrapper --
- * no vendored source tree, no configure/autoconf, just the OS's own
- * windowing API (Win32 user32/gdi32 on Windows, Xlib on Linux/macOS-
- * with-X11). Exists because building the full vendored Tcl/Tk from
- * source is heavy and fragile on some toolchains (e.g. minimal
- * MSYS2/w64devkit-style setups without a full autoconf/sh environment
- * behaving exactly like a normal Unix box). `shuck cobwindow` is a
- * special-cased no-op acknowledgment (there's no cobwindow.cob file --
- * see cob_shuck() in cob_interp.c) that reads naturally at the top of
- * a script; the keywords below work the same with or without it,
- * gated only by whether the binary was built with COB_WITH_COBWINDOW
- * (see `make cob_interp_window`). */
-#define COB_KW_WINDOW_OPEN    "window_open"  /* window_open(<title>) -> handle       */
-#define COB_KW_WINDOW_LABEL   "window_label" /* window_label(<h>, <text>) -> 0       */
-#define COB_KW_WINDOW_WAIT    "window_wait"  /* window_wait(<h>, <seconds>) -> 0     */
-#define COB_KW_WINDOW_CLOSE   "window_close" /* window_close(<h>) -> 0               */
-
-/* raygui widget keywords (v0.0.6-in-progress): vendor/raygui was
- * carried alongside raylib since v0.0.5 but not yet wired to any Cob
- * syntax -- these three are that wiring. Each widget is identified by
- * its own label text (first call creates it, auto-stacked below the
- * window_label() text; later calls with the same label update/read
- * the same widget) -- same "identity is the text you gave it" idea
- * window_label() already uses for the single label, just extended to
- * more than one thing on screen. Only meaningful in a build with
- * COB_WITH_COBWINDOW; the stub build prints a warning and returns a
- * harmless default, same as the other four window_* keywords. */
-#define COB_KW_WINDOW_BUTTON  "window_button"  /* window_button(<h>, <label>) -> 1 if clicked since the last read, else 0 */
-#define COB_KW_WINDOW_SLIDER  "window_slider"  /* window_slider(<h>, <label>, <max>) -> current value, 0..<max>, int   */
-#define COB_KW_WINDOW_TEXTBOX "window_textbox" /* window_textbox(<h>, <label>) -> current string contents of the box    */
 #define COB_BLOCK_COLON       ':'        /* block opener terminator        */
 
 /* C API / FFI (CEP-2). `extern <name>(<params>) from "<library>"` binds
@@ -229,10 +189,6 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
  * resolves it eagerly with dlopen()/dlsym() (POSIX) or LoadLibraryA()/
  * GetProcAddress() (Windows); popcorn_comp emits an `extern`
  * declaration and links the library at compile time instead. */
-/* Console input (v0.0.8). Both take an optional prompt (printed without a
- * trailing newline), then read one line from stdin. */
-#define COB_KW_INPUT          "input"      /* input(<prompt>) -> str; "" at EOF      */
-#define COB_KW_INPUT_INT      "input_int"  /* input_int(<prompt>) -> int; 0 if not a number / at EOF */
 #define COB_KW_EXTERN         "extern"   /* extern f(x) from "lib.so"      */
 #define COB_KW_FROM           "from"     /* ... from "<library>"           */
 
@@ -245,8 +201,8 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
  *   \xE2\x9A\xA0\xEF\xB8\x8F  = U+26A0 U+FE0F (warning sign)
  *   \xF0\x9F\x91\x89          = U+1F449 (pointing right) */
 #define COB_WEB_WARNING_LINE1 \
-    "\xE2\x9A\xA0\xEF\xB8\x8F [COB Warning]: Desktop graphics (_cobwindow) and storage " \
-    "(SQLite) are bypassed in the web sandbox."
+    "\xE2\x9A\xA0\xEF\xB8\x8F [COB Warning]: Desktop libraries (barn windows, pantry " \
+    "databases, tassel Tcl/Tk) are bypassed in the web sandbox."
 #define COB_WEB_WARNING_LINE2 \
     "\xF0\x9F\x91\x89 Download the native compiler at cob.pixel-pulse.dev/download.html " \
     "to launch full windows and databases on your desktop!"
@@ -285,6 +241,24 @@ static inline int cob_check_hidden_license_flag(int argc, char **argv) {
  * without rebuilding). */
 #define COB_FARMER_DEFAULT_BASE_URL "https://cpi.cob.pixel-pulse.dev"
 #define COB_FARMER_BASE_URL_ENV     "COB_FARMER_BASE_URL"
+
+/* Deepest chain of recipe calls (recursion included) in both the
+ * interpreter and compiled programs, so runaway recursion warns and stops
+ * instead of crashing. One Cob call costs the interpreter roughly 1 KB of C
+ * stack (more when the call sits inside nested if/while blocks), so 500
+ * keeps even a heavily nested program inside the smallest default stack we
+ * run on: 1 MiB (Windows main threads and the WASM build). */
+#define COB_MAX_CALL_DEPTH     500
+
+/* Standard library (v0.0.9). Every module is a real shared library
+ * (lib<name>.so / lib<name>.dylib / <name>.dll) plus a tiny <name>.cob
+ * wrapper of `extern` declarations, living together in one directory:
+ * $COB_STDLIB if set, else <directory of the running tool>/lib. `shuck
+ * <module>` finds the wrapper there, and `extern ... from "<module>"`
+ * finds the library there (cob_interp loads it with dlopen(); popcorn_comp
+ * links it and records the directory as an rpath). */
+#define COB_STDLIB_ENV         "COB_STDLIB"
+#define COB_STDLIB_SUBDIR      "lib"
 
 /* Local workspace folder farmer installs packages into, and shuck
  * (see cob_interp.c) looks for them in as its second candidate path:
@@ -341,6 +315,7 @@ static inline int cob_count_leading_spaces(const char *line) {
  *   COBSTRW7 -- C API / FFI (CEP-2): STMT_EXTERN + EXPR_EXTERN_CALL
  *   COBSTRW8 -- if/elif/else: STMT_IF (cond, then-program, else-program)
  *   COBSTRW9 -- console input: EXPR_INPUT / EXPR_INPUT_INT (one operand each)
+ *   COBSTRW10 -- functions: STMT_RECIPE / STMT_SERVE / STMT_CALL + EXPR_CALL
  * popcorn_comp.c does not implement codegen for the SQLite/_cobwindow/
  * Tcl-Tk/widget keywords added in v4-v6 -- those bumps only ever
  * *appended* new ExprKind values after EXPR_HARVEST, never changed the
@@ -350,8 +325,8 @@ static inline int cob_count_leading_spaces(const char *line) {
  * file. That's what makes sharing one writer-side magic constant safe
  * for a reader that only ever implements a subset of it.
  * ------------------------------------------------------------------- */
-#define STRAWBERRY_MAGIC      "COBSTRW9"
-#define STRAWBERRY_MAGIC_LEN  8
+#define STRAWBERRY_MAGIC      "COBSTRW10"
+#define STRAWBERRY_MAGIC_LEN  9
 
 #ifdef __cplusplus
 }

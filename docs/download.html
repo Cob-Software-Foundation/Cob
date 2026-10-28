@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Download Cob — Cob</title>
-<meta name="description" content="Download Cob 0.0.8 for Windows, macOS, or Linux, or build from source.">
+<meta name="description" content="Download Cob 0.0.9 for Windows, macOS, or Linux, or build from source.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -85,7 +85,7 @@
 
   <section class="page-head">
     <div class="wrap">
-      <div class="eyebrow-plain">Version 0.0.8</div>
+      <div class="eyebrow-plain">Version 0.0.9</div>
       <h1>Download Cob</h1>
       <p class="lede">Grab the interpreter, compiler, and package manager for your platform, or build from source. All three tools ship together in every release.</p>
     </div>
@@ -142,6 +142,13 @@
     </div>
 
     <div class="downloads-foot" style="margin-top:20px; border-radius:10px; border:1px solid var(--line);">
+      <strong>Use Docker?</strong> A multi-architecture image (amd64 and arm64) with the interpreter and REPL, the compiler, farmer and the standard library is built and tested by GitHub Actions and published to the GitHub Container Registry. Run a program from the current folder, or open the REPL:
+      <code class="mono">docker run -it --rm ghcr.io/cob-software-foundation/cob<br>
+      docker run --rm -v "$PWD:/work" ghcr.io/cob-software-foundation/cob hello.cob</code>
+      The image leaves out the barn (windows) and tassel (Tcl/Tk) modules, which need a display. Add <code class="mono">--user "$(id -u):$(id -g)"</code> to read and write your own files as yourself.
+    </div>
+
+    <div class="downloads-foot" style="margin-top:20px; border-radius:10px; border:1px solid var(--line);">
       Prefer to build it yourself? <a href="https://github.com/Cob-Software-Foundation/Cob/archive/refs/heads/main.zip">Download the source</a> and run <code class="mono">make</code> — requires a C99 compiler and, on Linux, X11/OpenGL dev headers for the default SQLite + native-window build (e.g. <code class="mono">libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev</code> on Debian/Ubuntu). For popcorn_comp's default backend, also put <a href="https://ziglang.org/">Zig</a> on your PATH.
     </div>
   </section>
@@ -186,6 +193,11 @@ $ grep cob-linux-amd64 checksums.txt<br>
       <table class="rel">
         <thead><tr><th>Version</th><th>Notes</th><th></th></tr></thead>
         <tbody>
+          <tr>
+            <td class="ver">0.0.9</td>
+            <td class="note"><strong>Functions, a REPL, and a standard library.</strong> <code>recipe</code> / <code>serve</code> define and return from functions (recursion, local variables, calls checked before the program runs). <code>cob_interp</code> with no file starts an interactive REPL. <strong>Breaking:</strong> <code>input</code>/<code>input_int</code>, the SQLite, window and Tcl/Tk keywords are no longer built in &mdash; they are now corn-themed shared libraries loaded with <code>shuck</code> (<code>porch</code>, <code>pantry</code>, <code>barn</code>, <code>tassel</code>, plus <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>, <code>granary</code>, <code>silo</code>); an old name gives an error saying what to write instead. Keep the <code>lib/</code> folder next to the binaries. popcorn_comp now compiles recipes and the whole standard library (including SQLite and windows) and fixes two bugs: string accumulation and left-to-right evaluation. The .strawberry cache format bumped to COBSTRW10 (old caches are rebuilt automatically).</td>
+            <td><a href="/ftp/dist/v0.0.9/">Files →</a></td>
+          </tr>
           <tr>
             <td class="ver">0.0.8</td>
             <td class="note">Console input: <code>input(&lt;prompt&gt;)</code> returns a line of typing as a string and <code>input_int(&lt;prompt&gt;)</code> returns it as a whole number (0, with a warning, if it isn't one). The prompt is optional, and at the end of the input they return an empty string or 0. Works in both cob_interp and popcorn_comp, which behave identically, and in the in-browser <a href="play/index.html">playground</a>. Also fixes a small leak in compiled programs that tested a string for truthiness. The .strawberry cache format bumped to COBSTRW9 (old caches are rebuilt automatically).</td>

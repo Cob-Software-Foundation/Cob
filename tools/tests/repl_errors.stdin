@@ -1,0 +1,18 @@
+x = 5
+undefined_thing(1)
+recipe f(a):
+    serve a
+
+f(1, 2)
+set y = (
+pop(
+:bogus
+shuck nosuchmodule
+recipe g():
+    serve h()
+
+recipe h():
+    serve 77
+
+g()
+pop("still alive")

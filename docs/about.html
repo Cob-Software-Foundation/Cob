@@ -82,10 +82,10 @@
       <p>The naming isn't just decoration — it's meant to make the mental model legible. <code class="mono">shuck</code> pulls in a library the way you'd shuck an ear of corn to get at what's inside. <code class="mono">harvest</code> and <code class="mono">trash</code> are manual memory allocation and freeing, gated behind <code class="mono">--no-gc</code> because they're a deliberate, opt-in escape hatch, not the default. The <code class="mono">.strawberry</code> cache and <code class="mono">farmer harvest &lt;package&gt;</code> keep the same vocabulary consistent through the whole toolchain instead of switching metaphors halfway through.</p>
 
       <h2>What it can do today</h2>
-      <p>Cob is still small on purpose, but it is past the toy stage. Variables hold numbers or strings. <code class="mono">while</code> loops and <code class="mono">if</code> / <code class="mono">elif</code> / <code class="mono">else</code> blocks share one set of conditions, and <code class="mono">pop</code> prints any expression. As of 0.0.8 a program can also ask the person running it a question with <code class="mono">input</code> and <code class="mono">input_int</code>. Past the core language, the default build can talk to SQLite, open native windows with real buttons, sliders, and text boxes, and call functions in C libraries through <code class="mono">extern</code>. Tcl/Tk is available as a separate build. You can try the core language right now in the <a href="play/index.html">browser playground</a>, which runs the interpreter as WebAssembly with nothing to install.</p>
+      <p>Cob is still small on purpose, but it is past the toy stage. Variables hold numbers or strings. <code class="mono">while</code> loops and <code class="mono">if</code> / <code class="mono">elif</code> / <code class="mono">else</code> blocks share one set of conditions, and <code class="mono">pop</code> prints any expression. As of 0.0.9 it has functions (<code class="mono">recipe</code> and <code class="mono">serve</code>) and an interactive REPL. Past that core, everything is a corn-themed standard library of real shared libraries you bring in with <code class="mono">shuck</code>: <code class="mono">porch</code> for console input, <code class="mono">kernels</code> for text, <code class="mono">cornmath</code>, <code class="mono">almanac</code> for time, <code class="mono">granary</code> for files, <code class="mono">pantry</code> for SQLite, <code class="mono">barn</code> for native windows with real buttons, sliders, and text boxes, and <code class="mono">tassel</code> for Tcl/Tk. They are ordinary <code class="mono">extern</code> libraries, so you can write your own the same way. You can try the core language right now in the <a href="play/index.html">browser playground</a>, which runs the interpreter as WebAssembly with nothing to install.</p>
 
       <h2>Where it's headed</h2>
-      <p>The honest gaps are mostly about the compiler and the safety net around it. <code class="mono">popcorn_comp</code> compiles the core language, including strings, conditionals, console input, and <code class="mono">extern</code>, but the SQLite and window keywords still run only under <code class="mono">cob_interp</code>. Only some targets get an executed test in CI, and the regression tests are still a handful of programs rather than a full suite. The cards below say where each of those stands.</p>
+      <p>The honest gaps are mostly about the compiler and the safety net around it. <code class="mono">popcorn_comp</code> compiles the whole language, recipes and the standard library included, but a program that uses library modules must be linked dynamically, and cross-compiling one needs those modules built for the target. Only some targets get an executed test in CI, and the regression suite is not wired into CI yet. The cards below say where each of those stands.</p>
     </div>
   </section>
 
@@ -107,8 +107,13 @@
       </div>
       <div class="rmap">
         <span class="status shipped">Shipped</span>
-        <h3>SQLite, native windows, and widgets</h3>
-        <p>Plain make builds an interpreter with SQLite (sql_open, sql_exec, sql_query), raylib-backed windows, and raygui buttons, sliders, and text boxes. Tcl/Tk lives in the separate cob_interp_db build. Shipped in 0.0.5.</p>
+        <h3>A corn-themed standard library</h3>
+        <p>SQLite, native windows, widgets, Tcl/Tk, console input, text, numbers, time and files, as shared libraries loaded with shuck: porch, cornmath, kernels, almanac, granary, pantry, barn, tassel. Began as built-in keywords in 0.0.5; became the standard library in 0.0.9.</p>
+      </div>
+      <div class="rmap">
+        <span class="status shipped">Shipped</span>
+        <h3>Functions and a REPL</h3>
+        <p>recipe and serve define and return from functions, with recursion and call checking before a program runs; cob_interp with no file starts an interactive session. Shipped in 0.0.9.</p>
       </div>
       <div class="rmap">
         <span class="status shipped">Shipped</span>
@@ -123,12 +128,12 @@
       <div class="rmap">
         <span class="status progress">In progress</span>
         <h3>Automated test suite</h3>
-        <p>Regression programs with expected output (if/else, console input, and a compiled-versus-interpreted input check) live in tools/tests, and a stress suite runs nightly in CI. The tests are not wired into CI yet, and broader coverage is the next structural investment.</p>
+        <p>make test runs 17 checks: every program test runs through both the interpreter and the compiler against the same expected output, plus the REPL, every error message, the cache, and the standard library. A stress suite runs nightly in CI. The tests are not wired into CI yet.</p>
       </div>
       <div class="rmap">
-        <span class="status planned">Not yet</span>
+        <span class="status shipped">Shipped</span>
         <h3>Compiling SQLite and window programs</h3>
-        <p>popcorn_comp does not generate code for the SQLite, window, or widget keywords yet, so programs that use them run under cob_interp only.</p>
+        <p>Because the standard library is ordinary shared-library calls, popcorn_comp links pantry and barn like any other library. Shipped in 0.0.9; the barn window module has not yet been run against a display in testing.</p>
       </div>
       <div class="rmap">
         <span class="status planned">Planned</span>

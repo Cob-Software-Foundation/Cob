@@ -35,11 +35,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.0.8 · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.0.9 · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.8</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.0.9</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.dev/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -77,18 +77,37 @@
       <div class="tool">
         <span class="tool-cmd">cob_interp file.cob</span>
         <h3>Interpret</h3>
-        <p>Runs a .cob file directly, with a fast-boot .strawberry bytecode cache so repeat runs skip re-parsing.</p>
+        <p>Runs a .cob file directly, with a fast-boot .strawberry bytecode cache so repeat runs skip re-parsing. Start it with no file for an interactive REPL.</p>
       </div>
       <div class="tool">
         <span class="tool-cmd">popcorn_comp file.strawberry -o out</span>
         <h3>Compile</h3>
-        <p>Transpiles to C and spawns a real compiler to produce a standalone native binary — cross-compile with CobOS/CobArch.</p>
+        <p>Transpiles to C and spawns a real compiler to produce a standalone native binary &mdash; recipes and the whole standard library included. Cross-compile with CobOS/CobArch.</p>
       </div>
       <div class="tool">
         <span class="tool-cmd">farmer harvest name</span>
         <h3>Fetch</h3>
         <p>Installs a .cob library from the package registry, zip-slip protected, ready to shuck straight into your program.</p>
       </div>
+    </div>
+  </section>
+
+  <!-- STANDARD LIBRARY -->
+  <section class="wrap">
+    <div class="section-head">
+      <h2>A corn-themed standard library</h2>
+      <p>Everything beyond the core language is a real shared library, loaded with <code class="mono">shuck</code>. Every module and every function is corn themed.</p>
+    </div>
+    <div class="tools">
+      <div class="tool"><span class="tool-cmd">shuck porch</span><h3>porch</h3><p><code class="mono">porch_ask</code>, <code class="mono">porch_ask_int</code> &mdash; talk to whoever is at the keyboard.</p></div>
+      <div class="tool"><span class="tool-cmd">shuck cornmath</span><h3>cornmath</h3><p><code class="mono">husk_abs</code>, <code class="mono">ear_max</code>, <code class="mono">stalk_pow</code>, <code class="mono">silk_mod</code>, <code class="mono">scatter_rand</code> and more.</p></div>
+      <div class="tool"><span class="tool-cmd">shuck kernels</span><h3>kernels</h3><p>Text, kernel by kernel: <code class="mono">kernel_upper</code>, <code class="mono">kernel_slice</code>, <code class="mono">kernel_find</code>, <code class="mono">kernel_replace</code>&hellip;</p></div>
+      <div class="tool"><span class="tool-cmd">shuck almanac</span><h3>almanac</h3><p>The farmer's calendar and clock: <code class="mono">almanac_now</code>, <code class="mono">almanac_nap</code>, <code class="mono">almanac_stamp</code>&hellip;</p></div>
+      <div class="tool"><span class="tool-cmd">shuck granary</span><h3>granary</h3><p>Files, stored like grain: <code class="mono">granary_read</code>, <code class="mono">granary_write</code>, <code class="mono">granary_append</code>&hellip;</p></div>
+      <div class="tool"><span class="tool-cmd">shuck pantry</span><h3>pantry</h3><p>A SQLite database to keep things in: <code class="mono">pantry_open</code>, <code class="mono">pantry_exec</code>, <code class="mono">pantry_query</code>.</p></div>
+      <div class="tool"><span class="tool-cmd">shuck barn</span><h3>barn</h3><p>A window to put things in &mdash; buttons, sliders, text boxes (raylib + raygui).</p></div>
+      <div class="tool"><span class="tool-cmd">shuck tassel</span><h3>tassel</h3><p>Tcl and Tk: <code class="mono">tassel_tcl</code>, <code class="mono">tassel_tk</code>.</p></div>
+      <div class="tool"><span class="tool-cmd">shuck silo</span><h3>silo</h3><p>The everyday five &mdash; porch, cornmath, kernels, almanac, granary &mdash; in one <code class="mono">shuck</code>.</p></div>
     </div>
   </section>
 
@@ -132,17 +151,24 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.0.8</div>
+        <div class="rv">0.0.9</div>
         <div class="rd">Latest release</div>
         <ul>
-          <li><code class="mono">input(&lt;prompt&gt;)</code> and <code class="mono">input_int(&lt;prompt&gt;)</code>: ask the person running a program a question and use the answer, in both cob_interp and popcorn_comp</li>
-          <li>The <a href="play/index.html">playground</a> can ask questions too</li>
+          <li><code class="mono">recipe</code> / <code class="mono">serve</code>: functions, with recursion, in both cob_interp and popcorn_comp</li>
+          <li>A REPL: run <code class="mono">cob_interp</code> with no file</li>
+          <li>A corn-themed standard library of shared libraries, loaded with <code class="mono">shuck</code> &mdash; <strong>breaking:</strong> <code class="mono">input</code>, SQLite, window and Tcl/Tk keywords moved into it</li>
+          <li>popcorn_comp can now compile SQLite and window programs</li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.0.9</span>
+          <strong>Functions, a REPL, and a real standard library</strong>
+          <p><code class="mono">recipe add(a, b):</code> defines a function and <code class="mono">serve a + b</code> hands a value back &mdash; like Python's <code class="mono">def</code> and <code class="mono">return</code>. Parameters and every name a recipe <code class="mono">set</code>s are local to it, recipes may recurse (500 calls deep, then a warning instead of a crash), and a wrong call is an error before the program starts, with its line number. Run <code class="mono">cob_interp</code> with no file for an interactive session where a bare expression prints its value. And the language got smaller on purpose: <code class="mono">input</code>, SQLite, windows and Tcl/Tk are no longer built into the interpreter. They are shared libraries (<code class="mono">porch</code>, <code class="mono">pantry</code>, <code class="mono">barn</code>, <code class="mono">tassel</code>) beside new ones for numbers, text, time and files &mdash; each loaded with <code class="mono">shuck</code>, every name corn themed. The compiler can finally compile the SQLite and window programs, and two compiler bugs are fixed: <code class="mono">set s = s + "x"</code> lost the old string, and operands that print could run right-to-left. The .strawberry cache format bumped to COBSTRW10.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.0.8</span>
           <strong>Programs can finally ask questions</strong>

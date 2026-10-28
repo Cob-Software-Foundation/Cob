@@ -64,6 +64,17 @@ void cob_file_free(CobFileBuffer *buf);
  * the buffer was too small or src_path didn't look like a .cob file. */
 int cob_make_cache_path(const char *src_path, char *out_buf, size_t out_buf_size);
 
+/* Standard library location. Writes the directory that holds the stdlib's
+ * shared libraries and .cob wrappers into `out_buf`: $COB_STDLIB if set,
+ * else "<directory of the running executable>/lib". Returns 0 on success,
+ * -1 if it cannot be determined (or the buffer is too small). */
+int cob_stdlib_dir(char *out_buf, size_t out_buf_size);
+
+/* Writes the full path of stdlib module `name`'s shared library, i.e.
+ * "<stdlib dir>/lib<name>.so" (Linux), ".../lib<name>.dylib" (macOS) or
+ * ".../<name>.dll" (Windows). Returns 0 on success, -1 on failure. */
+int cob_stdlib_lib_path(const char *name, char *out_buf, size_t out_buf_size);
+
 #ifdef __cplusplus
 }
 #endif

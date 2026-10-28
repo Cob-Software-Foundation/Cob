@@ -2,17 +2,18 @@
 # =============================================================================
 # tools/stress/run_stress.sh -- Cob Toolchain stress test driver
 # =============================================================================
-# Builds cob_interp_full (SQLite + _cobwindow) and runs it against a set of
-# deliberately heavier .cob scripts than any of the unit/smoke tests in
-# .github/workflows/build.yml use, to catch things that only show up under
-# sustained load: interpreter loop overhead, SQLite under many sequential
-# statements, and repeated window open/close cycles (resource leaks in
-# _cobwindow's raylib backend would show up here as the loop getting slower
-# or eventually crashing, not just "does it open one window").
+# Builds cob_interp and the standard library (pantry = SQLite, and barn =
+# windows when its raylib dependencies are available) and runs it against a
+# set of deliberately heavier .cob scripts than any of the unit/smoke tests
+# use, to catch things that only show up under sustained load: interpreter
+# loop overhead, recipe calls and recursion, the library modules' result
+# buffers, SQLite under many sequential statements, and repeated window
+# open/close cycles (resource leaks in barn's raylib backend would show up
+# here as the loop getting slower or eventually crashing).
 #
-# Runs under Xvfb (a virtual X11 display) so the _cobwindow stress test can
-# actually open real windows without a physical display -- same approach
-# used in build.yml's test_extensions job and verified there.
+# Runs under Xvfb (a virtual X11 display) so the barn stress test can
+# actually open real windows without a physical display. If barn cannot be
+# built (no X11/OpenGL headers) the window stress is SKIPPED, not failed.
 #
 # Usage:
 #   sh tools/stress/run_stress.sh              # default: build + run once
@@ -32,16 +33,24 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-echo "=== Cob stress test: building cob_interp_full ==="
-make cob_interp_full
+echo "=== Cob stress test: building cob_interp + the standard library ==="
+make cob_interp stdlib
 
-BIN="$REPO_ROOT/bin/cob_interp_full"
+BIN="$REPO_ROOT/bin/cob_interp"
 if [ ! -x "$BIN" ]; then
     echo "FAIL: $BIN was not built" >&2
     exit 1
 fi
 
-# _cobwindow needs a display. Start Xvfb if $DISPLAY isn't already usable
+HAVE_BARN=0
+echo "=== Building the barn (window) module ==="
+if make stdlib-barn; then
+    HAVE_BARN=1
+else
+    echo "NOTE: barn could not be built here (X11/OpenGL dev headers missing?) -- window stress will be skipped"
+fi
+
+# barn needs a display. Start Xvfb if $DISPLAY isn't already usable
 # (e.g. running outside Docker, where a real display might exist).
 STARTED_XVFB=0
 if ! xdpyinfo >/dev/null 2>&1; then
@@ -98,13 +107,26 @@ while [ "$i" -le "$ITERATIONS" ]; do
         "total=19999900000 iterations=200000"
 
     rm -f /tmp/stress.db
-    run_one "SQLite stress (2000 sequential inserts)" \
+    run_one "pantry (SQLite) stress (2000 sequential inserts)" \
         "tools/stress/stress_sqlite.cob" \
         "row count=2000"
 
-    run_one "_cobwindow stress (20 open/label/wait/close cycles)" \
-        "tools/stress/stress_window.cob" \
-        "opened/closed 20 windows"
+    run_one "recipe stress (100k calls, fib(22), 400-deep recursion)" \
+        "tools/stress/stress_recipes.cob" \
+        "recipe stress: fib(22)=17711 depth=400 calls=100000"
+
+    run_one "standard library stress (20k kernels/cornmath calls)" \
+        "tools/stress/stress_stdlib.cob" \
+        "stdlib stress: total=140000 upper=CORN"
+
+    if [ "$HAVE_BARN" = "1" ]; then
+        run_one "barn window stress (20 open/label/wait/close cycles)" \
+            "tools/stress/stress_window.cob" \
+            "opened/closed 20 windows"
+    else
+        echo ""
+        echo "=== barn window stress: SKIPPED (module not built) ==="
+    fi
 
     i=$((i + 1))
 done

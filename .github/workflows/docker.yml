@@ -1,0 +1,131 @@
+name: Docker
+
+# Builds the Cob container image (the plain `Dockerfile` in the repo root:
+# interpreter + REPL, native compiler, package manager and the whole standard
+# library), smoke-tests it, and publishes it to the GitHub Container Registry.
+#
+#   pull request          build + test only (nothing is pushed)
+#   push to main          build + test, then push  :latest  :<VERSION>  :sha-<commit>
+#   push of a v* tag      build + test, then push  :<semver>  :<major>.<minor>  :sha-<commit>
+#   manual run            build + test, then push the same tags for the chosen ref
+#
+# The published image is multi-arch (linux/amd64 + linux/arm64):
+#   docker run -it --rm ghcr.io/cob-software-foundation/cob
+#
+# Separate from ci.yml, whose docker-stress job builds Dockerfile.stress (a
+# different image that only exists to run the stress suite).
+#
+# The image build itself runs `make test`, so a regression fails the build;
+# tools/docker/smoke_test.sh then checks the finished image the way a user
+# would use it (run a program, the REPL, SQLite, compile + run, non-root).
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths-ignore:
+      - 'docs/**'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io (not used for pull requests)
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Read the version
+        id: ver
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 1. One native-architecture build, loaded into the runner's Docker so it
+      #    can be tested. This also runs `make test` inside the build stage.
+      - name: Build the image (linux/amd64) for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cob:ci
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=cob-amd64
+          cache-to: type=gha,scope=cob-amd64,mode=max
+
+      - name: Smoke-test the image
+        run: sh tools/docker/smoke_test.sh cob:ci
+
+      # 2. Only for pushes / manual runs: the multi-arch image to ghcr.io. The
+      #    amd64 layers come straight from the cache the step above wrote.
+      - name: Set up QEMU (for the arm64 build)
+        if: github.event_name != 'pull_request'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the image tags and labels
+        if: github.event_name != 'pull_request'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.ver.outputs.version }},enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: |
+            type=gha,scope=cob-amd64
+            type=gha,scope=cob-multi
+          cache-to: type=gha,scope=cob-multi,mode=max
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Cob image published"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "Try it: \`docker run -it --rm ${IMAGE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
