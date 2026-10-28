@@ -30,7 +30,7 @@
 # Platform detection follows the same $(OS)/uname pattern used in
 # .github/workflows/build.yml, so this Makefile works unmodified under
 # MSYS2/MinGW make on Windows as well as Linux/macOS make.
-# =========================================================================
+# ============================================================================
 
 CC      ?= gcc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
@@ -70,12 +70,35 @@ endif
 
 BIN_DIR    = bin
 VENDOR_DIR = vendor
+UNAME_S ?= $(shell uname -s)
 
 # C API / FFI (CEP-2): `extern` uses dlopen()/dlsym() on POSIX, so Linux
 # needs -ldl (a no-op on current glibc, still required on older glibc/musl
 # setups); macOS keeps dlopen in libSystem; Windows uses LoadLibraryA /
 # GetProcAddress from kernel32, already linked by default.
+#
+# A Linux-hosted MinGW cross-build is still a Windows target, so we must
+# detect the compiler target, not just the host OS; otherwise `make
+# cob_interp_full CC=x86_64-w64-mingw32-gcc` links against `-ldl` and fails
+# with "cannot find -ldl" during the final link on GitHub Actions.
 FFI_LIBS =
+ifneq ($(strip $(PLATFORM_OS)),)
+    ifeq ($(PLATFORM_OS),WINDOWS)
+        FFI_LIBS =
+    else ifeq ($(PLATFORM_OS),DARWIN)
+        FFI_LIBS =
+    else ifeq ($(PLATFORM_OS),LINUX)
+        FFI_LIBS = -ldl
+    endif
+else ifneq ($(findstring mingw,$(CC)),)
+    FFI_LIBS =
+else ifeq ($(OS),Windows_NT)
+    FFI_LIBS =
+else ifeq ($(UNAME_S),Darwin)
+    FFI_LIBS =
+else
+    FFI_LIBS = -ldl
+endif
 
 ifeq ($(OS),Windows_NT)
     EXE_SUF = .exe
@@ -130,7 +153,6 @@ ifeq ($(OS),Windows_NT)
 else
     EXE_SUF =
     SLEEP_CMD = sleep 1
-    UNAME_S := $(shell uname -s)
     ifeq ($(UNAME_S),Darwin)
     # ---------------------------------------------------------------
     # macOS. Detected via `uname -s` (correctly reports "Darwin" on
@@ -184,37 +206,37 @@ else
     # ---------------------------------------------------------------
     # Linux: the unix/ build tree, real X11 for Tk.
     # ---------------------------------------------------------------
-    TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
-    TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
-    TCL_LIB        = $(TCL_BUILD_DIR)/libtcl9.0.a
-    TCL_STUB_LIB   =
-    TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk9.0.a
-    TK_STUB_LIB    =
-    TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
-    TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
-    DB_DEFINES     =
-    DB_LIBS        = $(TK_LIB) $(TCL_LIB) -lX11 -ldl -lz -lpthread -lm
-    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --prefix=/tmp/tclinstall
-    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared \
-                      --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
-    # _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of
-    # raw Xlib -- needs the same libx11-dev / X11 dev headers the `tk`
-    # target's comment covers (plus GL dev headers -- libgl1-mesa-dev
-    # on Debian/Ubuntu), but raylib itself builds via a plain Makefile,
-    # no configure/autoconf. Link flags match raylib's own Makefile's
-    # Linux/GLFW case (LDLIBS with X11 appended).
-    WINDOW_LIBS    = -lGL -lm -lpthread -ldl -lrt -lX11
-    RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
-    RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
-    # See the Windows branch's comment above for why this is
-    # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
-    SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
-    SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
-    FFI_LIBS       = -ldl
+        TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
+        TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
+        TCL_LIB        = $(TCL_BUILD_DIR)/libtcl9.0.a
+        TCL_STUB_LIB   =
+        TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk9.0.a
+        TK_STUB_LIB    =
+        TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
+        TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
+        DB_DEFINES     =
+        DB_LIBS        = $(TK_LIB) $(TCL_LIB) -lX11 -ldl -lz -lpthread -lm
+        TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --prefix=/tmp/tclinstall
+        TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared \
+                          --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
+        # _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of
+        # raw Xlib -- needs the same libx11-dev / X11 dev headers the `tk`
+        # target's comment covers (plus GL dev headers -- libgl1-mesa-dev
+        # on Debian/Ubuntu), but raylib itself builds via a plain Makefile,
+        # no configure/autoconf. Link flags match raylib's own Makefile's
+        # Linux/GLFW case (LDLIBS with X11 appended).
+        WINDOW_LIBS    = -lGL -lm -lpthread -ldl -lrt -lX11
+        RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
+        RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
+        # See the Windows branch's comment above for why this is
+        # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
+        SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
+        SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
+        FFI_LIBS       = -ldl
     endif
 endif
 
-.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full cob_interp_static popcorn_comp farmer smartpass wasm play enterprise embed_enterprise cob_sign stdlib stdlib-barn stdlib-tassel test
+.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full cob_interp_static popcorn_comp farmer smartpass wasm play enterprise embed_enterprise cob_sign stdlib stdlib-barn stdlib-tassel
 
 # Plain `make` builds the free tools and, when include/drm_pubkey.h exists
 # (your PUBLIC key -- safe to commit), the license-gated *_enterprise
