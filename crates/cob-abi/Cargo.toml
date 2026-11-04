@@ -1,0 +1,8 @@
+[package]
+name = "cob-abi"
+description = "The Cob native-extension ABI (CEP-2), C stdio access and helpers shared by the standard library"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]

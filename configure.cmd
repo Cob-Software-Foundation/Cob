@@ -43,6 +43,16 @@ if %errorlevel% neq 0 (
     echo [OK] Found Make: !MAKE_VER!
 )
 
+:: 2b. Check for the Rust toolchain (Cob is written in Rust)
+where cargo >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] cargo ^(Rust 1.75 or newer^) could not be found on your PATH.
+    echo         Install it from https://rustup.rs
+    exit /b 1
+) else (
+    for /f "tokens=*" %%i in ('cargo --version') do echo [OK] Found Cargo: %%i
+)
+
 :: 3. Case-Insensitive Vendor Directory Verification
 set "VENDOR_DIR=vendor"
 if not exist "%VENDOR_DIR%" (
@@ -58,29 +68,11 @@ if not exist "%VENDOR_DIR%\SQLite\" (
     set MISSING_DEPENDENCY=1
 )
 
-:: Check for TCL
-if not exist "%VENDOR_DIR%\tcl\" (
-    echo [ERROR] Missing required vendor dependency: TCL
-    set MISSING_DEPENDENCY=1
-)
-
-:: Check for TK
-if not exist "%VENDOR_DIR%\tk\" (
-    echo [ERROR] Missing required vendor dependency: TK
-    set MISSING_DEPENDENCY=1
-)
-
-:: Check for MINIZ
-if not exist "%VENDOR_DIR%\miniz\" (
-    echo [ERROR] Missing required vendor dependency: MINIZ
-    set MISSING_DEPENDENCY=1
-)
-
 if %MISSING_DEPENDENCY% neq 0 (
     echo [ERROR] Configuration failed due to missing vendor dependencies.
     exit /b 1
 ) else (
-    echo [OK] All required vendor dependencies ^(SQLite, TCL, TK, MINIZ^) are present.
+    echo [OK] All required vendor dependencies ^(SQLite^) are present.
 )
 
 echo -----------------------------------

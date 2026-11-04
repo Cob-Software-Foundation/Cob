@@ -9,7 +9,7 @@
 # compiled with popcorn_comp and run again; stdout must match NAME.expected
 # both ways, and the two runs' stderr must match each other (modulo the
 # "[cob_interp]" / "[cob]" prefix). repl_*.stdin files are fed to the REPL.
-# errors.sh, cache.sh and static.sh are separate scripts.
+# errors.sh, cache.sh, repl_modes.sh, porch_cases.sh and wasm.sh are separate scripts.
 #
 # NOTE: tests must not be named after a stdlib module (porch.cob, pantry.cob
 # ...): `shuck porch` would find the test itself first -- local files shadow
@@ -66,7 +66,7 @@ for inp in "$TESTS"/repl_*.stdin; do
 done
 
 # ---- scripts
-for s in errors cache static repl_modes porch_cases; do
+for s in errors cache repl_modes porch_cases wasm; do
     [ -f "$TESTS/$s.sh" ] || continue
     if sh "$TESTS/$s.sh" "$INTERP" "$COMP" "$CC_BIN" > "$T/$s.log" 2>&1; then ok "script   $s"
     else bad "script   $s" "$(tail -3 "$T/$s.log" | tr '\n' '|')"; fi

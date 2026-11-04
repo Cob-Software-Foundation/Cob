@@ -31,8 +31,7 @@ lib/                The STANDARD LIBRARY: one shared library per module
                     library" warning. Modules: porch (console input),
                     cornmath, kernels (text), almanac (time), granary
                     (files), pantry (SQLite) and barn (a native window
-                    with widgets). Not tassel (Tcl/Tk) -- see "Why no
-                    tassel?" below.
+                    with widgets).
 LICENSE.md          Cob's own license (PolyForm Noncommercial 1.0.0)
                     -- read "License" below before embedding this in
                     anything. This file must travel with the package
@@ -41,9 +40,7 @@ legal/              Third-party license text for what's actually
                     compiled into the library modules: raylib and raygui
                     (inside barn), both zlib License. (SQLite, inside
                     pantry, is public domain -- no separate license file
-                    exists for it. Tcl/Tk and miniz aren't in this
-                    package at all, so their license terms don't apply
-                    here the way they would to the full release archive.)
+                    exists for it.)
 VERSION              Plain text, e.g. "0.0.9" -- check this before
                     assuming a `.strawberry` cache or feature set.
 README.md           This file.
@@ -92,16 +89,11 @@ cob <script.cob> [--no-cache] [--no-gc]
 - **No REPL, unless you ask for one**: `cob` with no script starts the
   interactive REPL. An embedding host should always pass a script path.
 
-## Why no tassel?
+## One interpreter, many modules
 
 Before 0.0.9 the interpreter had several build variants with different
 features compiled in. Now there is one interpreter, and features are
-standard library modules in `lib/`. This package ships the ones that
-build with zero autoconf/configure anywhere in their dependency chain
-(SQLite's single-file amalgamation, raylib/raygui's plain Makefiles).
-`tassel` (Tcl/Tk) was deliberately left out: it needs `TCL_LIBRARY`
-pointed at a real Tcl standard library directory to work, which doesn't
-fit "extract one folder and run."
+standard library modules in `lib/`.
 
 ## What's not in here, on purpose
 

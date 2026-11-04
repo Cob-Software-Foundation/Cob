@@ -17,7 +17,7 @@ fi
 
 echo "=== Starting Configuration ==="
 
-# 1. Check for GCC on PATH
+# 1. Check for GCC on PATH (needed for SQLite and for popcorn_comp's generated C)
 if ! command -v gcc &> /dev/null; then
     echo "[ERROR] GCC compiler could not be found on your PATH."
     exit 1
@@ -33,6 +33,15 @@ else
     echo "[OK] Found Make: $(make --version | head -n 1)"
 fi
 
+# 2b. Check for the Rust toolchain (Cob is written in Rust)
+if ! command -v cargo &> /dev/null; then
+    echo "[ERROR] cargo (Rust 1.75 or newer) could not be found on your PATH."
+    echo "        Install it from https://rustup.rs or your package manager."
+    exit 1
+else
+    echo "[OK] Found Cargo: $(cargo --version)"
+fi
+
 # 3. Case-Insensitive Vendor Directory Verification
 VENDOR_DIR="vendor"
 if [ ! -d "$VENDOR_DIR" ]; then
@@ -44,7 +53,7 @@ fi
 EXISTING_FOLDERS=$(find "$VENDOR_DIR" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | tr '[:upper:]' '[:lower:]')
 
 MISSING_DEPENDENCY=0
-for REQUIRED in sqlite tcl tk miniz; do
+for REQUIRED in sqlite; do
     if ! echo "$EXISTING_FOLDERS" | grep -qx "$REQUIRED"; then
         if [ "$REQUIRED" = "sqlite" ]; then
             DISPLAY_NAME="SQLite"
@@ -60,7 +69,7 @@ if [ "$MISSING_DEPENDENCY" -eq 1 ]; then
     echo "[ERROR] Configuration failed due to missing vendor dependencies."
     exit 1
 else
-    echo "[OK] All required vendor dependencies (SQLite, TCL, TK, MINIZ) are present."
+    echo "[OK] All required vendor dependencies (SQLite) are present."
 fi
 
 echo "-----------------------------------"

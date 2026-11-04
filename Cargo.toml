@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cob-abi",
+    "crates/cob-core",
+    "crates/cob_interp",
+    "crates/popcorn_comp",
+    "crates/farmer",
+    "crates/cob-drm",
+    "crates/cob_sign",
+    "stdlib-rs/porch",
+    "stdlib-rs/cornmath",
+    "stdlib-rs/kernels",
+    "stdlib-rs/almanac",
+    "stdlib-rs/granary",
+    "stdlib-rs/pantry",
+]
+# stdlib-rs/barn (raylib window) is opt-in: it needs X11 + OpenGL dev headers.
+# Build it with `make stdlib-barn`.
+exclude = ["stdlib-rs/barn"]
+
+[workspace.package]
+version = "0.0.9"
+edition = "2021"
+license-file = "LICENSE.md"
+repository = "https://github.com/Cob-Software-Foundation/Cob"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4

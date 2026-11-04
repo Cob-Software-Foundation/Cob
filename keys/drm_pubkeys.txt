@@ -1,0 +1,4 @@
+# Cob Enterprise license PUBLIC keys -- safe to commit.
+# One "<key_id> <64 hex chars>" per line. Written by `cob_sign keygen`.
+# To rotate keys, add another line: licenses signed with older keys keep working.
+1 aba34382486e236227d1c9127f465bafd27f9f1489e3282d6651b980c200d35b

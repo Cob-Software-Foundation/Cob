@@ -114,7 +114,6 @@ Every module is a **shared library** (`lib<name>.so` on Linux, `lib<name>.dylib`
 | `granary` | files, stored like grain | `granary_read`, `granary_write`, `granary_append`, `granary_exists`, `granary_remove` |
 | `pantry` | a SQLite database to keep things in | `pantry_open`, `pantry_exec`, `pantry_query`, `pantry_close` |
 | `barn` | a window to put things in (raylib + raygui) | `barn_open`, `barn_label`, `barn_wait`, `barn_close`, `barn_button`, `barn_slider`, `barn_textbox` |
-| `tassel` | Tcl and Tk | `tassel_tcl`, `tassel_tk` |
 | `silo` | the everyday five in one go | `porch` + `cornmath` + `kernels` + `almanac` + `granary` |
 
 ```cob
@@ -152,33 +151,33 @@ set rc = barn_close(w)
 A library file in your own project directory shadows a standard library module of the same name (a `porch.cob` next to your program is found before the real `porch`) — name your own files accordingly.
 
 ### Upgrading from 0.0.8
-The built-in `input`, SQLite, window and Tcl/Tk keywords are gone; they are standard library functions now. The compiler tells you exactly what to write:
+The built-in `input`, SQLite and window keywords are gone; they are standard library functions now. The compiler tells you exactly what to write:
 
 | 0.0.8 | 0.0.9 |
 |---|---|
 | `input(p)` / `input_int(p)` | `shuck porch` then `porch_ask(p)` / `porch_ask_int(p)` |
 | `sql_open` / `sql_exec` / `sql_query` / `sql_close` | `shuck pantry` then `pantry_open` / `pantry_exec` / `pantry_query` / `pantry_close` |
 | `shuck cobwindow` + `window_open` / `window_label` / `window_wait` / `window_close` / `window_button` / `window_slider` / `window_textbox` | `shuck barn` then `barn_open` / `barn_label` / `barn_wait` / `barn_close` / `barn_button` / `barn_slider` / `barn_textbox` |
-| `tcl_eval` / `tk_eval` | `shuck tassel` then `tassel_tcl` / `tassel_tk` |
 
 ## ⚙️ Toolchain & Ecosystem
 
-* **`cob_interp`**: The interpreter and REPL. Core language only — it builds in about a second with no vendor libraries and no X11/OpenGL. (`cob_interp_full`, `cob_interp_db` and `cob_interp_window` still exist as `make` targets for old scripts; they now build this same interpreter plus the `pantry` / `tassel` / `barn` modules.)
+* **`cob_interp`**: The interpreter and REPL. Core language only — no vendor libraries and no X11/OpenGL needed. (`cob_interp_full`, `cob_interp_db` and `cob_interp_window` still exist as `make` targets for old scripts; they now build this same interpreter plus the `pantry` / `barn` modules.)
 * **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. Recipes and **every standard library module** compile, because they are ordinary shared-library calls: the finished program links the same libraries and records the standard library directory as its rpath, so keep `lib/` where it was when you compiled (or set `COB_STDLIB` when compiling). Shared libraries cannot be used from a *statically linked* program, and a cross-compiled program needs the modules built for its target: to cross-compile a program that `shuck`s standard library modules, build those modules for the target, point `COB_STDLIB` at them, and use a dynamically linked target (not static musl).
 * **`farmer`**: Package manager. Installs zipped modules from a secure static JSON registry into `cob_modules/` via `farmer harvest <package>`.
 * **Caching Control**: Write `_MakeCache = False` as the literal first line of a `.cob` file to bypass the `.strawberry` fast-boot cache.
 
 ### Building
+Cob is written in Rust (stable, 1.75 or newer). You need `cargo`, and a C compiler: `pantry` embeds the SQLite amalgamation and `barn` builds raylib/raygui, both vendored C libraries.
 ```
 make                # cob_interp, popcorn_comp, farmer, and the standard library in bin/lib/
+                    # (plus the *_enterprise tools when keys/drm_pubkeys.txt exists)
 make test           # the regression suite (interpreter, compiler, REPL, stdlib)
 make stdlib-barn    # optional: windows (needs X11 + OpenGL dev headers on Linux)
-make stdlib-tassel  # optional: Tcl/Tk (a from-source build)
 ```
-Ship `bin/lib/` next to the binaries. The browser build (`make wasm`) cannot load shared libraries, so it compiles `porch`, `cornmath`, `kernels` and `almanac` into the module and embeds the wrapper files; `pantry`, `barn`, `tassel` and `granary` are stubs there with a sandbox notice.
+Ship `bin/lib/` next to the binaries. The browser playground runs the same interpreter compiled to WebAssembly: `make play` builds it into `docs/play/` (needs `rustup target add wasm32-unknown-unknown`), and `make wasm-test` checks it against the native build under Node.
 
 ### Docker
-GitHub Actions builds and publishes a container image (linux/amd64 and linux/arm64) with the interpreter and REPL, the compiler, `farmer`, and the standard library — everything except `barn` and `tassel`, which need a display / a long from-source build:
+GitHub Actions builds and publishes a container image (linux/amd64 and linux/arm64) with the interpreter and REPL, the compiler, `farmer`, and the standard library — everything except `barn`, which needs a display:
 ```
 docker run -it --rm ghcr.io/cob-software-foundation/cob                    # the REPL
 docker run --rm -v "$PWD:/work" ghcr.io/cob-software-foundation/cob hello.cob

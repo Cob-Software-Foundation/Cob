@@ -1,0 +1,14 @@
+[package]
+name = "cob-core"
+description = "The Cob language core: parser, checker, evaluator, .strawberry cache, REPL"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+cob-abi = { path = "../cob-abi" }
+
+# A browser (wasm32) build has no dlopen(): standard-library modules are linked in
+# statically and bound by name instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libloading = "=0.8.1"

@@ -1,0 +1,15 @@
+[package]
+name = "cob_interp"
+description = "The Cob interpreter"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[features]
+# Enterprise build: requires a valid, machine-bound cob.lic at startup.
+enterprise = ["dep:cob-drm"]
+
+[dependencies]
+cob-abi = { path = "../cob-abi" }
+cob-core = { path = "../cob-core" }
+cob-drm = { path = "../cob-drm", optional = true }

@@ -11,6 +11,9 @@ on:
     branches: [ "main" ]
     paths:
       - "docs/**"
+      - "crates/**"
+      - "stdlib-rs/**"
+      - "stdlib/*.cob"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -34,24 +37,18 @@ jobs:
         with:
           lfs: true
 
-      # docs/play/'s two generated files (cob_interp.js, cob_interp.wasm)
-      # are .gitignore'd on purpose -- they're a build output of `make
-      # play`, not something to keep committed and let drift from
-      # src/cob_interp.c. Built fresh here, right before the artifact
-      # upload below, with the Makefile's own default WASM_ENV
-      # (web,worker) -- the one real browsers need; CI's own test_wasm
-      # job in build.yml overrides this to `node` purely so it can run
-      # the module under a Node-based smoke test, and that override must
-      # never leak into what actually gets deployed here.
-      - name: Install Emscripten
-        uses: emscripten-core/setup-emsdk@v16
-        with:
-          # Keep this in sync with the pin in build.yml's test_wasm job
-          # -- see the comment there for why it's pinned, not "latest".
-          version: 4.0.17
+      # docs/play/cob_interp.wasm is .gitignore'd on purpose -- it is a build
+      # output of `make play` (crates/cob-wasm compiled to WebAssembly), not
+      # something to keep committed and let drift from the interpreter source.
+      # docs/play/cob_interp.js, the hand-written loader, IS committed. The
+      # module is built fresh here, right before the artifact upload below.
+      - name: Install the wasm32 Rust target
+        run: rustup target add wasm32-unknown-unknown
 
-      - name: Build the WASM playground (`make play`)
-        run: make play
+      # builds docs/play/cob_interp.wasm, then checks it against the native
+      # interpreter under Node -- a broken playground must not get deployed
+      - name: Build the WASM playground and test it (`make wasm-test`)
+        run: make wasm-test
 
       - name: Upload docs/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3

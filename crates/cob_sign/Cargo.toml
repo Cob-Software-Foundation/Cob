@@ -1,0 +1,9 @@
+[package]
+name = "cob_sign"
+description = "Cob Enterprise license signing tool (maintainer only)"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+cob-drm = { path = "../cob-drm" }

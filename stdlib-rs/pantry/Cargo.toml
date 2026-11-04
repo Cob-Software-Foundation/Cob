@@ -1,0 +1,16 @@
+[package]
+name = "pantry"
+description = "Cob standard library module: pantry (SQLite)"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cob-abi = { path = "../../crates/cob-abi" }
+
+[build-dependencies]
+cc = "=1.0.83"

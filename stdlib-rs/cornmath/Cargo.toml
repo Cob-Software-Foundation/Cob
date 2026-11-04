@@ -1,0 +1,12 @@
+[package]
+name = "cornmath"
+description = "Cob standard library module: cornmath"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cob-abi = { path = "../../crates/cob-abi" }

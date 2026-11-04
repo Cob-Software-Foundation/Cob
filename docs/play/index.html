@@ -131,7 +131,7 @@
       (<code>porch</code>, <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>) are
       compiled into it and <code>shuck</code> loads them as usual. The ones that need a real
       computer &mdash; <code>pantry</code> (SQLite), <code>barn</code> (windows),
-      <code>tassel</code> (Tcl/Tk), <code>granary</code> (files) &mdash; and any native
+      <code>granary</code> (files) &mdash; and any native
       <code>extern</code> library quietly do nothing and print a one-time notice, so the rest
       of your script keeps going. <code>porch_ask()</code> and <code>porch_ask_int()</code> ask
       with a browser dialog (a tab has no keyboard to read); press Cancel and the program sees
@@ -254,7 +254,7 @@
       'set total = a + b\n' +
       'pop("Total: " + total)\n',
     sandbox:
-      '# pantry (SQLite), barn (windows) and tassel (Tcl/Tk) are desktop\n' +
+      '# pantry (SQLite) and barn (windows) are desktop\n' +
       '# libraries -- in this browser sandbox they quietly do nothing (see the\n' +
       '# note below the playground) instead of crashing, so the rest of the\n' +
       '# script still runs.\n' +

@@ -1,0 +1,15 @@
+[package]
+name = "popcorn_comp"
+description = "The Cob native compiler: transpiles a .strawberry AST to C and spawns a real C compiler"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[features]
+# Enterprise build: requires a valid, machine-bound cob.lic at startup.
+enterprise = ["dep:cob-drm"]
+
+[dependencies]
+cob-abi = { path = "../cob-abi" }
+cob-core = { path = "../cob-core" }
+cob-drm = { path = "../cob-drm", optional = true }

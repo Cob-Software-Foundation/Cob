@@ -1,0 +1,11 @@
+[package]
+name = "farmer"
+description = "The Cob package manager: farmer harvest <package>"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+cob-core = { path = "../cob-core" }
+sha2 = "=0.10.8"
+zip = { version = "=0.6.6", default-features = false, features = ["deflate"] }

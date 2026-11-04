@@ -137,16 +137,14 @@ This project vendors the following third-party source under `vendor/`,
 each under its own license (not this project's PolyForm Noncommercial
 license above). Full license text for each is in `legal/`:
 
-  vendor/miniz   -- miniz (MIT License)
-                    legal/LICENSE_MINIZ
   vendor/SQLite  -- SQLite (Public Domain -- the author disclaims
                     copyright; no separate license file ships with it)
-  vendor/TCL     -- Tcl (Tcl/BSD-style license)
-                    legal/license_TCL.terms
-  vendor/TK      -- Tk (Tcl/BSD-style license)
-                    legal/license_TK.terms
   vendor/raylib  -- raylib (zlib License)
                     legal/license_raylib.terms
   vendor/raygui  -- raygui (zlib License)
                     legal/license_raygui.terms
+
+Cob is built in Rust. The crates it depends on (fetched from crates.io, all
+under permissive licenses) are listed with their licenses in
+legal/RUST_DEPENDENCIES.md.
 

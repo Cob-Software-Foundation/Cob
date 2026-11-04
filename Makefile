@@ -1,275 +1,221 @@
 # =========================================================================
-# Makefile -- Project Obsidian Falcon / Cob Language Toolchain
+# Makefile -- Project Obsidian Falcon / Cob Language Toolchain (Rust)
 # =========================================================================
-# `make` (the default `all` target) builds:
-#   cob_interp    - the interpreter AND REPL. The core language only: pop,
-#                   set, while/if, recipe/serve, shuck, extern. No vendor
-#                   libraries, no X11/OpenGL: builds in about a second.
-#   popcorn_comp  - the native compiler (transpiles to C, spawns a real
-#                   C compiler -- see src/popcorn_comp.c's header comment)
-#   farmer        - the package manager
-#   stdlib        - the STANDARD LIBRARY (v0.0.9): one shared library
-#                   (.so / .dylib / .dll) per module in bin/lib/, each with
-#                   a tiny .cob wrapper that `shuck <module>` loads:
-#                     porch cornmath kernels almanac granary   (plain C)
-#                     pantry   (SQLite, from vendor/SQLite)
-#                   Heavier, opt-in modules: `make stdlib-barn` (windows,
-#                   raylib -- needs X11 + OpenGL dev headers on Linux/macOS)
-#                   and `make stdlib-tassel` (Tcl/Tk, a from-source build).
-#   `make test` runs the regression tests against what you built.
+# A thin wrapper over Cargo that lays the results out the way the rest of
+# the project (tests, docs, release scripts) expects them:
 #
-# The old cob_interp_full / cob_interp_window / cob_interp_db targets are
-# kept as aliases (release scripts use them): there is one interpreter now,
-# and the SQLite / window / Tcl-Tk features they used to bake in are the
-# pantry / barn / tassel standard-library modules.
+#   bin/cob_interp, bin/popcorn_comp, bin/farmer
+#   bin/lib/                 the STANDARD LIBRARY: one shared library per
+#                            module plus the tiny .cob wrapper `shuck <m>`
+#                            loads:  porch cornmath kernels almanac granary
+#                            pantry (SQLite, from vendor/SQLite)
 #
-# popcorn_comp and farmer have no TCC/src-tcc build dependency -- both
-# are plain, dependency-free C99 that build standalone.
+# `make` (the default `all` target) builds the free tools and, when
+# keys/drm_pubkeys.txt exists (your PUBLIC key -- safe to commit), the
+# license-gated *_enterprise binaries too.
 #
+#   make test            build everything, then run the regression tests
+#   make stdlib-barn     windows (raylib/raygui) -- needs X11 + OpenGL dev
+#                        headers on Linux/macOS, so it is opt-in
+#   make enterprise      bin/*_enterprise (see ENTERPRISE.md)
+#   make cob_sign        the license-signing tool (maintainers only)
 #
-# Platform detection follows the same $(OS)/uname pattern used in
-# .github/workflows/build.yml, so this Makefile works unmodified under
-# MSYS2/MinGW make on Windows as well as Linux/macOS make.
-# ============================================================================
+# Cross-compiling: make TARGET=x86_64-pc-windows-gnu   (needs that Rust
+# target and a matching linker installed).
+#
+# The free build never contains any license code.
+# =========================================================================
 
-CC      ?= gcc
-CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
-INCLUDE  = -Iinclude
-# Used only by $(SQLITE_LIB) below to archive sqlite3.o into a static
-# lib. Matters for cross-compiling: the host's default `ar` can silently
-# produce a symbol index a foreign-arch linker can't read correctly
-# (confirmed with a real aarch64-w64-mingw32 cross-build -- the archive
-# built fine and `ar t` listed its member, but lld reported every
-# symbol inside it as undefined until the archive was rebuilt with the
-# matching cross toolchain's own `ar`, e.g. AR=aarch64-w64-mingw32-ar).
-AR      ?= ar
-
-# -------------------------------------------------------------------------
-# ENTERPRISE=1 -- license-gated build (separate binaries, "Option B").
-# With it, cob_interp / cob_interp_full / popcorn_comp are built with
-# src/drm.c + Monocypher, require a valid cob.lic at startup, and are
-# written as bin/*_enterprise so they can't be mistaken for the free ones.
-# You normally don't set this by hand: plain `make` (when
-# include/drm_pubkey.h exists), `make enterprise` and
-# `make embed_enterprise` do it for you. The free build never contains
-# any license code.
-# -------------------------------------------------------------------------
-ENTERPRISE ?= 0
-ifeq ($(ENTERPRISE),1)
-    ifeq ($(wildcard include/drm_pubkey.h),)
-        $(error ENTERPRISE=1 needs include/drm_pubkey.h (your PUBLIC key) -- see ENTERPRISE.md)
-    endif
-    ENT_DEFS = -DCOB_ENTERPRISE -Ivendor/monocypher
-    ENT_SRC  = src/drm.c vendor/monocypher/monocypher.c
-    ENT_SUF  = _enterprise
-else
-    ENT_DEFS =
-    ENT_SRC  =
-    ENT_SUF  =
-endif
-
+CARGO     ?= cargo
 BIN_DIR    = bin
-VENDOR_DIR = vendor
-UNAME_S ?= $(shell uname -s)
+LIB_DIR    = $(BIN_DIR)/lib
+TARGET    ?=
 
-# C API / FFI (CEP-2): `extern` uses dlopen()/dlsym() on POSIX, so Linux
-# needs -ldl (a no-op on current glibc, still required on older glibc/musl
-# setups); macOS keeps dlopen in libSystem; Windows uses LoadLibraryA /
-# GetProcAddress from kernel32, already linked by default.
-#
-# A Linux-hosted MinGW cross-build is still a Windows target, so we must
-# detect the compiler target, not just the host OS; otherwise `make
-# cob_interp_full CC=x86_64-w64-mingw32-gcc` links against `-ldl` and fails
-# with "cannot find -ldl" during the final link on GitHub Actions.
-FFI_LIBS =
-ifneq ($(strip $(PLATFORM_OS)),)
-    ifeq ($(PLATFORM_OS),WINDOWS)
-        FFI_LIBS =
-    else ifeq ($(PLATFORM_OS),DARWIN)
-        FFI_LIBS =
-    else ifeq ($(PLATFORM_OS),LINUX)
-        FFI_LIBS = -ldl
+ifeq ($(TARGET),)
+    CARGO_TARGET_FLAG =
+    OUT_ROOT = target
+    UNAME_S ?= $(shell uname -s 2>/dev/null)
+    ifeq ($(OS),Windows_NT)
+        IS_WINDOWS = 1
     endif
-else ifneq ($(findstring mingw,$(CC)),)
-    FFI_LIBS =
-else ifeq ($(OS),Windows_NT)
-    FFI_LIBS =
-else ifeq ($(UNAME_S),Darwin)
-    FFI_LIBS =
-else
-    FFI_LIBS = -ldl
-endif
-
-ifeq ($(OS),Windows_NT)
-    EXE_SUF = .exe
-    SLEEP_CMD = timeout /t 1 >nul
-    # ---------------------------------------------------------------
-    # Windows (MSYS2/MinGW native shell -- sh, make, gcc, ar, windres
-    # all from the mingw64 toolchain). Tcl/Tk ship a *separate* build
-    # tree for this: vendor/TCL/win and vendor/TK/win, not unix/. The
-    # Windows Tk build needs no X11 at all -- it talks to native Win32
-    # (GDI/User32) and resolves Tk's internal `#include <X11/Xlib.h>`
-    # via its own vendor/TK/xlib/ shim header, not real Xlib. Static
-    # lib names also differ from the Unix build (libtcl90.a /
-    # libtcl9tk90.a, no dot before the "90"), and because Tk always
-    # goes through Tcl's stub mechanism internally (even in a "static"
-    # build), the *.a and the matching *stub.a both have to be linked.
-    # All of this was verified for real by cross-compiling this exact
-    # target tree with a Linux-hosted x86_64-w64-mingw32 toolchain --
-    # see Release.txt -- but not yet run on an actual Windows machine.
-    # ---------------------------------------------------------------
-    TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/win
-    TK_BUILD_DIR   = $(VENDOR_DIR)/TK/win
-    TCL_LIB        = $(TCL_BUILD_DIR)/libtcl90.a
-    TCL_STUB_LIB   = $(TCL_BUILD_DIR)/libtclstub.a
-    TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk90.a
-    TK_STUB_LIB    = $(TK_BUILD_DIR)/libtkstub.a
-    TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
-    TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR) -I$(VENDOR_DIR)/TK/xlib
-    DB_DEFINES     = -DSTATIC_BUILD=1
-    DB_LIBS        = $(TK_LIB) $(TK_STUB_LIB) $(TCL_LIB) $(TCL_STUB_LIB) \
-                      -lnetapi32 -lkernel32 -luser32 -ladvapi32 -luserenv -lws2_32 \
-                      -lgdi32 -lcomdlg32 -limm32 -lcomctl32 -lshell32 -luuid -lole32 -loleaut32 -lwinspool
-    TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --enable-64bit
-    TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --enable-64bit \
-                      --with-tcl=$(abspath $(TCL_BUILD_DIR))
-    # _cobwindow (v0.0.5): backed by raylib (vendor/raylib), built via
-    # its own plain Makefile -- no configure/autoconf, unlike Tcl/Tk.
-    # Link flags match raylib's own Makefile's Windows/GLFW-static case.
-    WINDOW_LIBS    = -lopengl32 -lgdi32 -lwinmm -lshell32
-    RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
-    RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
-    # SQLite's amalgamation is a single portable sqlite3.c, but the
-    # compiled .a is NOT portable across toolchains/architectures --
-    # give it an OS-specific name so switching between Windows and
-    # Linux/macOS builds (e.g. `make sqlite` then later cross-compiling
-    # with a different CC) can't silently link the wrong-architecture
-    # object against the wrong-platform Tcl/Tk. Without this, `sqlite`
-    # being a real file target (see below) means Make sees the old
-    # library already exists and skips rebuilding it, even though it
-    # was built for a different platform.
-    SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-win.a
-    SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-win.o
-else
-    EXE_SUF =
-    SLEEP_CMD = sleep 1
     ifeq ($(UNAME_S),Darwin)
-    # ---------------------------------------------------------------
-    # macOS. Detected via `uname -s` (correctly reports "Darwin" on
-    # real macOS), not an explicit override -- unlike the Windows
-    # targets, this project doesn't cross-compile for macOS from
-    # Linux, so build.yml's macos-latest runner invokes `make`
-    # natively here and this branch just works without needing the
-    # WINDOW_LIBS/SQLITE_LIB/PLATFORM_OS overrides the mingw builds
-    # need. raylib's own vendored Makefile auto-detects Darwin the
-    # same way, so its recursive $(MAKE) call needs no extra help
-    # either.
-    #
-    # NOT verified by actually building on real macOS hardware or in
-    # a real macOS CI run -- this project has neither yet. The
-    # WINDOW_LIBS framework list below comes directly from raylib's
-    # own Makefile's documented OSX LDLIBS line, not from an actual
-    # successful build; if it's wrong, the expected failure mode is a
-    # loud "undefined symbol"/framework-not-found error at final link,
-    # not a silently broken binary.
-    # ---------------------------------------------------------------
-        TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
-        TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
-        TCL_LIB        = $(TCL_BUILD_DIR)/libtcl9.0.a
-        TCL_STUB_LIB   =
-        TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk9.0.a
-        TK_STUB_LIB    =
-        TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
-        TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
-        DB_DEFINES     =
-        # Real Tk on macOS needs its own Cocoa backend to avoid X11
-        # entirely -- vendor/TK/unix's configure does support this,
-        # but that combination has not been built or run on real macOS
-        # by anyone working on this project; treat cob_interp_db on
-        # macOS as unverified even after this Makefile change.
-        DB_LIBS        = $(TK_LIB) $(TCL_LIB) -framework Cocoa -lz -lpthread -lm
-        TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" sh ./configure --disable-shared --prefix=/tmp/tclinstall
-        TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" sh ./configure --disable-shared \
-                          --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
-        # _cobwindow: matches vendor/raylib/src/Makefile's own OSX
-        # LDLIBS line exactly.
-        WINDOW_LIBS    = -framework OpenGL -framework Cocoa -framework IOKit -framework CoreAudio -framework CoreVideo
-        RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
-        RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
-        # A macOS libsqlite3.a is a Mach-O archive -- not interchangeable
-        # with the Linux (ELF) or Windows (PE/COFF) ones. Own name for
-        # the same "don't silently link the wrong platform's stale
-        # archive" reason the Windows/Linux split below already has.
-        SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-macos.a
-        SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-macos.o
-    else
-    # ---------------------------------------------------------------
-    # Linux: the unix/ build tree, real X11 for Tk.
-    # ---------------------------------------------------------------
-        TCL_BUILD_DIR  = $(VENDOR_DIR)/TCL/unix
-        TK_BUILD_DIR   = $(VENDOR_DIR)/TK/unix
-        TCL_LIB        = $(TCL_BUILD_DIR)/libtcl9.0.a
-        TCL_STUB_LIB   =
-        TK_LIB         = $(TK_BUILD_DIR)/libtcl9tk9.0.a
-        TK_STUB_LIB    =
-        TCL_DB_INCLUDE = -I$(VENDOR_DIR)/TCL/generic -I$(TCL_BUILD_DIR)
-        TK_DB_INCLUDE  = -I$(VENDOR_DIR)/TK/generic -I$(TK_BUILD_DIR)
-        DB_DEFINES     =
-        DB_LIBS        = $(TK_LIB) $(TCL_LIB) -lX11 -ldl -lz -lpthread -lm
-        TCL_CONFIGURE  = cd $(TCL_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared --prefix=/tmp/tclinstall
-        TK_CONFIGURE   = cd $(TK_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2 -fPIC" EGREP_TRADITIONAL="grep -E" sh ./configure --disable-shared \
-                          --with-tcl=$(abspath $(TCL_BUILD_DIR)) --prefix=/tmp/tkinstall
-        # _cobwindow (v0.0.5): backed by raylib (vendor/raylib) instead of
-        # raw Xlib -- needs the same libx11-dev / X11 dev headers the `tk`
-        # target's comment covers (plus GL dev headers -- libgl1-mesa-dev
-        # on Debian/Ubuntu), but raylib itself builds via a plain Makefile,
-        # no configure/autoconf. Link flags match raylib's own Makefile's
-        # Linux/GLFW case (LDLIBS with X11 appended).
-        WINDOW_LIBS    = -lGL -lm -lpthread -ldl -lrt -lX11
-        RAYLIB_BUILD_DIR = $(VENDOR_DIR)/raylib/src
-        RAYLIB_LIB       = $(RAYLIB_BUILD_DIR)/libraylib.a
-        # See the Windows branch's comment above for why this is
-        # OS-specific rather than a shared vendor/SQLite/libsqlite3.a.
-        SQLITE_LIB     = $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
-        SQLITE_OBJ     = $(VENDOR_DIR)/SQLite/sqlite3-unix.o
-        FFI_LIBS       = -ldl
+        IS_MAC = 1
+    endif
+else
+    CARGO_TARGET_FLAG = --target $(TARGET)
+    OUT_ROOT = target/$(TARGET)
+    ifneq ($(findstring windows,$(TARGET)),)
+        IS_WINDOWS = 1
+    endif
+    ifneq ($(findstring apple,$(TARGET)),)
+        IS_MAC = 1
     endif
 endif
 
-.PHONY: all clean cob_interp cob_interp_db cob_interp_window cob_interp_full cob_interp_static popcorn_comp farmer smartpass wasm play enterprise embed_enterprise cob_sign stdlib stdlib-barn stdlib-tassel
+ifeq ($(IS_WINDOWS),1)
+    EXE_SUF   = .exe
+    SO_PREFIX =
+    SO_EXT    = .dll
+else ifeq ($(IS_MAC),1)
+    EXE_SUF   =
+    SO_PREFIX = lib
+    SO_EXT    = .dylib
+else
+    EXE_SUF   =
+    SO_PREFIX = lib
+    SO_EXT    = .so
+endif
 
-# Plain `make` builds the free tools and, when include/drm_pubkey.h exists
-# (your PUBLIC key -- safe to commit), the license-gated *_enterprise
-# binaries too. A fresh clone without that file just skips the enterprise
-# step with a note, so the free build is exactly what it always was.
-ifneq ($(wildcard include/drm_pubkey.h),)
+REL         = $(OUT_ROOT)/release
+STDLIB_MODULES = porch cornmath kernels almanac granary pantry
+STDLIB_COB  = $(wildcard stdlib/*.cob)
+SLEEP_CMD  ?= sleep 1
+
+ifneq ($(wildcard keys/drm_pubkeys.txt),)
     ALL_ENT = enterprise
 else
     ALL_ENT =
 endif
 
+.PHONY: all build clean test wasm play wasm-test cob_interp popcorn_comp farmer cob_sign stdlib stdlib-barn vendor-clean \
+        cob_interp_full cob_interp_window cob_interp_db enterprise embed embed_enterprise smartpass
+
 all: cob_interp popcorn_comp farmer stdlib $(ALL_ENT)
 ifeq ($(ALL_ENT),)
 	@echo ""
-	@echo "[note] include/drm_pubkey.h not found -- skipped the Enterprise builds (see ENTERPRISE.md)."
+	@echo "[note] keys/drm_pubkeys.txt not found -- skipped the Enterprise builds (see ENTERPRISE.md)."
 endif
 
-# bin/cob_interp_full_enterprise + bin/popcorn_comp_enterprise. Recurses
-# into the normal targets with ENTERPRISE=1 so both builds come from the
-# exact same source.
-enterprise:
-	$(MAKE) ENTERPRISE=1 cob_interp_full popcorn_comp
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+$(LIB_DIR):
+	mkdir -p $(LIB_DIR)
+
+# One cargo invocation builds every free tool and the stdlib modules.
+build:
+	$(CARGO) build --release $(CARGO_TARGET_FLAG) --workspace
+
+cob_interp: build | $(BIN_DIR)
+	cp $(REL)/cob_interp$(EXE_SUF) $(BIN_DIR)/cob_interp$(EXE_SUF)
+
+popcorn_comp: build | $(BIN_DIR)
+	cp $(REL)/popcorn_comp$(EXE_SUF) $(BIN_DIR)/popcorn_comp$(EXE_SUF)
+
+farmer: build | $(BIN_DIR)
+	cp $(REL)/farmer$(EXE_SUF) $(BIN_DIR)/farmer$(EXE_SUF)
+
+cob_sign: build | $(BIN_DIR)
+	cp $(REL)/cob_sign$(EXE_SUF) $(BIN_DIR)/cob_sign$(EXE_SUF)
+
+# The standard library: shared libraries + their .cob wrappers.
+stdlib: build | $(LIB_DIR)
+	for m in $(STDLIB_MODULES); do cp $(REL)/$(SO_PREFIX)$$m$(SO_EXT) $(LIB_DIR)/; done
+	cp $(STDLIB_COB) $(LIB_DIR)/
+
+# barn (raylib + raygui windows) is opt-in: it needs X11 + OpenGL dev headers
+# (Linux) and a display to run, which an ordinary build must not require, so it
+# lives outside the main Cargo workspace. Its build script builds vendor/raylib
+# with raylib's own Makefile (position-independent) and compiles raygui through
+# a one-file C shim.
+stdlib-barn: | $(LIB_DIR)
+	cd stdlib-rs/barn && $(CARGO) build --release $(CARGO_TARGET_FLAG)
+	cp stdlib-rs/barn/target/$(if $(TARGET),$(TARGET)/,)release/$(SO_PREFIX)barn$(SO_EXT) $(LIB_DIR)/
+
+vendor-clean:
+	$(MAKE) -C vendor/raylib/src PLATFORM=PLATFORM_DESKTOP clean 2>/dev/null || true
+
+# ---- the browser build (WebAssembly) ---------------------------------------
+# docs/play/ runs this same interpreter in a tab: crates/cob-wasm compiled to
+# wasm32-unknown-unknown, with porch/cornmath/kernels/almanac linked in and
+# every .cob wrapper embedded (a tab has no dlopen() and no files). The page
+# talks to it through docs/play/cob_interp.js (hand-written, committed); only
+# the .wasm is a build product.
+#
+#   make wasm        -> bin/wasm/cob_interp.wasm
+#   make play        -> same, copied into docs/play/ next to the page
+#   make wasm-test   -> build it, then run the parity tests under Node
+#
+# Needs the wasm32 Rust target (`rustup target add wasm32-unknown-unknown`). On a
+# toolchain that lacks its standard library, WASM_CARGO_FLAGS can build it from
+# source (RUSTC_BOOTSTRAP=1 WASM_CARGO_FLAGS=-Zbuild-std=std,panic_abort) and
+# CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER can name a wasm-ld.
+WASM_TARGET      = wasm32-unknown-unknown
+WASM_CARGO_FLAGS ?=
+PLAY_DIR          = docs/play
+
+wasm: | $(BIN_DIR)
+	cd crates/cob-wasm && $(CARGO) build --release --target $(WASM_TARGET) $(WASM_CARGO_FLAGS)
+	mkdir -p $(BIN_DIR)/wasm
+	cp crates/cob-wasm/target/$(WASM_TARGET)/release/cob_wasm.wasm $(BIN_DIR)/wasm/cob_interp.wasm
+	@echo "Built $(BIN_DIR)/wasm/cob_interp.wasm"
+
+play: wasm
+	cp $(BIN_DIR)/wasm/cob_interp.wasm $(PLAY_DIR)/cob_interp.wasm
+	cp VERSION $(PLAY_DIR)/version.txt
+	@echo "Copied the sandbox build into $(PLAY_DIR)/ -- serve docs/ with a local web server and open play/."
+
+wasm-test: play cob_interp stdlib
+	sh tools/tests/wasm.sh $(CURDIR)/$(BIN_DIR)/cob_interp
+
+# ---- compatibility aliases ------------------------------------------------
+# Before v0.0.9 these were three interpreter builds with SQLite or raylib windows
+# compiled in. There is one interpreter now; those features are the pantry /
+# barn standard-library modules.
+cob_interp_full: cob_interp stdlib stdlib-barn
+cob_interp_window: cob_interp stdlib-barn
+cob_interp_db: cob_interp stdlib
+
+# ---- Enterprise (license-gated) builds --------------------------------------
+# bin/cob_interp_enterprise + bin/popcorn_comp_enterprise, built from exactly
+# the same source with the `enterprise` feature on. They need a signed,
+# machine-bound cob.lic at startup (see ENTERPRISE.md).
+enterprise: | $(BIN_DIR) $(LIB_DIR)
+	@test -f keys/drm_pubkeys.txt || { echo "enterprise needs keys/drm_pubkeys.txt (your PUBLIC key) -- see ENTERPRISE.md"; exit 1; }
+	$(CARGO) build --release $(CARGO_TARGET_FLAG) --target-dir target/enterprise \
+		-p cob_interp -p popcorn_comp --features cob_interp/enterprise,popcorn_comp/enterprise
+	cp target/enterprise/$(if $(TARGET),$(TARGET)/,)release/cob_interp$(EXE_SUF) $(BIN_DIR)/cob_interp_enterprise$(EXE_SUF)
+	cp target/enterprise/$(if $(TARGET),$(TARGET)/,)release/popcorn_comp$(EXE_SUF) $(BIN_DIR)/popcorn_comp_enterprise$(EXE_SUF)
+	cp $(BIN_DIR)/cob_interp_enterprise$(EXE_SUF) $(BIN_DIR)/cob_interp_full_enterprise$(EXE_SUF)
 	@echo ""
-	@echo "Enterprise build done: $(BIN_DIR)/cob_interp_full_enterprise$(EXE_SUF), $(BIN_DIR)/popcorn_comp_enterprise$(EXE_SUF)"
+	@echo "Enterprise build done: $(BIN_DIR)/cob_interp_enterprise$(EXE_SUF), $(BIN_DIR)/popcorn_comp_enterprise$(EXE_SUF)"
 
 # The embeddable package with the license-gated interpreter inside:
 # bin/cob-<version>-embed_enterprise.zip. The host app must make cob.lic
 # reachable (set COB_LICENSE, or keep cob.lic in the working directory).
 embed_enterprise:
-	$(MAKE) ENTERPRISE=1 embed
+	$(MAKE) ENT_SUF=_enterprise embed
 
-$(BIN_DIR):
-	mkdir -p $(BIN_DIR)
+# ---- the embeddable package ---------------------------------------------------
+# A minimal, no-installer, extract-and-run folder meant to be dropped inside
+# another application's distribution (see EMBED-README.md): the interpreter
+# renamed `cob`, the stdlib, the license text, and VERSION. No farmer, no
+# popcorn_comp, no docs -- a host embeds the runtime, not the toolchain.
+#
+#   ENT_SUF   which interpreter goes in: "" (free) or "_enterprise" (gated);
+#             ENTERPRISE=1 is accepted as an alias for ENT_SUF=_enterprise
+#   EMBED_SUF the zip's name suffix (defaults to ENT_SUF), e.g. "-linux-amd64"
+ifeq ($(ENTERPRISE),1)
+    ENT_SUF = _enterprise
+endif
+ENT_SUF    ?=
+EMBED_STAGE = $(BIN_DIR)/embed-stage
+EMBED_SUF  ?= $(ENT_SUF)
+EMBED_ZIP   = $(BIN_DIR)/cob-$(shell cat VERSION)-embed$(EMBED_SUF).zip
+
+embed: cob_interp stdlib $(if $(ENT_SUF),enterprise)
+	rm -rf $(EMBED_STAGE) $(EMBED_ZIP)
+	mkdir -p $(EMBED_STAGE)/legal $(EMBED_STAGE)/lib
+	cp $(LIB_DIR)/* $(EMBED_STAGE)/lib/
+	cp $(BIN_DIR)/cob_interp$(ENT_SUF)$(EXE_SUF) $(EMBED_STAGE)/cob$(EXE_SUF)
+	cp LICENSE.md $(EMBED_STAGE)/
+	cp legal/license_raylib.terms legal/license_raygui.terms $(EMBED_STAGE)/legal/
+	cp VERSION $(EMBED_STAGE)/
+	cp EMBED-README.md $(EMBED_STAGE)/README.md
+	cd $(EMBED_STAGE) && zip -rq "../../$(EMBED_ZIP)" .
+	rm -rf $(EMBED_STAGE)
+	@echo ""
+	@echo "Built $(EMBED_ZIP) -- extract-and-run, no installer, just cob$(EXE_SUF) + license text."
 
 # -------------------------------------------------------------------------
 # FUNNY EASTER EGG TARGET: smartpass
@@ -287,362 +233,9 @@ smartpass:
 	@echo "[ERROR] Compilation frozen. Turn your Chromebook around and go get a physical yellow paper pass."
 	@exit 1
 
-cob_interp: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) $(ENT_DEFS) -o $(BIN_DIR)/cob_interp$(ENT_SUF)$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(ENT_SRC) $(FFI_LIBS)
-# ^ The interpreter + REPL: core language only, no vendor build, no X11
-# dependency, builds in about a second. Everything else (console input,
-# text, time, files, SQLite, windows, Tcl/Tk) is the standard library.
-
-# -------------------------------------------------------------------------
-# cob_interp_full / cob_interp_window / cob_interp_db -- COMPATIBILITY ALIASES
-# Before v0.0.9 these were three different interpreter builds with SQLite,
-# raylib windows or Tcl/Tk compiled in. Those are now standard-library
-# modules (pantry, barn, tassel), so there is a single interpreter. The old
-# names still work: each builds the same interpreter under the old file name
-# plus the modules that build used to contain.
-# -------------------------------------------------------------------------
-cob_interp_full: $(BIN_DIR) stdlib stdlib-barn
-	$(CC) $(CFLAGS) $(INCLUDE) $(ENT_DEFS) -o $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(ENT_SRC) $(FFI_LIBS)
-	@echo "Built $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) + the standard library in $(STDLIB_DIR)/ (pantry SQLite + barn windows)."
-
-cob_interp_window: $(BIN_DIR) stdlib-barn
-	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp_window$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(FFI_LIBS)
-
-cob_interp_db: $(BIN_DIR) stdlib stdlib-tassel
-	$(CC) $(CFLAGS) $(INCLUDE) -o $(BIN_DIR)/cob_interp_db$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(FFI_LIBS)
-	@echo "Built $(BIN_DIR)/cob_interp_db$(EXE_SUF) + pantry and tassel. tassel needs TCL_LIBRARY=$(abspath $(VENDOR_DIR)/TCL/library) at run time."
-
-
-popcorn_comp: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) $(ENT_DEFS) -o $(BIN_DIR)/popcorn_comp$(ENT_SUF)$(EXE_SUF) \
-		src/file_io.c src/popcorn_comp.c $(ENT_SRC)
-
-# Optional maintainer helper (keygen + signing). Never part of `make` or
-# releases. Not needed if you sign cob.lic files some other way.
-cob_sign: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) -Ivendor/monocypher -DCOB_LIC_NO_EMBEDDED_KEYS \
-		-o $(BIN_DIR)/cob_sign$(EXE_SUF) \
-		tools/cob_sign.c src/drm.c vendor/monocypher/monocypher.c
-
-farmer: $(BIN_DIR)
-	$(CC) $(CFLAGS) $(INCLUDE) -Ivendor/miniz -D_POSIX_C_SOURCE=200809L -DMINIZ_NO_ZLIB_APIS \
-		-o $(BIN_DIR)/farmer$(EXE_SUF) \
-		src/file_io.c src/farmer.c \
-		vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c \
-		vendor/miniz/miniz_tinfl.c vendor/miniz/miniz_zip.c \
-		-lm
-
-# =========================================================================
-# WEBASSEMBLY SANDBOX BUILD  (`make wasm`, `make play`)
-# =========================================================================
-# The in-browser playground (docs/play/) runs the *pure-language core* of
-# cob_interp compiled to WebAssembly with Emscripten. Deliberately the
-# stripped-down build: only src/file_io.c + src/cob_interp.c, with
-# -DCOB_WASM and NONE of COB_WITH_SQLITE / COB_WITH_TCL / COB_WITH_TK /
-# COB_WITH_COBWINDOW. That means no vendor/ build at all -- no SQLite, no
-# Tcl/Tk (and therefore no autoconf), no raylib/raygui -- and the output
-# stays small. sql_* / window_* keywords still parse and become silent
-# no-op stubs that print one notice to stdout per run; `extern` (CEP-2)
-# binds to a no-op stub too, since a .wasm module has no dlopen().
-#
-#   make wasm   -> bin/wasm/cob_interp.js + cob_interp.wasm
-#   make play   -> same, copied into docs/play/ next to the playground page
-#
-# Needs the Emscripten SDK (https://emscripten.org/docs/getting_started/)
-# with `emcc` on PATH, or EMCC=/path/to/emcc. Knobs:
-#   WASM_OPT    optimization level                  (default -Oz: size first)
-#   WASM_ENV    Emscripten ENVIRONMENT              (default web,worker; use
-#               `node` to run the module under Node for tests)
-#   WASM_STACK  stack-size flag                     (default 1 MiB via
-#               -sSTACK_SIZE; very old emsdk (< 3.1.27) spells it
-#               -sTOTAL_STACK=1048576). Newer emsdk defaults to 64 KiB,
-#               too small for deeply nested expressions/blocks in the
-#               recursive-descent parser -- an overflow in wasm is a trap,
-#               not a clean error, so it is set explicitly.
-#
-# One fresh module instance per run (MODULARIZE + EXIT_RUNTIME): script
-# state, the once-per-run warning flag, and the extern table all start
-# clean, and the page's Web Worker can simply be terminated to stop a
-# runaway script.
-EMCC       ?= emcc
-WASM_DIR    = $(BIN_DIR)/wasm
-WASM_OPT   ?= -Oz
-WASM_ENV   ?= web,worker
-WASM_STACK ?= -sSTACK_SIZE=1048576
-PLAY_DIR    = docs/play
-
-wasm: $(BIN_DIR) $(GEN_DIR)/stdlib_static.h
-	mkdir -p $(WASM_DIR)
-	$(EMCC) -std=c99 $(WASM_OPT) -Wall -Wextra $(INCLUDE) -I$(GEN_DIR) -Istdlib -DCOB_WASM -DCOB_STDLIB_STATIC \
-		src/file_io.c src/cob_interp.c $(STDLIB_STATIC_SRC) \
-		-o $(WASM_DIR)/cob_interp.js \
-		-sWASM=1 -sMODULARIZE=1 -sEXPORT_NAME=createCobModule \
-		-sENVIRONMENT=$(WASM_ENV) $(WASM_STACK) \
-		-sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=1 \
-		-sEXIT_RUNTIME=1 -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=FS,callMain
-	@echo ""
-	@echo "Built $(WASM_DIR)/cob_interp.js + cob_interp.wasm (COB_WASM sandbox build)."
-
-play: wasm
-	mkdir -p $(PLAY_DIR)
-	cp $(WASM_DIR)/cob_interp.js $(WASM_DIR)/cob_interp.wasm $(PLAY_DIR)/
-	cp VERSION $(PLAY_DIR)/version.txt
-	@echo "Copied the sandbox build into $(PLAY_DIR)/ -- open docs/play/index.html via a local web server."
-
-# =========================================================================
-# EMBEDDABLE PACKAGE
-# =========================================================================
-# The Python-embeddable-zip idea, for Cob: a minimal, no-installer,
-# extract-and-run folder meant to be dropped inside *another*
-# application's own distribution, not used as a standalone dev
-# toolchain. Deliberately NOT the same thing as the release archives
-# build.yml produces -- those bundle cob+farmer+popcorn_comp+docs for
-# someone developing *in* Cob; this bundles only the one binary another
-# program embeds to *run* .cob scripts.
-#
-# Contents, mirroring Python's embeddable zip's own minimalism:
-#   cob$(EXE_SUF)     -- cob_interp_full, renamed (SQLite + _cobwindow
-#                        + widgets; no Tcl/Tk -- see EMBED-README.md
-#                        for why cob_interp_full specifically)
-#   LICENSE.md         -- Cob's own license
-#   legal/             -- only the two third-party licenses that
-#                        actually apply to this binary (raylib,
-#                        raygui); SQLite is public domain (see its own
-#                        header's "blessing"), and Tcl/Tk/miniz aren't
-#                        compiled into cob_interp_full at all, so
-#                        their license terms don't apply here the way
-#                        they would to a full release archive.
-#   EMBED-README.md    -- embedding contract: invocation, exit codes,
-#                        flags, stdout/stderr, what's deliberately left
-#                        out and why (no farmer, no popcorn_comp, no
-#                        docs -- a host application embeds the runtime,
-#                        not the toolchain).
-#   VERSION            -- so an embedding app can detect what it's got
-#
-# Explicitly NOT included: farmer, popcorn_comp, docs/ -- see
-# EMBED-README.md's "What's not in here, on purpose" section.
-EMBED_STAGE = $(BIN_DIR)/embed-stage
-EMBED_SUF  ?= $(ENT_SUF)
-EMBED_ZIP   = $(BIN_DIR)/cob-$(shell cat VERSION)-embed$(EMBED_SUF).zip
-
-.PHONY: embed
-embed: cob_interp_full
-	rm -rf $(EMBED_STAGE) $(EMBED_ZIP)
-	mkdir -p $(EMBED_STAGE)/legal $(EMBED_STAGE)/lib
-	cp $(STDLIB_DIR)/* $(EMBED_STAGE)/lib/
-	cp $(BIN_DIR)/cob_interp_full$(ENT_SUF)$(EXE_SUF) $(EMBED_STAGE)/cob$(EXE_SUF)
-	cp LICENSE.md $(EMBED_STAGE)/
-	cp legal/license_raylib.terms legal/license_raygui.terms $(EMBED_STAGE)/legal/
-	cp VERSION $(EMBED_STAGE)/
-	cp EMBED-README.md $(EMBED_STAGE)/README.md
-	cd $(EMBED_STAGE) && zip -rq "../../$(EMBED_ZIP)" .
-	rm -rf $(EMBED_STAGE)
-	@echo ""
-	@echo "Built $(EMBED_ZIP) -- extract-and-run, no installer, just cob$(EXE_SUF) + license text."
-
-clean:
-	rm -rf $(BIN_DIR)
-
-# =========================================================================
-# VENDORED LIBRARIES (vendor/SQLite, vendor/TCL, vendor/TK)
-# =========================================================================
-# Embedded per project decision -- see each target's comment for what
-# "build" means for that library. As of v0.0.5 these ARE wired into
-# Cob's language syntax: see `cob_interp_db` above, and sql_open() /
-# sql_exec() / sql_query() / sql_close() / tcl_eval() / tk_eval() in
-# src/cob_interp.c's header comment. TCL_BUILD_DIR/TK_BUILD_DIR/etc are
-# set above per-platform (win/ vs unix/ build trees).
-#
-# These are real file targets (not .PHONY), keyed on the actual library
-# file each one produces. That means `make cob_interp_db` alone builds
-# SQLite/Tcl/Tk automatically the first time (no separate `make sqlite
-# tcl tk` step needed), and skips rebuilding any of them on a second
-# run since the .a files already exist -- `make sqlite`, `make tcl`,
-# and `make tk` below are just convenience aliases for the same files,
-# kept for anyone who wants to build one piece at a time or rebuild
-# after `make vendor-clean`.
-# =========================================================================
-
-# -------------------------------------------------------------------------
-# SQLite -- the "amalgamation" build: a single vendor/SQLite/sqlite3.c
-# that compiles directly into any project needing it, same pattern as
-# TCC's libtcc.c used to be. No configure step. The source itself is
-# portable C99 across native gcc and mingw-w64, but the *compiled*
-# output is architecture/toolchain-specific, hence the OS-specific
-# $(SQLITE_LIB)/$(SQLITE_OBJ) paths set above rather than one shared
-# vendor/SQLite/libsqlite3.a.
-# -------------------------------------------------------------------------
-$(SQLITE_LIB):
-	$(CC) -std=c99 -O2 -c $(VENDOR_DIR)/SQLite/sqlite3.c -o $(SQLITE_OBJ) \
-		-DSQLITE_THREADSAFE=1
-	$(AR) rcs $(SQLITE_LIB) $(SQLITE_OBJ)
-
-.PHONY: sqlite
-sqlite: $(SQLITE_LIB)
-
-# -------------------------------------------------------------------------
-# Tcl -- real configure && make. Linux/macOS: vendor/TCL/unix, produces
-# libtcl9.0.a + tclsh. Windows (MSYS2/MinGW): vendor/TCL/win, produces
-# libtcl90.a + libtclstub.a + tclsh90s.exe -- a completely different
-# build tree from unix/, not the same one running under MSYS2's shell.
-#
-# CC is passed into configure explicitly (`CC="$(CC)"`) rather than
-# left for autoconf to detect on its own: some minimal shells/toolkits
-# (e.g. w64devkit's bundled sh) don't give configure's own compiler
-# probe ("checking for gcc... no / checking for cc... no / ...") the
-# same PATH the outer make invocation sees, even though $(CC) itself
-# works fine for every other target in this file.
-# -------------------------------------------------------------------------
-$(TCL_LIB):
-	$(TCL_CONFIGURE)
-	$(MAKE) -C $(TCL_BUILD_DIR)
-
-.PHONY: tcl
-tcl: $(TCL_LIB)
-
-# -------------------------------------------------------------------------
-# Tk -- needs Tcl built first (--with-tcl points at it).
-#
-# Linux/macOS: vendor/TK/unix, needs real X11 development headers/libs
-# on the build machine (libx11-dev on Debian/Ubuntu). Produces
-# libtcl9tk9.0.a + wish.
-#
-# NOTE: on some systems Tk's configure fails to auto-detect X11 even
-# with libx11-dev installed ("checking for X11 header files... couldn't
-# find any!"). If that happens, re-run configure by hand with explicit
-# paths, e.g. on Debian/Ubuntu:
-#   cd vendor/TK/unix && sh ./configure --disable-shared \
-#     --with-tcl=$(pwd)/../../TCL/unix \
-#     --x-includes=/usr/include --x-libraries=/usr/lib/x86_64-linux-gnu
-# then `make -C vendor/TK/unix`. Left as a manual fallback rather than
-# hardcoded here since the right paths vary by distro/arch.
-#
-# Windows (MSYS2/MinGW): vendor/TK/win, needs NO X11 at all -- it talks
-# to native Win32 windowing (GDI/User32/comctl32) and resolves Tk's
-# internal `#include <X11/Xlib.h>` through its own vendor/TK/xlib/ shim
-# header rather than a real Xlib. Produces libtcl9tk90.a + libtkstub.a
-# + wish90s.exe.
-# -------------------------------------------------------------------------
-$(TK_LIB): $(TCL_LIB)
-	$(TK_CONFIGURE)
-	$(MAKE) -C $(TK_BUILD_DIR)
-
-.PHONY: tk
-tk: $(TK_LIB)
-
-# -------------------------------------------------------------------------
-# raylib -- backs _cobwindow (window_open/label/wait/close). Plain
-# Makefile, no configure/autoconf at all, same PLATFORM_DESKTOP build
-# on every OS this Makefile supports (its GLFW backend picks Win32 vs
-# X11/Wayland vs Cocoa internally). Needs real X11 + OpenGL dev headers
-# on Linux (libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev
-# libxcursor-dev libxi-dev on Debian/Ubuntu); on Windows, opengl32 and
-# friends ship with any standard MinGW/w64devkit install, nothing extra
-# to install.
-# -------------------------------------------------------------------------
-$(RAYLIB_LIB):
-	$(MAKE) -C $(RAYLIB_BUILD_DIR) PLATFORM=PLATFORM_DESKTOP CC="$(CC)" $(RAYLIB_PIC)
-
-.PHONY: raylib
-raylib: $(RAYLIB_LIB)
-
-.PHONY: vendor-clean
-vendor-clean:
-	$(MAKE) -C $(TCL_BUILD_DIR) distclean 2>/dev/null || true
-	$(MAKE) -C $(TK_BUILD_DIR) distclean 2>/dev/null || true
-	$(MAKE) -C $(RAYLIB_BUILD_DIR) PLATFORM=PLATFORM_DESKTOP clean 2>/dev/null || true
-	rm -f $(SQLITE_OBJ) $(SQLITE_LIB)
-	rm -f $(VENDOR_DIR)/SQLite/sqlite3-win.o $(VENDOR_DIR)/SQLite/libsqlite3-win.a
-	rm -f $(VENDOR_DIR)/SQLite/sqlite3-unix.o $(VENDOR_DIR)/SQLite/libsqlite3-unix.a
-
-
-# =========================================================================
-# STANDARD LIBRARY (v0.0.9) -- every module is a shared library
-# =========================================================================
-# bin/lib/ holds, per module: lib<name>.so (Linux), lib<name>.dylib (macOS)
-# or <name>.dll (Windows), plus <name>.cob -- the wrapper of `extern`
-# declarations that `shuck <name>` loads. cob_interp and popcorn_comp look
-# there: $COB_STDLIB if set, else <the tool's own directory>/lib. Ship the
-# lib/ folder next to the binaries.
-# =========================================================================
-STDLIB_DIR         = $(BIN_DIR)/lib
-STDLIB_PURE        = cornmath kernels almanac granary porch
-STDLIB_ALL_MODULES = $(STDLIB_PURE) pantry barn tassel
-
-ifeq ($(OS),Windows_NT)
-    SO_PREFIX   =
-    SO_EXT      = .dll
-    SO_FLAGS    = -shared
-    PANTRY_LIBS =
-    RAYLIB_PIC  =
-else ifeq ($(UNAME_S),Darwin)
-    SO_PREFIX   = lib
-    SO_EXT      = .dylib
-    SO_FLAGS    = -dynamiclib -fPIC
-    PANTRY_LIBS = -lpthread -lm
-    RAYLIB_PIC  = CUSTOM_CFLAGS=-fPIC
-else
-    SO_PREFIX   = lib
-    SO_EXT      = .so
-    SO_FLAGS    = -shared -fPIC
-    PANTRY_LIBS = -lpthread -lm
-    RAYLIB_PIC  = CUSTOM_CFLAGS=-fPIC
-endif
-
-STDLIB_SO  = $(foreach m,$(STDLIB_PURE) pantry,$(STDLIB_DIR)/$(SO_PREFIX)$(m)$(SO_EXT))
-STDLIB_COB = $(foreach m,$(STDLIB_ALL_MODULES) silo,$(STDLIB_DIR)/$(m).cob)
-
-stdlib: $(STDLIB_SO) $(STDLIB_COB)
-	@echo "Built the standard library in $(STDLIB_DIR)/ (porch cornmath kernels almanac granary pantry)."
-stdlib-barn: $(STDLIB_DIR)/$(SO_PREFIX)barn$(SO_EXT)
-stdlib-tassel: $(STDLIB_DIR)/$(SO_PREFIX)tassel$(SO_EXT)
-
-$(STDLIB_DIR):
-	mkdir -p $(STDLIB_DIR)
-
-$(STDLIB_DIR)/%.cob: stdlib/%.cob | $(STDLIB_DIR)
-	cp $< $@
-
-# plain-C modules
-$(STDLIB_DIR)/$(SO_PREFIX)%$(SO_EXT): stdlib/%.c stdlib/stdhelp.h include/cob.h | $(STDLIB_DIR)
-	$(CC) -std=c99 -O2 -Wall -Wextra -Iinclude -Istdlib $(SO_FLAGS) -o $@ $<
-
-# pantry: the vendored SQLite amalgamation is compiled into the library
-$(STDLIB_DIR)/$(SO_PREFIX)pantry$(SO_EXT): stdlib/pantry.c stdlib/stdhelp.h include/cob.h $(VENDOR_DIR)/SQLite/sqlite3.c | $(STDLIB_DIR)
-	$(CC) -std=c99 -O2 -Iinclude -Istdlib -I$(VENDOR_DIR)/SQLite $(SO_FLAGS) \
-		-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION \
-		-o $@ stdlib/pantry.c $(VENDOR_DIR)/SQLite/sqlite3.c $(PANTRY_LIBS)
-
-# barn: raylib + raygui (raylib is built position-independent so it can live in a shared library)
-$(STDLIB_DIR)/$(SO_PREFIX)barn$(SO_EXT): stdlib/barn.c stdlib/stdhelp.h include/cob.h $(RAYLIB_LIB) | $(STDLIB_DIR)
-	$(CC) -std=c99 -O2 -Iinclude -Istdlib -I$(RAYLIB_BUILD_DIR) -I$(VENDOR_DIR)/raygui/src $(SO_FLAGS) \
-		-o $@ stdlib/barn.c $(RAYLIB_LIB) $(WINDOW_LIBS)
-
-# tassel: the vendored Tcl/Tk (built with -fPIC, see TCL_CONFIGURE / TK_CONFIGURE)
-$(STDLIB_DIR)/$(SO_PREFIX)tassel$(SO_EXT): stdlib/tassel.c stdlib/stdhelp.h include/cob.h $(TCL_LIB) $(TK_LIB) | $(STDLIB_DIR)
-	$(CC) -std=c99 -O2 -Iinclude -Istdlib $(TCL_DB_INCLUDE) $(TK_DB_INCLUDE) $(DB_DEFINES) $(SO_FLAGS) \
-		-o $@ stdlib/tassel.c $(DB_LIBS)
-
-# ---- modules compiled INTO the interpreter (browser build; `make cob_interp_static`)
-# A shared library cannot be loaded in WebAssembly, so the modules that can
-# run in a browser are linked in and bound by name; shuck still works because
-# the wrapper sources are embedded. pantry/barn/tassel/granary stay stubs there.
-GEN_DIR            = $(BIN_DIR)/gen
-STDLIB_STATIC_MODS = cornmath kernels almanac porch
-STDLIB_STATIC_SRC  = $(foreach m,$(STDLIB_STATIC_MODS),stdlib/$(m).c)
-
-$(GEN_DIR)/stdlib_static.h: $(STDLIB_STATIC_SRC) $(foreach m,$(STDLIB_ALL_MODULES) silo,stdlib/$(m).cob) tools/gen_stdlib_static.sh
-	sh tools/gen_stdlib_static.sh $(GEN_DIR) "$(STDLIB_STATIC_MODS)" "$(STDLIB_ALL_MODULES) silo"
-
-cob_interp_static: $(BIN_DIR) $(GEN_DIR)/stdlib_static.h
-	$(CC) $(CFLAGS) $(INCLUDE) -I$(GEN_DIR) -Istdlib -DCOB_STDLIB_STATIC $(ENT_DEFS) \
-		-o $(BIN_DIR)/cob_interp_static$(ENT_SUF)$(EXE_SUF) \
-		src/file_io.c src/cob_interp.c $(STDLIB_STATIC_SRC) $(ENT_SRC) $(FFI_LIBS)
-
-# ---- tests
 test: cob_interp popcorn_comp stdlib
 	sh tools/tests/run_tests.sh
+	$(CARGO) test --workspace
+
+clean:
+	rm -rf $(BIN_DIR) target stdlib-rs/barn/target crates/cob-wasm/target $(PLAY_DIR)/cob_interp.wasm $(PLAY_DIR)/version.txt

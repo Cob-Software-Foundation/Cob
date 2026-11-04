@@ -19,9 +19,8 @@
 # links the standard library in /opt/cob/lib and the image's glibc, so run it
 # here (--entrypoint /work/hello) rather than copying it to another machine.
 #
-# Not in this image: the barn (windows) and tassel (Tcl/Tk) modules -- a
-# container has no display, and they need X11/OpenGL and a long from-source
-# build. GitHub Actions builds and publishes this image: see
+# Not in this image: the barn (windows) module -- a container has no display,
+# and it needs X11/OpenGL. GitHub Actions builds and publishes this image: see
 # .github/workflows/docker.yml (ghcr.io/cob-software-foundation/cob).
 # =============================================================================
 ARG UBUNTU_VERSION=24.04
@@ -32,6 +31,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         make \
+        cargo \
+        rustc \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

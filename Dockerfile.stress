@@ -18,9 +18,6 @@
 #   docker run --rm cob-stress                          # one pass
 #   docker run --rm cob-stress --iterations 20           # repeat 20x
 #
-# This does NOT test the tassel (Tcl/Tk) module -- that's a much heavier
-# from-source build (see Release.txt for the autoconf/busybox-ash fragility
-# that comes with it) and isn't part of what this image builds.
 # =============================================================================
 FROM ubuntu:24.04
 
@@ -33,6 +30,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         make \
+        cargo \
+        rustc \
         libx11-dev \
         libxrandr-dev \
         libxinerama-dev \

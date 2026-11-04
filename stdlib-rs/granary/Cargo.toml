@@ -1,0 +1,12 @@
+[package]
+name = "granary"
+description = "Cob standard library module: granary"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cob-abi = { path = "../../crates/cob-abi" }

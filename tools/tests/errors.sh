@@ -19,7 +19,6 @@ expect "old input() is gone"          'set x = input("a")\n'                    
 expect "old input_int() is gone"      'set x = input_int("a")\n'                   "porch_ask_int"
 expect "old sql_open() is gone"       'set h = sql_open("a.db")\n'                 "pantry_open"
 expect "old window_open() is gone"    'set h = window_open("w")\n'                 "barn_open"
-expect "old tcl_eval() is gone"       'set h = tcl_eval("x")\n'                    "tassel_tcl"
 expect "serve outside a recipe"       'serve 5\n'                                  "'serve' can only be used inside a recipe"
 expect "recipe inside a block"        'if 1 == 1:\n    recipe f():\n        serve 1\n' "only be defined at the top level"
 expect "duplicate recipe"             'recipe f():\n    serve 1\nrecipe f():\n    serve 2\n' "recipe 'f' is already defined (line 1)"

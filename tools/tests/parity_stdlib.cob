@@ -1,0 +1,38 @@
+shuck cornmath
+shuck kernels
+pop(husk_abs(-7))
+pop(stalk_pow(2, 62))
+pop(stalk_pow(3, 40))
+pop(stalk_sqrt(99))
+pop(silk_mod(-7, 3))
+pop(silk_mod(7, -3))
+pop(kernel_upper("MiXed 123"))
+pop(kernel_slice("abcdef", 2, 3))
+pop(kernel_slice("abc", 10, 3))
+pop(kernel_find("hello world", "o w"))
+pop(kernel_find("abc", ""))
+pop(kernel_replace("aaa", "a", "bb"))
+pop(kernel_trim("  \t pad \n "))
+pop(kernel_to_int("  42  "))
+pop(kernel_to_int("42x"))
+pop(kernel_to_int("99999999999999999999"))
+pop(kernel_repeat("ab", 3))
+pop(kernel_code("A"))
+pop(kernel_from_code(66))
+pop(kernel_starts("hello", "he") + kernel_ends("hello", "lo"))
+scatter_seed(42)
+pop(scatter_rand(1, 100))
+pop(scatter_rand(1, 100))
+pop(scatter_rand(5, 5))
+pop(husk_abs())
+pop(husk_abs("s"))
+shuck almanac
+if almanac_year() > 2000:
+    pop("year ok")
+set t0 = almanac_ticks()
+set rc = almanac_nap(20)
+if almanac_ticks() - t0 >= 15:
+    pop("nap waited")
+if almanac_now() > 1000000000:
+    pop("now ok")
+pop(kernel_len(almanac_stamp()))

@@ -145,7 +145,7 @@
       <strong>Use Docker?</strong> A multi-architecture image (amd64 and arm64) with the interpreter and REPL, the compiler, farmer and the standard library is built and tested by GitHub Actions and published to the GitHub Container Registry. Run a program from the current folder, or open the REPL:
       <code class="mono">docker run -it --rm ghcr.io/cob-software-foundation/cob<br>
       docker run --rm -v "$PWD:/work" ghcr.io/cob-software-foundation/cob hello.cob</code>
-      The image leaves out the barn (windows) and tassel (Tcl/Tk) modules, which need a display. Add <code class="mono">--user "$(id -u):$(id -g)"</code> to read and write your own files as yourself.
+      The image leaves out the barn (windows) module, which needs a display. Add <code class="mono">--user "$(id -u):$(id -g)"</code> to read and write your own files as yourself.
     </div>
 
     <div class="downloads-foot" style="margin-top:20px; border-radius:10px; border:1px solid var(--line);">

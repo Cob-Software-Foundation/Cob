@@ -20,7 +20,7 @@ jobs:
     env:
       # Bundled into each release so popcorn_comp works standalone with
       # no separate Zig install -- see the "Download and bundle Zig"
-      # step below and src/popcorn_comp.c's find_bundled_zig_cc().
+      # step below and crates/popcorn_comp/src/main.rs's find_bundled_zig_cc().
       # Bump this to pick up newer Zig releases; verify the exact
       # filenames still match https://ziglang.org/download/ first.
       ZIG_VERSION: "0.16.0"
@@ -44,6 +44,7 @@ jobs:
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-amd64
+            rust_target: "x86_64-pc-windows-gnu"
             zig_target: x86_64-windows
             zig_ext: zip
             full_build: true
@@ -59,6 +60,7 @@ jobs:
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-386
+            rust_target: "i686-pc-windows-gnu"
             zig_target: x86-windows
             zig_ext: zip
             full_build: true
@@ -73,6 +75,7 @@ jobs:
             farmer_output_name: farmer.exe
             popcorn_output_name: popcorn_comp.exe
             archive_name: cob-windows-arm64
+            rust_target: "aarch64-pc-windows-gnullvm"
             zig_target: aarch64-windows
             zig_ext: zip
             full_build: true
@@ -88,6 +91,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-amd64
+            rust_target: ""
             zig_target: x86_64-linux
             zig_ext: tarxz
             full_build: true
@@ -106,6 +110,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-386
+            rust_target: "i686-unknown-linux-gnu"
             zig_target: x86-linux
             zig_ext: tarxz
             full_build: false
@@ -121,6 +126,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm64
+            rust_target: ""
             zig_target: aarch64-linux
             zig_ext: tarxz
             full_build: false
@@ -136,6 +142,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-linux-arm32
+            rust_target: "armv7-unknown-linux-gnueabihf"
             zig_target: arm-linux
             zig_ext: tarxz
             full_build: false
@@ -151,6 +158,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-darwin-arm64
+            rust_target: ""
             zig_target: aarch64-macos
             zig_ext: tarxz
             full_build: true
@@ -165,6 +173,7 @@ jobs:
             farmer_output_name: farmer
             popcorn_output_name: popcorn_comp
             archive_name: cob-darwin-amd64
+            rust_target: ""
             zig_target: x86_64-macos
             zig_ext: tarxz
             full_build: true
@@ -210,97 +219,81 @@ jobs:
         sudo apt-get update && sudo apt-get install -y --no-install-recommends \
           libx11-dev libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
+    # Rust toolchain: every GitHub runner ships rustup + stable. Cross targets
+    # (rust_target in the matrix) need their standard library added; an empty
+    # rust_target means "build for the runner's own platform".
+    - name: Add the Rust target
+      if: matrix.rust_target != ''
+      shell: bash
+      run: rustup target add "${{ matrix.rust_target }}"
+
     - name: Compile cob, farmer, and popcorn_comp (via Makefile)
       shell: bash
       run: |
         set -euo pipefail
         mkdir -p dist
 
-        # EXE_SUF is forced explicitly: the Makefile's $(OS) check only
-        # reads Windows_NT on a native Windows host, but a mingw
-        # cross-compiler appends .exe to the output name anyway.
+        # EXE_SUF is forced explicitly: the Makefile's $(OS) check only reads
+        # Windows_NT on a native Windows host, and TARGET builds name it themselves.
         EXE_SUF=""
         if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
 
+        # Cross builds name the Rust target; native ones leave TARGET unset.
+        RT="${{ matrix.rust_target }}"
+        TARGETARG=()
+        [ -n "$RT" ] && TARGETARG=(TARGET="$RT")
+
+        # Linkers and C compilers for the targets that need a cross toolchain.
+        # (Cargo reads CARGO_TARGET_<TRIPLE>_LINKER; the `cc` crate -- which
+        # compiles SQLite for pantry -- reads CC_<triple>.)
+        case "$RT" in
+          armv7-unknown-linux-gnueabihf)
+            export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+            export CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc ;;
+          x86_64-pc-windows-gnu)
+            export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+            export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc ;;
+          i686-pc-windows-gnu)
+            export CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc
+            export CC_i686_pc_windows_gnu=i686-w64-mingw32-gcc ;;
+          aarch64-pc-windows-gnullvm)
+            export CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER=aarch64-w64-mingw32-clang
+            export CC_aarch64_pc_windows_gnullvm=aarch64-w64-mingw32-clang ;;
+        esac
+
+        # the free tools + the standard library (porch cornmath kernels almanac
+        # granary pantry) in bin/ and bin/lib/
+        make cob_interp farmer popcorn_comp stdlib ${TARGETARG[@]+"${TARGETARG[@]}"}
+
         if [ "${{ matrix.full_build }}" = "true" ]; then
-          FULL_CC="${{ matrix.cc }} ${{ matrix.cflags || '' }}"
-          FULL_AR="${{ matrix.ar || '' }}"
-          case "${{ matrix.goos }}" in
-            windows)
-              WINDOW_LIBS="-lopengl32 -lgdi32 -lwinmm -lshell32"
-              SQLITE_LIB_OVERRIDE="vendor/SQLite/libsqlite3-win.a"
-              PLATFORM_OS_OVERRIDE="WINDOWS"
-              ;;
-            linux)
-              WINDOW_LIBS="-lGL -lm -lpthread -ldl -lrt -lX11"
-              SQLITE_LIB_OVERRIDE="vendor/SQLite/libsqlite3-unix.a"
-              PLATFORM_OS_OVERRIDE="LINUX"
-              ;;
-            darwin)
-              WINDOW_LIBS=""
-              SQLITE_LIB_OVERRIDE=""
-              PLATFORM_OS_OVERRIDE=""
-              ;;
-          esac
-
-          FULL_BUILD_ARGS=(CC="$FULL_CC" EXE_SUF="$EXE_SUF")
-          [ -n "$FULL_AR" ] && FULL_BUILD_ARGS+=(AR="$FULL_AR")
-          [ -n "$WINDOW_LIBS" ] && FULL_BUILD_ARGS+=(WINDOW_LIBS="$WINDOW_LIBS")
-          [ -n "$SQLITE_LIB_OVERRIDE" ] && FULL_BUILD_ARGS+=(SQLITE_LIB="$SQLITE_LIB_OVERRIDE")
-          [ -n "$PLATFORM_OS_OVERRIDE" ] && FULL_BUILD_ARGS+=(PLATFORM_OS="$PLATFORM_OS_OVERRIDE")
-
-          make cob_interp_full "${FULL_BUILD_ARGS[@]}"
-
-          make embed "${FULL_BUILD_ARGS[@]}" EMBED_SUF="-${{ matrix.goos }}-${{ matrix.goarch }}"
+          # barn (raylib windows) needs a display stack, so only the full builds have it
+          make stdlib-barn ${TARGETARG[@]+"${TARGETARG[@]}"}
+          make embed ${TARGETARG[@]+"${TARGETARG[@]}"} EMBED_SUF="-${{ matrix.goos }}-${{ matrix.goarch }}"
           cp bin/cob-*-embed-*.zip "dist/"
-
-          make farmer popcorn_comp \
-            CC="${{ matrix.cc }}" \
-            CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
-            EXE_SUF="$EXE_SUF"
-
-          cp "bin/cob_interp_full${EXE_SUF}" "dist/${{ matrix.output_name }}"
-
-          if [ -f include/drm_pubkey.h ]; then
-            mkdir -p dist/enterprise
-            make cob_interp_full ENTERPRISE=1 "${FULL_BUILD_ARGS[@]}"
-            make embed ENTERPRISE=1 "${FULL_BUILD_ARGS[@]}" EMBED_SUF="_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}"
-            cp bin/cob-*-embed_enterprise-*.zip "dist/"
-            make popcorn_comp ENTERPRISE=1 \
-              CC="${{ matrix.cc }}" \
-              CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
-              EXE_SUF="$EXE_SUF"
-            cp "bin/cob_interp_full_enterprise${EXE_SUF}" "dist/enterprise/${{ matrix.output_name }}"
-            cp "bin/popcorn_comp_enterprise${EXE_SUF}"    "dist/enterprise/${{ matrix.popcorn_output_name }}"
-          fi
-        else
-          make cob_interp farmer popcorn_comp \
-            CC="${{ matrix.cc }}" \
-            CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
-            EXE_SUF="$EXE_SUF"
-
-          cp "bin/cob_interp${EXE_SUF}" "dist/${{ matrix.output_name }}"
-
-          if [ -f include/drm_pubkey.h ]; then
-            mkdir -p dist/enterprise
-            make cob_interp popcorn_comp ENTERPRISE=1 \
-              CC="${{ matrix.cc }}" \
-              CFLAGS="-std=c99 -O2 -Wall -Wextra ${{ matrix.cflags || '' }}" \
-              EXE_SUF="$EXE_SUF"
-            cp "bin/cob_interp_enterprise${EXE_SUF}"      "dist/enterprise/${{ matrix.output_name }}"
-            cp "bin/popcorn_comp_enterprise${EXE_SUF}"    "dist/enterprise/${{ matrix.popcorn_output_name }}"
-          fi
         fi
 
+        cp "bin/cob_interp${EXE_SUF}" "dist/${{ matrix.output_name }}"
         cp "bin/farmer${EXE_SUF}"       "dist/${{ matrix.farmer_output_name }}"
         cp "bin/popcorn_comp${EXE_SUF}" "dist/${{ matrix.popcorn_output_name }}"
 
-        ls -la dist/
+        # license-gated builds, only once the maintainer has committed the PUBLIC key
+        if [ -f keys/drm_pubkeys.txt ]; then
+          mkdir -p dist/enterprise
+          make enterprise ${TARGETARG[@]+"${TARGETARG[@]}"}
+          cp "bin/cob_interp_enterprise${EXE_SUF}"   "dist/enterprise/${{ matrix.output_name }}"
+          cp "bin/popcorn_comp_enterprise${EXE_SUF}" "dist/enterprise/${{ matrix.popcorn_output_name }}"
+          if [ "${{ matrix.full_build }}" = "true" ]; then
+            make embed ${TARGETARG[@]+"${TARGETARG[@]}"} ENT_SUF=_enterprise EMBED_SUF="_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}"
+            cp bin/cob-*-embed_enterprise-*.zip "dist/"
+          fi
+        fi
+
+        ls -la dist/ bin/lib/
 
     # Download and bundle the official, host-runnable Zig release for
     # THIS target platform so popcorn_comp works standalone after the
     # user unzips the release (see find_bundled_zig_cc() in
-    # src/popcorn_comp.c). If this 404s, Zig's download naming changed
+    # crates/popcorn_comp/src/main.rs). If this 404s, Zig's download naming changed
     # upstream and needs rechecking.
     - name: Download and bundle Zig for popcorn_comp
       shell: bash
@@ -335,6 +328,10 @@ jobs:
         cp dist/${{ matrix.farmer_output_name }} staging/${{ matrix.archive_name }}/
         cp dist/${{ matrix.popcorn_output_name }} staging/${{ matrix.archive_name }}/
 
+        # The standard library (shuck porch, cornmath, ...): one shared library
+        # per module plus its .cob wrapper, found in lib/ next to the binary.
+        cp -r bin/lib staging/${{ matrix.archive_name }}/lib
+
         # Copy legal folder contents next to the binaries if it exists
         if [ -d "legal" ]; then
           cp -r legal/* staging/${{ matrix.archive_name }}/
@@ -353,9 +350,9 @@ jobs:
 
     # Enterprise zip: same layout as the free zip (bundled Zig, legal files,
     # farmer) but with the license-gated cob + popcorn_comp. Needs a cob.lic
-    # to run. Built only when include/drm_pubkey.h is committed.
+    # to run. Built only when keys/drm_pubkeys.txt (the PUBLIC key) is committed.
     - name: Package Enterprise zip
-      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      if: ${{ hashFiles('keys/drm_pubkeys.txt') != '' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -379,7 +376,7 @@ jobs:
         subject-path: dist/${{ matrix.archive_name }}.zip
 
     - name: Attest Enterprise Build Provenance
-      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      if: ${{ hashFiles('keys/drm_pubkeys.txt') != '' }}
       uses: actions/attest-build-provenance@v4.2.2
       with:
         subject-path: dist/cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip
@@ -426,7 +423,7 @@ jobs:
     # the .deb or the apt repository. The release job's `artifact-*`
     # pattern does pick it up, so they are published with the release.
     - name: Upload Enterprise matrix artifacts
-      if: ${{ hashFiles('include/drm_pubkey.h') != '' }}
+      if: ${{ hashFiles('keys/drm_pubkeys.txt') != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: artifact-cob-enterprise-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -496,15 +493,16 @@ jobs:
             test -f "$src/$f" || { echo "::error::$f is missing from ${archive}.zip"; exit 1; }
           done
           test -f "$src/zig/zig" || { echo "::error::bundled zig is missing from ${archive}.zip"; exit 1; }
+          test -d "$src/lib" || { echo "::error::the standard library (lib/) is missing from ${archive}.zip"; exit 1; }
 
           mkdir -p "$PKG/usr/lib/cob/$arch"
-          cp -a "$src/cob" "$src/farmer" "$src/popcorn_comp" "$src/zig" "$PKG/usr/lib/cob/$arch/"
+          cp -a "$src/cob" "$src/farmer" "$src/popcorn_comp" "$src/zig" "$src/lib" "$PKG/usr/lib/cob/$arch/"
           chmod 755 "$PKG/usr/lib/cob/$arch/cob" "$PKG/usr/lib/cob/$arch/farmer" "$PKG/usr/lib/cob/$arch/popcorn_comp"
 
           # Licenses and docs are architecture-independent: take them from one build.
           if [ "$arch" = "amd64" ]; then
             find "$src" -mindepth 1 -maxdepth 1 \
-              ! -name cob ! -name farmer ! -name popcorn_comp ! -name zig \
+              ! -name cob ! -name farmer ! -name popcorn_comp ! -name zig ! -name lib \
               -exec cp -r {} "$PKG/usr/share/doc/cob/" \;
           fi
         done
