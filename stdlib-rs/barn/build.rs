@@ -16,11 +16,33 @@ fn main() {
 
     let lib = raylib.join("libraylib.a");
     if !lib.exists() {
-        let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-        let mut cmd = Command::new("make");
-        cmd.arg("-C").arg(raylib).arg("PLATFORM=PLATFORM_DESKTOP").arg(format!("CC={}", cc));
+        // Build raylib with the SAME compiler and archiver Cargo uses for this
+        // target (CC_<target>, AR_<target>, ...). A bare `cc`/`ar` would pick the
+        // host's -- on a cross build (say 32-bit Windows from a 64-bit mingw) that
+        // produces a library of the wrong architecture.
+        let tool = cc::Build::new().get_compiler();
+        let cc_path = tool.path().to_string_lossy().into_owned();
+        let ar = cc::Build::new().get_archiver();
+        let ar_path = ar.get_program().to_string_lossy().into_owned();
+        // keep only the flags that choose the architecture (-m32, --target=...)
+        let arch_flags: Vec<String> = tool
+            .args()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .filter(|a| a.starts_with("-m") || a.starts_with("--target"))
+            .collect();
+        let mut cflags = arch_flags;
         if !windows {
-            cmd.arg("CUSTOM_CFLAGS=-fPIC");
+            cflags.insert(0, "-fPIC".to_string());
+        }
+        let mut cmd = Command::new("make");
+        cmd.arg("-C")
+            .arg(raylib)
+            .arg("PLATFORM=PLATFORM_DESKTOP")
+            .arg(format!("CC={}", cc_path))
+            .arg(format!("AR={}", ar_path));
+        if !cflags.is_empty() {
+            cmd.arg(format!("CUSTOM_CFLAGS={}", cflags.join(" ")));
         }
         let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
         assert!(ok && lib.exists(), "building vendor/raylib failed (X11 + OpenGL dev headers installed?)");

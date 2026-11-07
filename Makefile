@@ -199,6 +199,12 @@ ifeq ($(ENTERPRISE),1)
     ENT_SUF = _enterprise
 endif
 ENT_SUF    ?=
+# Some Windows runners have no `zip`; 7-Zip makes the same archive.
+ifeq ($(shell command -v zip 2>/dev/null),)
+    ZIP_CONTENTS = 7z a -tzip -bso0 -bsp0
+else
+    ZIP_CONTENTS = zip -rq
+endif
 EMBED_STAGE = $(BIN_DIR)/embed-stage
 EMBED_SUF  ?= $(ENT_SUF)
 EMBED_ZIP   = $(BIN_DIR)/cob-$(shell cat VERSION)-embed$(EMBED_SUF).zip
@@ -212,7 +218,7 @@ embed: cob_interp stdlib $(if $(ENT_SUF),enterprise)
 	cp legal/license_raylib.terms legal/license_raygui.terms $(EMBED_STAGE)/legal/
 	cp VERSION $(EMBED_STAGE)/
 	cp EMBED-README.md $(EMBED_STAGE)/README.md
-	cd $(EMBED_STAGE) && zip -rq "../../$(EMBED_ZIP)" .
+	cd $(EMBED_STAGE) && $(ZIP_CONTENTS) "../../$(EMBED_ZIP)" .
 	rm -rf $(EMBED_STAGE)
 	@echo ""
 	@echo "Built $(EMBED_ZIP) -- extract-and-run, no installer, just cob$(EXE_SUF) + license text."

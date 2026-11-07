@@ -1,73 +1,27 @@
-# raygui styles
+## style: terminal
 
-`raygui` comes with **several custom UI styles** carefully designed for the best visual experience. Those styles have been created using [rGuiStyler](https://raylibtech.itch.io/rguistyler) tool and they complement internal [default style](default), always available by `raygui`.
+Start your terminal and type your commands! Feel the connection the data flow, that's your style!
 
-## styles usage 
+![terminal style table](style_terminal.png)
 
-To use those styles with your `raygui` development, you need to call `GuiLoadStyle()` function at initialization, passing the `.rgs` file to load. Note that `.rgs` is by default a binary file containing the style required font data (glyphs data + glyph atlas image data).
+## style: provided files
 
-Styles can also be embedded in the code if desired, `.h` files are provided with every style containing all the required style data, including the font data. To embed those fonts just add the `.h` to your project and call the required function as specified in the header info.
+Several options are provided to add the style to a `raygui` application, choose the one that better fits the project.
 
-Here it is a quick overview of those styles, you can navigate to each directory for additional information.
+| file name | description |
+| :-------- | :---------- |
+| `style_terminal.rgs` | Binary style file (raygui 4.0), font data compressed (recs, glyphs) |
+| `style_terminal.txt.rgs` | Text style file, no font data, requires external font provided |
+| `style_terminal.old.rgs` | Binary style file (raygui 3.x), font data uncompressed (recs, glyphs) |
+| `style_terminal.h` | Embeddable style as code file, self-contained, includes font data |
+| `style_terminal.png` | Style table image, contains `rGSf` chunk with binary `rgs` file data |
 
-#### 1. style: [default](default)
-![default style](default/style_default.png)
+## screenshot
 
-#### 2. style: [dark](dark)
-![dark style](dark/style_dark.png)
+![terminal style screen](screenshot.png)
 
-#### 3. style: [bluish](bluish)
-![bluish style](bluish/style_bluish.png)
+## about font
 
-#### 4. style: [candy](candy)
-![candy style](candy/style_candy.png)
+"Mecha" font by Captain Falcon.
 
-#### 5. style: [cherry](cherry)
-![cherry style](cherry/style_cherry.png)
-
-#### 6. style: [cyber](cyber)
-![cyber style](cyber/style_cyber.png)
-
-#### 7. style: [jungle](jungle)
-![jungle style](jungle/style_jungle.png)
-
-#### 8. style: [lavanda](lavanda)
-![lavanda style](lavanda/style_lavanda.png)
-
-#### 9. style: [terminal](terminal)
-![terminal style](terminal/style_terminal.png)
-
-#### 10. style: [sunny](sunny)
-![sunny style](sunny/style_sunny.png)
-
-#### 11. style: [ashes](ashes)
-![ashes style](ashes/style_ashes.png)
-
-#### 12. style: [enefete](enefete)
-![enefete style](enefete/style_enefete.png)
-
-#### 13. style: [amber](amber)
-![amber style](amber/style_amber.png)
-
-#### 14. style: [rltech](rltech)
-![rltech style](rltech/style_rltech.png)
-
-#### 15. style: [genesis](genesis)
-![genesis style](genesis/style_genesis.png)
-
-#### 16. style: [wisteria](wisteria)
-![wisteria style](wisteria/style_wisteria.png)
-
-#### 17. style: [pocket](pocket)
-![pocket style](pocket/style_pocket.png)
-
-#### 18. style: [brick](brick)
-![brick style](brick/style_brick.png)
-
-#### 19. style: [advance](advance)
-![advance style](advance/style_advance.png)
-
-#### 20. style: [turbo](turbo)
-![turbo style](turbo/style_turbo.png)
-
-*NOTE: Those styles require raylib 6.x and raygui 5.x*
+100% free font, downloaded from dafont.com: [mecha-cf](https://www.dafont.com/mecha-cf.font)
