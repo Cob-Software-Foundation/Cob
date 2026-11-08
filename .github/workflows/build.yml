@@ -148,9 +148,11 @@ jobs:
             full_build: false
 
           # ---------------- macOS ----------------
+          # GitHub retired the macOS 14 (arm64) and 13 (Intel) images; these are the
+          # labels its runner-images README lists today (arm64 and Intel macOS 15).
           - goos: darwin
             goarch: arm64
-            runner: macos-14
+            runner: macos-15
             toolchain: clang-arch
             cc: clang
             cflags: "-arch arm64"
@@ -165,7 +167,7 @@ jobs:
 
           - goos: darwin
             goarch: amd64
-            runner: macos-13
+            runner: macos-15-intel
             toolchain: clang-arch
             cc: clang
             cflags: "-arch x86_64"
@@ -256,6 +258,10 @@ jobs:
         # Windows_NT on a native Windows host, and TARGET builds name it themselves.
         EXE_SUF=""
         if [ "${{ matrix.goos }}" = "windows" ]; then EXE_SUF=".exe"; fi
+
+        # clang's default minimum macOS version is the SDK's, i.e. 15 on these runners:
+        # without this the C code (SQLite, raylib) would refuse to run on anything older.
+        if [ "${{ matrix.goos }}" = "darwin" ]; then export MACOSX_DEPLOYMENT_TARGET=11.0; fi
 
         # Cross builds name the Rust target; native ones leave TARGET unset.
         RT="${{ matrix.rust_target }}"
