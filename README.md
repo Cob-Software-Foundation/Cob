@@ -1,5 +1,16 @@
 # Cob™ (Project Obsidian Falcon)
 
+
+[![CodeQL - Code Quality](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/github-code-quality/codeql/badge.svg)](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/github-code-quality/codeql)
+
+[![Cob](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/build.yml/badge.svg)](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/build.yml)
+
+[![CodeQL Advanced](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/codeql.yml/badge.svg)](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/codeql.yml)
+
+[![Docker](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/docker.yml/badge.svg)](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/docker.yml)
+
+[![Stress Test](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/ci.yml/badge.svg)](https://github.com/Cob-Software-Foundation/Cob/actions/workflows/ci.yml)
+
 Cob is a corn-themed hybrid programming language combining Python-style indentation with low-level capability. It features a cross-platform interpreter, a native compiler powered by Zig, and its own package manager.
 
 Development, stewardship, and project rights are co-managed by the **Cob Software Foundation™ (CSF)** and **Pixel Pulse**.
