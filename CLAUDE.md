@@ -77,7 +77,9 @@ links them in statically (it cannot `dlopen`).
 - The browser build has 64-bit numbers too (`CobLong` is `i64` on wasm32), and
   stubs any `extern` library it can't link, with one notice per library.
 - Dependencies are pinned for an old toolchain: `zeroize = "=1.7.0"` (newer
-  releases need Cargo 1.85+) and `cc = "=1.0.83"`. Commit all three lockfiles
+  releases need Cargo 1.85+) and `cc = "=1.2.30"`. Do not lower `cc` below 1.2:
+  older releases hand clang the Rust name `aarch64-pc-windows-gnullvm`, which
+  clang rejects (this broke the Windows arm64 build). Commit all three lockfiles
   (root, `stdlib-rs/barn`, `crates/cob-wasm`) and don't run a blanket
   `cargo update`.
 
