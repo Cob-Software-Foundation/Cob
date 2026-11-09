@@ -46,10 +46,11 @@ RUN make cob_interp popcorn_comp farmer stdlib
 ARG RUN_TESTS=1
 RUN if [ "$RUN_TESTS" = "1" ]; then make test; fi
 
-# the payload the runtime stage copies: the three tools, and lib/ beside them
-RUN mkdir -p /out/lib \
+# the payload the runtime stage copies: the three tools, lib/ and legal/ beside them
+RUN mkdir -p /out/lib /out/legal \
     && cp bin/cob_interp bin/popcorn_comp bin/farmer /out/ \
-    && cp bin/lib/* /out/lib/
+    && cp bin/lib/* /out/lib/ \
+    && if [ -d legal ]; then cp -r legal/* /out/legal/; fi
 
 # ---- runtime: just what is needed to run and compile Cob ---------------------
 FROM ubuntu:${UBUNTU_VERSION} AS runtime
