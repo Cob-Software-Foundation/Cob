@@ -1,0 +1,19 @@
+================================================================================
+THIRD-PARTY OPEN SOURCE LICENSES
+================================================================================
+
+This document contains license notices and conditions for third-party crates 
+and libraries utilized by Cob.
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+License: {{id}}
+Used by:
+{{#each used_by}}
+ - {{crate.name}} (v{{crate.version}})
+{{/each}}
+--------------------------------------------------------------------------------
+
+{{{text}}}
+
+{{/each}}

@@ -360,9 +360,10 @@ jobs:
         # per module plus its .cob wrapper, found in lib/ next to the binary.
         cp -r bin/lib staging/${{ matrix.archive_name }}/lib
 
-        # Copy legal folder contents next to the binaries if it exists
+        # Copy legal folder contents into a legal directory if it exists
         if [ -d "legal" ]; then
-          cp -r legal/* staging/${{ matrix.archive_name }}/
+          mkdir -p staging/${{ matrix.archive_name }}/legal
+          cp -r legal/* staging/${{ matrix.archive_name }}/legal/
         fi
 
         # Download docs index.html into a docs folder next to cob.exe
