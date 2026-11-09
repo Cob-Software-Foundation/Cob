@@ -24,21 +24,30 @@
   var FLAG_NO_GC = 1;
   var compiled = null; // Promise<WebAssembly.Module>, shared by every run
 
-  function wasmBytes() {
+  // opts.locateFile (Emscripten's convention, which Pounce's worker passes) gives
+  // the .wasm's URL directly. Without it we work it out from the page's <script>
+  // tag; a Web Worker has no `document`, so that path must not touch it.
+  function wasmBytes(opts) {
     if (typeof process !== "undefined" && process.versions && process.versions.node && typeof require === "function") {
       var fs = require("fs"), path = require("path");
       return Promise.resolve(fs.readFileSync(path.join(__dirname, "cob_interp.wasm")));
     }
-    var here = (document.currentScript && document.currentScript.src) || (typeof location !== "undefined" ? location.href : "");
-    var url = new URL("cob_interp.wasm", here).href;
+    var url;
+    if (opts && typeof opts.locateFile === "function") {
+      url = opts.locateFile("cob_interp.wasm");
+    } else {
+      var here = (typeof document !== "undefined" && document.currentScript && document.currentScript.src) ||
+                 (typeof location !== "undefined" ? location.href : "");
+      url = new URL("cob_interp.wasm", here).href;
+    }
     return fetch(url).then(function (r) {
       if (!r.ok) throw new Error("could not load cob_interp.wasm (" + r.status + ")");
       return r.arrayBuffer();
     });
   }
 
-  function loadModule() {
-    if (!compiled) compiled = wasmBytes().then(function (b) { return WebAssembly.compile(b); });
+  function loadModule(opts) {
+    if (!compiled) compiled = wasmBytes(opts).then(function (b) { return WebAssembly.compile(b); });
     return compiled;
   }
 
@@ -51,7 +60,7 @@
 
   function createCobModule(opts) {
     opts = opts || {};
-    return loadModule().then(function (mod) {
+    return loadModule(opts).then(function (mod) {
       var files = Object.create(null);
       var exportsRef = null;
       var enc = new TextEncoder();

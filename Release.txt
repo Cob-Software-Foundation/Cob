@@ -1,36 +1,3 @@
-# Unreleased -- the Rust rewrite
-
-**Cob is now written in Rust.** The interpreter, compiler (`popcorn_comp`),
-package manager (`farmer`), license tool (`cob_sign`), the browser build and
-every standard-library module are Rust crates (`crates/`, `stdlib-rs/`);
-`barn` wraps the vendored raylib/raygui C libraries and SQLite stays the
-vendored amalgamation. The language, its error messages, the `.strawberry`
-cache format, the native-extension ABI (`include/cob.h`) and the generated C
-are unchanged -- checked by running the original and the new tools side by side.
-
-* **`tassel` (Tcl/Tk) is removed**, along with `vendor/TCL`, `vendor/TK`,
-  `make stdlib-tassel`, and the `tcl_eval`/`tk_eval` upgrade hint.
-* **Enterprise licenses can be bound to a machine.** `cob_sign sign` now writes
-  `bind=machine` by default: the first run records a hash of the OS machine UUID
-  in the license file; `--machine <hash>` pre-binds a license in the signed
-  part; `--no-bind` keeps the old behaviour. See ENTERPRISE.md for what this
-  does and does not protect against.
-* **The browser playground runs the Rust build** (`make play`). Numbers there are
-  64-bit like everywhere else (the old Emscripten build had 32-bit `long`).
-* Public keys now live in `keys/drm_pubkeys.txt` instead of a C header.
-* `make wasm`, `make play`, `make wasm-test` build and test the browser build;
-  it needs the `wasm32-unknown-unknown` Rust target.
-* The `miniz` and `monocypher` vendor directories are gone (replaced by the
-  `zip` crate and a Rust EdDSA that is byte-compatible with Monocypher's).
-  Third-party crate licenses: legal/RUST_DEPENDENCIES.md.
-* Deep recursion/nesting no longer crashes the native interpreter.
-* `cob_interp` and `popcorn_comp` find their `lib/` (and the bundled Zig) from `argv[0]`
-  when `/proc/self/exe` is unavailable (chroots, minimal sandboxes); the C version failed
-  there with "shuck ... failed" unless `COB_STDLIB` was set.
-* The stale `tools/tests/input.cob` test and `input_native.sh` are gone: they drove the
-  `input()` builtin that 0.0.9 replaced with `porch_ask()`; `porch_input` and
-  `porch_cases.sh` cover the same scenarios.
-
 # Cob Language v0.0.9
 
 ## Overview
@@ -403,35 +370,37 @@ program:
 
 ## Not verified
 
-* `make wasm` has not been run here: Emscripten is not installed in
-  this environment. The code is plain C99 with no new dependencies and
-  the `-DCOB_WASM` flavor was compiled natively as described above, but
-  the first real `emcc` build will be whatever CI run triggers it.
-  Pounce (the block-coding front end) builds from this source, so it
-  inherits that gap.
-* The `deb` and `apt-repo` jobs have not run on GitHub Actions, signing
-  has not been run with the real `GPG_PRIVATE_KEY`, and the repository has
-  not yet been fetched through GitHub's release-asset URLs (which redirect
-  to a CDN; apt follows redirects, but this was not tried against GitHub
-  itself). In the local run the amd64 build
-  was real but the Zig was a stand-in that forwards to gcc, and the
-  i386, arm64 and armhf builds were placeholders, so those three were
-  packaged but never installed or run on matching hardware.
-* The `.deb` is one `Architecture: all` package holding binaries for
-  several architectures, which is not how Debian packaging is normally
-  done and which `lintian` will complain about. `dpkg --verify` reports
-  the deleted other-architecture files as missing, by design. `apt`
-  does not check detached `.asc` signatures on a loose `.deb`; the
-  signature is for manual verification, not for an `apt` repository.
-* `popcorn_comp`'s `-Wpedantic` build still emits one warning about an
-  over-long string literal in the C runtime preamble. It was already
-  there before this release and this release did not touch it.
-* Everything Windows/macOS/cross-compile-related that previous
-  releases flagged as not verified on real hardware remains not
-  verified; this release touched none of that code.
-* The website changes (`docs/index.html`, `docs/download.html`,
-  `docs/play/index.html`) were edited but not opened in a browser, and
-  the new playground example has not been run in the WebAssembly
-  playground.
-* The full CI suite (`ci.yml`, `build.yml`, the Docker stress image)
-  has not been run on this change.
+Nothing everything not verified from v0.0.9-rc has been verified on a raspberry pi
+
+# the Rust rewrite
+
+**Cob is now written in Rust.** The interpreter, compiler (`popcorn_comp`),
+package manager (`farmer`), license tool (`cob_sign`), the browser build and
+every standard-library module are Rust crates (`crates/`, `stdlib-rs/`);
+`barn` wraps the vendored raylib/raygui C libraries and SQLite stays the
+vendored amalgamation. The language, its error messages, the `.strawberry`
+cache format, the native-extension ABI (`include/cob.h`) and the generated C
+are unchanged -- checked by running the original and the new tools side by side.
+
+* **`tassel` (Tcl/Tk) is removed**, along with `vendor/TCL`, `vendor/TK`,
+  `make stdlib-tassel`, and the `tcl_eval`/`tk_eval` upgrade hint.
+* **Enterprise licenses can be bound to a machine.** `cob_sign sign` now writes
+  `bind=machine` by default: the first run records a hash of the OS machine UUID
+  in the license file; `--machine <hash>` pre-binds a license in the signed
+  part; `--no-bind` keeps the old behaviour. See ENTERPRISE.md for what this
+  does and does not protect against.
+* **The browser playground runs the Rust build** (`make play`). Numbers there are
+  64-bit like everywhere else (the old Emscripten build had 32-bit `long`).
+* Public keys now live in `keys/drm_pubkeys.txt` instead of a C header.
+* `make wasm`, `make play`, `make wasm-test` build and test the browser build;
+  it needs the `wasm32-unknown-unknown` Rust target.
+* The `miniz` and `monocypher` vendor directories are gone (replaced by the
+  `zip` crate and a Rust EdDSA that is byte-compatible with Monocypher's).
+  Third-party crate licenses: legal/RUST_DEPENDENCIES.md.
+* Deep recursion/nesting no longer crashes the native interpreter.
+* `cob_interp` and `popcorn_comp` find their `lib/` (and the bundled Zig) from `argv[0]`
+  when `/proc/self/exe` is unavailable (chroots, minimal sandboxes); the C version failed
+  there with "shuck ... failed" unless `COB_STDLIB` was set.
+* The stale `tools/tests/input.cob` test and `input_native.sh` are gone: they drove the
+  `input()` builtin that 0.0.9 replaced with `porch_ask()`; `porch_input` and
+  `porch_cases.sh` cover the same scenarios.

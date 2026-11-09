@@ -3,213 +3,141 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cob — a small, fast language for small, fast tools</title>
-<meta name="description" content="Cob: an interpreter, a native compiler, and a package manager for a corn-threshed little language.">
+<title>Play — Cob</title>
+<meta name="description" content="Run Cob right in your browser. No install — an instant, zero-install playground for trying the language.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,420;0,9..144,560;0,9..144,680;1,9..144,560&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="../css/style.css">
+<style>
+  .play-wrap{
+    display:grid; grid-template-columns:1fr 1fr; gap:20px;
+    height:calc(100vh - 230px); min-height:420px;
+  }
+  .play-pane{
+    display:flex; flex-direction:column; background:var(--white);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden; min-height:0;
+  }
+  .play-pane-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 16px; border-bottom:1px solid var(--line); background:rgba(140,90,43,0.04);
+    font-size:13px; font-weight:600; color:rgba(28,26,15,0.6);
+  }
+  .play-pane-head .dot{
+    width:8px; height:8px; border-radius:50%; margin-right:8px; display:inline-block;
+    background:var(--kernel);
+  }
+  #editor{
+    flex:1; width:100%; border:none; resize:none; outline:none;
+    font-family:'IBM Plex Mono', monospace; font-size:14px; line-height:1.6;
+    padding:16px; color:var(--ink); background:var(--white); tab-size:4;
+  }
+  #terminal{
+    flex:1; overflow-y:auto; padding:16px; margin:0;
+    font-family:'IBM Plex Mono', monospace; font-size:13.5px; line-height:1.6;
+    background:var(--ink); color:rgba(255,253,246,0.92); white-space:pre-wrap; word-break:break-word;
+  }
+  #terminal .err{color:#ff9b9b;}
+  #terminal .warn{color:var(--kernel);}
+  #terminal .sys{color:rgba(255,253,246,0.45); font-style:italic;}
+  .run-btn{
+    display:inline-flex; align-items:center; gap:8px; border:none; cursor:pointer;
+    background:var(--husk); color:var(--white); font-weight:600; font-size:13.5px;
+    padding:7px 16px; border-radius:7px; font-family:'IBM Plex Sans', sans-serif;
+  }
+  .run-btn:hover{background:var(--husk-deep);}
+  .run-btn:disabled{opacity:0.55; cursor:default;}
+  .run-btn .kbd{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; opacity:0.75;
+    border:1px solid rgba(255,253,246,0.35); border-radius:4px; padding:1px 5px;
+  }
+  .examples{display:flex; gap:8px; flex-wrap:wrap;}
+  .examples button{
+    font-family:'IBM Plex Sans', sans-serif; font-size:12.5px; font-weight:500;
+    background:var(--silk-hi); border:1px solid var(--line); color:var(--ink);
+    border-radius:20px; padding:5px 13px; cursor:pointer;
+  }
+  .examples button:hover{background:var(--silk);}
+  .play-note{
+    font-size:13.5px; color:rgba(28,26,15,0.6); margin-top:14px; line-height:1.6;
+  }
+  .play-note code{font-family:'IBM Plex Mono', monospace; font-size:12.5px;}
+  @media (max-width: 880px){
+    .play-wrap{grid-template-columns:1fr; height:auto;}
+    #editor{min-height:260px;}
+    #terminal{min-height:200px;}
+  }
+</style>
 </head>
 <body>
 
 <header class="site">
   <div class="nav">
-    <a class="brand" href="index.html">
+    <a class="brand" href="../index.html">
       <span class="brand-mark">C</span>
       <span class="brand-word">Cob</span>
     </a>
     <nav class="links">
-      <a href="about.html">About</a>
-      <a href="download.html">Downloads</a>
+      <a href="../about.html">About</a>
+      <a href="../download.html">Downloads</a>
       <a href="https://docs.cob.pixel-pulse.dev/">Docs</a>
-      <a href="play/index.html">Play</a>
-      <a href="community.html">Community</a>
-      <a class="nav-cta" href="download.html">Get Cob</a>
+      <a href="../community.html">Community</a>
+      <a href="index.html" aria-current="page">Play</a>
+      <a class="nav-cta" href="../download.html">Get Cob</a>
     </nav>
   </div>
 </header>
 
-<main id="top">
+<main>
 
-  <!-- HERO -->
-  <section class="hero" style="padding-top:76px;">
-    <div class="wrap hero-grid">
-      <div>
-        <div class="eyebrow-plain">v0.0.9 · Project Obsidian Falcon</div>
-        <h1>A little language,<br><em>threshed</em> down to size.</h1>
-        <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.0.9</a>
-          <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.dev/">Read the docs</a>
-        </div>
-        <div class="platform-row">
-          <span>Or grab it for:</span>
-          <a href="download.html#windows">Windows</a>
-          <a href="download.html#macos">macOS</a>
-          <a href="download.html#linux">Linux</a>
-        </div>
-      </div>
-
-      <div class="term" role="img" aria-label="Terminal showing a short Cob program that counts down from five and prints liftoff">
-        <div class="term-bar">
-          <span class="term-dot k"></span><span class="term-dot h"></span><span class="term-dot c"></span>
-          <span class="term-name">countdown.cob</span>
-        </div>
-        <div class="term-body">
-<div><span class="ln-num">1</span><span class="tk-fn">set</span> x = 5</div>
-<div><span class="ln-num">2</span><span class="tk-kw">while</span> x &gt; 0:</div>
-<div><span class="ln-num">3</span>    <span class="tk-fn">pop</span>(<span class="tk-str">"counting down"</span>)</div>
-<div><span class="ln-num">4</span>    <span class="tk-fn">set</span> x = x - 1</div>
-<div><span class="ln-num">5</span><span class="tk-fn">pop</span>(<span class="tk-str">"liftoff"</span>)</div>
-          <div class="term-out">$ cob_interp countdown.cob<br>counting down<br>counting down<br>counting down<br>counting down<br>counting down<br>liftoff</div>
-        </div>
+  <section class="page-head">
+    <div class="wrap">
+      <div class="eyebrow-plain">Zero-install</div>
+      <h1>Play with Cob</h1>
+      <p class="lede">A real build of <code class="mono">cob_interp</code>, compiled to WebAssembly, running entirely in this tab. Nothing is installed and nothing is sent anywhere — edit the script on the left, hit Run, and read the output on the right.</p>
+      <div class="examples" id="examples" style="margin-top:18px;">
+        <button data-ex="hello">Hello, world</button>
+        <button data-ex="loop">A while loop</button>
+        <button data-ex="strings">Strings</button>
+        <button data-ex="ifelse">if / else</button>
+        <button data-ex="recipe">A recipe (function)</button>
+        <button data-ex="recursion">Recursion</button>
+        <button data-ex="library">Text &amp; math library</button>
+        <button data-ex="ask">Ask a question</button>
+        <button data-ex="add">Add two numbers</button>
+        <button data-ex="sandbox">Desktop-only libraries</button>
       </div>
     </div>
   </section>
 
-  <!-- THREE TOOLS -->
   <section class="wrap">
-    <div class="section-head">
-      <h2>One toolchain, three jobs</h2>
-      <p>Each tool does exactly one thing — run a file, build a binary, or fetch a library — and hands off cleanly to the next.</p>
-    </div>
-    <div class="tools">
-      <div class="tool">
-        <span class="tool-cmd">cob_interp file.cob</span>
-        <h3>Interpret</h3>
-        <p>Runs a .cob file directly, with a fast-boot .strawberry bytecode cache so repeat runs skip re-parsing. Start it with no file for an interactive REPL.</p>
+    <div class="play-wrap">
+      <div class="play-pane">
+        <div class="play-pane-head">
+          <span><span class="dot"></span>script.cob</span>
+          <button class="run-btn" id="runBtn">Run <span class="kbd">⌘⏎</span></button>
+        </div>
+        <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
       </div>
-      <div class="tool">
-        <span class="tool-cmd">popcorn_comp file.strawberry -o out</span>
-        <h3>Compile</h3>
-        <p>Transpiles to C and spawns a real compiler to produce a standalone native binary &mdash; recipes and the whole standard library included. Cross-compile with CobOS/CobArch.</p>
+      <div class="play-pane">
+        <div class="play-pane-head"><span>Output</span></div>
+        <pre id="terminal"><span class="sys">Loading the WebAssembly build…</span></pre>
       </div>
-      <div class="tool">
-        <span class="tool-cmd">farmer harvest name</span>
-        <h3>Fetch</h3>
-        <p>Installs a .cob library from the package registry, zip-slip protected, ready to shuck straight into your program.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- STANDARD LIBRARY -->
-  <section class="wrap">
-    <div class="section-head">
-      <h2>A corn-themed standard library</h2>
-      <p>Everything beyond the core language is a real shared library, loaded with <code class="mono">shuck</code>. Every module and every function is corn themed.</p>
-    </div>
-    <div class="tools">
-      <div class="tool"><span class="tool-cmd">shuck porch</span><h3>porch</h3><p><code class="mono">porch_ask</code>, <code class="mono">porch_ask_int</code> &mdash; talk to whoever is at the keyboard.</p></div>
-      <div class="tool"><span class="tool-cmd">shuck cornmath</span><h3>cornmath</h3><p><code class="mono">husk_abs</code>, <code class="mono">ear_max</code>, <code class="mono">stalk_pow</code>, <code class="mono">silk_mod</code>, <code class="mono">scatter_rand</code> and more.</p></div>
-      <div class="tool"><span class="tool-cmd">shuck kernels</span><h3>kernels</h3><p>Text, kernel by kernel: <code class="mono">kernel_upper</code>, <code class="mono">kernel_slice</code>, <code class="mono">kernel_find</code>, <code class="mono">kernel_replace</code>&hellip;</p></div>
-      <div class="tool"><span class="tool-cmd">shuck almanac</span><h3>almanac</h3><p>The farmer's calendar and clock: <code class="mono">almanac_now</code>, <code class="mono">almanac_nap</code>, <code class="mono">almanac_stamp</code>&hellip;</p></div>
-      <div class="tool"><span class="tool-cmd">shuck granary</span><h3>granary</h3><p>Files, stored like grain: <code class="mono">granary_read</code>, <code class="mono">granary_write</code>, <code class="mono">granary_append</code>&hellip;</p></div>
-      <div class="tool"><span class="tool-cmd">shuck pantry</span><h3>pantry</h3><p>A SQLite database to keep things in: <code class="mono">pantry_open</code>, <code class="mono">pantry_exec</code>, <code class="mono">pantry_query</code>.</p></div>
-      <div class="tool"><span class="tool-cmd">shuck barn</span><h3>barn</h3><p>A window to put things in &mdash; buttons, sliders, text boxes (raylib + raygui).</p></div>
-      <div class="tool"><span class="tool-cmd">shuck silo</span><h3>silo</h3><p>The everyday five &mdash; porch, cornmath, kernels, almanac, granary &mdash; in one <code class="mono">shuck</code>.</p></div>
-    </div>
-  </section>
-
-  <!-- DOWNLOADS TEASER -->
-  <section class="wrap" id="downloads">
-    <div class="section-head">
-      <h2>Downloads</h2>
-      <p>Every release ships all three tools for nine platform/architecture combinations.</p>
     </div>
 
-    <div class="downloads">
-      <table class="dl">
-        <thead>
-          <tr><th>Platform</th><th>Architecture</th><th></th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="plat"><span class="plat-icon">⊞</span> Windows</td>
-            <td class="arch">amd64, 386, arm64</td>
-            <td><a class="get" href="download.html#windows">Get the installer →</a></td>
-          </tr>
-          <tr>
-            <td class="plat"><span class="plat-icon">⌘</span> macOS</td>
-            <td class="arch">amd64, arm64</td>
-            <td><a class="get" href="download.html#macos">Get the installer →</a></td>
-          </tr>
-          <tr>
-            <td class="plat"><span class="plat-icon">🐧</span> Linux</td>
-            <td class="arch">amd64, 386, arm64, arm</td>
-            <td><a class="get" href="download.html#linux">Get the installer →</a></td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="downloads-foot">
-        Need source, an older release, or a checksum? <a href="download.html">See the full downloads page →</a>
-      </div>
-    </div>
-  </section>
-
-  <!-- RELEASE NOTES -->
-  <section class="wrap">
-    <div class="release">
-      <div class="release-card">
-        <div class="rv">0.0.9</div>
-        <div class="rd">Latest release</div>
-        <ul>
-          <li><code class="mono">recipe</code> / <code class="mono">serve</code>: functions, with recursion, in both cob_interp and popcorn_comp</li>
-          <li>A REPL: run <code class="mono">cob_interp</code> with no file</li>
-          <li>A corn-themed standard library of shared libraries, loaded with <code class="mono">shuck</code> &mdash; <strong>breaking:</strong> <code class="mono">input</code>, SQLite, window and Tcl/Tk keywords moved into it</li>
-          <li>popcorn_comp can now compile SQLite and window programs</li>
-        </ul>
-        <a class="rlink" href="download.html">Full release notes →</a>
-      </div>
-
-      <div class="changelog">
-        <h3>Recent history</h3>
-        <div class="entry">
-          <span class="tag">0.0.9</span>
-          <strong>Functions, a REPL, and a real standard library</strong>
-          <p><code class="mono">recipe add(a, b):</code> defines a function and <code class="mono">serve a + b</code> hands a value back &mdash; like Python's <code class="mono">def</code> and <code class="mono">return</code>. Parameters and every name a recipe <code class="mono">set</code>s are local to it, recipes may recurse (500 calls deep, then a warning instead of a crash), and a wrong call is an error before the program starts, with its line number. Run <code class="mono">cob_interp</code> with no file for an interactive session where a bare expression prints its value. And the language got smaller on purpose: <code class="mono">input</code>, SQLite, windows and Tcl/Tk are no longer built into the interpreter. They are shared libraries (<code class="mono">porch</code>, <code class="mono">pantry</code>, <code class="mono">barn</code>, <code class="mono">tassel</code>) beside new ones for numbers, text, time and files &mdash; each loaded with <code class="mono">shuck</code>, every name corn themed. The compiler can finally compile the SQLite and window programs, and two compiler bugs are fixed: <code class="mono">set s = s + "x"</code> lost the old string, and operands that print could run right-to-left. The .strawberry cache format bumped to COBSTRW10.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.8</span>
-          <strong>Programs can finally ask questions</strong>
-          <p>Until now a Cob program could only talk. <code class="mono">set name = input("What is your name? ")</code> prints the prompt, waits for a line of typing, and hands it back as a string; <code class="mono">input_int(&lt;prompt&gt;)</code> does the same and parses the line as a whole number (a non-number, or the end of the input, gives 0, with a warning for the first). The prompt is optional &mdash; <code class="mono">input()</code> is fine &mdash; and at the end of the input <code class="mono">input()</code> returns an empty string, so piping a file into a program just works. Shipped in both cob_interp and popcorn_comp, which behave identically, and in the <a href="play/index.html">playground</a>. The .strawberry cache format bumped to COBSTRW9, so older caches are rebuilt automatically. Also fixed: a small leak in compiled programs that tested a string for truthiness (<code class="mono">if name:</code>).</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.7</span>
-          <strong>if / elif / else</strong>
-          <p>Cob finally has conditionals. <code class="mono">if &lt;condition&gt;:</code> runs an indented block when the condition is true; optional <code class="mono">elif &lt;condition&gt;:</code> and <code class="mono">else:</code> blocks follow at the same indentation. Conditions work exactly like <code class="mono">while</code> conditions (comparisons on two numbers or two strings, or a bare truthiness test), and blocks nest freely inside each other and inside loops. Shipped in both cob_interp and popcorn_comp, which print identical output for the same program. The .strawberry cache format bumped to COBSTRW8, so older caches are rebuilt automatically.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.6</span>
-          <strong>A C API / FFI, and a WebAssembly playground</strong>
-          <p><code class="mono">extern &lt;name&gt;(...) from "&lt;lib&gt;"</code> binds a Cob name to an exported C function with one fixed signature (see <code class="mono">include/cob.h</code>) — cob_interp resolves it eagerly with dlopen/dlsym, while popcorn_comp emits a real forward declaration and links the library directly at compile time, no dlopen in the compiled binary at all. Also new: the pure-language core compiles to WebAssembly, powering an in-browser <a href="play/index.html">playground</a> — desktop-only keywords (SQLite, _cobwindow, and now extern) no-op there with a one-time notice instead of crashing, so the rest of the script keeps running.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.5</span>
-          <strong>SQLite, native windows, and widgets — all with zero autoconf</strong>
-          <p>Plain `make` now builds cob_interp_full: SQLite (sql_open/sql_exec/sql_query/sql_close) plus a native window backed by raylib (window_open/window_label/window_wait/window_close), with raygui-backed window_button/window_slider/window_textbox for real, interactive buttons, sliders, and text boxes. Tcl/Tk moved to the separate `cob_interp_db` build — still available, just no longer in the default dependency chain.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.4</span>
-          <strong>Strings, and pop() that can finally print a variable</strong>
-          <p>Cob variables were integers only since the language's first release. This adds strings: pop(&lt;expr&gt;) accepts any expression instead of only a literal, "+" concatenates, and ==/!=/&lt;/&gt;/&lt;=/&gt;= work on two strings the same way they already did on two numbers. Shipped in both cob_interp and popcorn_comp — a compiled binary behaves identically to the interpreted program, including matching type-mismatch warnings.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.3-bug-fix-2</span>
-          <strong>Project moved to the Cob-Software-Foundation GitHub org</strong>
-          <p>All three repos (Cob, cpi, and the new Cob-Docs) now live under Cob-Software-Foundation instead of pixel-pulse-labs. Every hardcoded repo/registry URL was updated, including farmer's default package registry (COB_FARMER_DEFAULT_BASE_URL), so a plain `farmer harvest &lt;package&gt;` resolves correctly without setting $COB_FARMER_BASE_URL by hand.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.3-bug-fix-1</span>
-          <strong>popcorn_comp: fixed a Windows-only cmd.exe quoting bug</strong>
-          <p>Auto-resolving a bundled zig/ folder next to popcorn_comp could produce a compiler command cmd.exe corrupted before it reached the shell. Explicit --cc/$CobCC compiles were never affected.</p>
-        </div>
-        <div class="entry">
-          <span class="tag">0.0.3</span>
-          <strong>Project Obsidian Falcon</strong>
-          <p>popcorn_comp dropped its embedded TCC in favor of spawning a real compiler (Zig by default); farmer moved to in-process zip extraction with zip-slip protection; SQLite, Tcl, and Tk vendored (not yet wired into the language).</p>
-        </div>
-      </div>
-    </div>
+    <p class="play-note">
+      This is <code>cob_interp</code> built for the browser. A tab can't <code>dlopen()</code> a
+      shared library, so the standard library modules that can run in a browser
+      (<code>porch</code>, <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>) are
+      compiled into it and <code>shuck</code> loads them as usual. The ones that need a real
+      computer &mdash; <code>pantry</code> (SQLite), <code>barn</code> (windows),
+      <code>granary</code> (files) &mdash; and any native
+      <code>extern</code> library quietly do nothing and print a one-time notice, so the rest
+      of your script keeps going. <code>porch_ask()</code> and <code>porch_ask_int()</code> ask
+      with a browser dialog (a tab has no keyboard to read); press Cancel and the program sees
+      the end of its input. Want the full thing? <a href="../download.html">Download the native
+      build</a> for real windows, databases, files, a REPL, and C extensions.
+    </p>
   </section>
 
 </main>
@@ -224,17 +152,17 @@
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="download.html">Downloads</a></li>
+          <li><a href="../download.html">Downloads</a></li>
           <li><a href="https://docs.cob.pixel-pulse.dev/">Documentation</a></li>
-          <li><a href="about.html">About</a></li>
+          <li><a href="../about.html">About</a></li>
         </ul>
       </div>
       <div>
         <h4>Community</h4>
         <ul>
-          <li><a href="community.html">Get involved</a></li>
+          <li><a href="../community.html">Get involved</a></li>
           <li><a href="https://github.com/Cob-Software-Foundation/Cob">GitHub</a></li>
-          <li><a href="https://cpi.cob.pixel-pulse.dev/download.html">Package registry</a></li>
+          <li><a href="https://github.com/Cob-Software-Foundation/cpi">Package registry</a></li>
         </ul>
       </div>
       <div>
@@ -251,6 +179,228 @@
     </div>
   </div>
 </footer>
+
+<script src="cob_interp.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var editor = document.getElementById("editor");
+  var terminal = document.getElementById("terminal");
+  var runBtn = document.getElementById("runBtn");
+
+  var EXAMPLES = {
+    hello: 'pop("Hello, world!")\n',
+    loop:
+      'set i = 0\n' +
+      'while i < 5:\n' +
+      '    pop("counting: " + i)\n' +
+      '    set i = i + 1\n' +
+      'pop("done")\n',
+    strings:
+      'set name = "corn"\n' +
+      'pop("hello, " + name + "!")\n' +
+      '# + joins text; a number is turned into text when joined\n' +
+      'set total = 1 + 1\n' +
+      'pop("1 + 1 is " + total)\n',
+    ifelse:
+      'set score = 85\n' +
+      'if score >= 90:\n' +
+      '    pop("grade: A")\n' +
+      'elif score >= 80:\n' +
+      '    pop("grade: B")\n' +
+      'else:\n' +
+      '    pop("keep practicing")\n',
+    recipe:
+      '# recipe defines a function, serve hands a value back\n' +
+      'recipe add(a, b):\n' +
+      '    serve a + b\n' +
+      '\n' +
+      'recipe greet(name):\n' +
+      '    pop("Hello, " + name + "!")\n' +
+      '\n' +
+      'pop(add(2, 3))\n' +
+      'greet("Ada")\n',
+    recursion:
+      '# a recipe can call itself\n' +
+      'recipe fact(n):\n' +
+      '    if n <= 1:\n' +
+      '        serve 1\n' +
+      '    serve n * fact(n - 1)\n' +
+      '\n' +
+      'set i = 1\n' +
+      'while i <= 10:\n' +
+      '    pop(i + "! = " + fact(i))\n' +
+      '    set i = i + 1\n',
+    library:
+      '# the standard library: shuck brings a module in\n' +
+      'shuck kernels\n' +
+      'shuck cornmath\n' +
+      '\n' +
+      'pop(kernel_upper("corn on the cob"))\n' +
+      'pop(kernel_replace("a-b-c", "-", " + "))\n' +
+      'pop(stalk_pow(2, 10))\n' +
+      'pop(ear_max(3, 9))\n' +
+      'pop(silk_mod(0 - 7, 3))\n',
+    ask:
+      'shuck porch\n' +
+      'set name = porch_ask("What is your name? ")\n' +
+      'pop("Nice to meet you, " + name + "!")\n',
+    add:
+      '# porch_ask_int turns what you type into a number\n' +
+      'shuck porch\n' +
+      'set a = porch_ask_int("First number? ")\n' +
+      'set b = porch_ask_int("Second number? ")\n' +
+      'set total = a + b\n' +
+      'pop("Total: " + total)\n',
+    sandbox:
+      '# pantry (SQLite) and barn (windows) are desktop\n' +
+      '# libraries -- in this browser sandbox they quietly do nothing (see the\n' +
+      '# note below the playground) instead of crashing, so the rest of the\n' +
+      '# script still runs.\n' +
+      'shuck pantry\n' +
+      'set h = pantry_open(":memory:")\n' +
+      'pop("pantry handle=" + h)\n' +
+      'extern calculate_fast(x) from "math_ext.so"\n' +
+      'pop("extern result=" + calculate_fast(6))\n' +
+      'pop("still running after both")\n'
+  };
+
+  editor.value = EXAMPLES.hello;
+
+  document.getElementById("examples").addEventListener("click", function (e) {
+    var key = e.target && e.target.getAttribute("data-ex");
+    if (key && EXAMPLES[key]) editor.value = EXAMPLES[key];
+  });
+
+  function appendLine(text, cls) {
+    var span = document.createElement("span");
+    if (cls) span.className = cls;
+    // textContent, never innerHTML -- this is the script's own stdout/
+    // stderr, i.e. untrusted text, not markup.
+    span.textContent = text;
+    terminal.appendChild(span);
+    terminal.appendChild(document.createTextNode("\n"));
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  function clearTerminal() {
+    terminal.textContent = "";
+  }
+
+  function lineClassFor(line) {
+    if (line.indexOf("[cob_interp] error") === 0) return "err";
+    if (line.indexOf("[cob_interp] warning") === 0) return "warn";
+    if (line.indexOf("\u26A0") === 0) return "warn"; // the sandbox ⚠️ notice
+    if (line.indexOf("\uD83D\uDC49") === 0) return "warn"; // the sandbox 👉 notice
+    return null;
+  }
+
+  var moduleReady = typeof createCobModule === "function";
+  if (moduleReady) {
+    clearTerminal();
+    appendLine("Ready. Click Run, or press \u2318/Ctrl+Enter.", "sys");
+  } else {
+    clearTerminal();
+    appendLine(
+      "Couldn't load the WebAssembly build (cob_interp.js/.wasm). " +
+      "If you're running this site locally, build it first with `make play`.",
+      "err"
+    );
+  }
+
+  var running = false;
+
+  async function run() {
+    if (running || !moduleReady) return;
+    running = true;
+    runBtn.disabled = true;
+    clearTerminal();
+
+    var sawOutput = false;
+    function onOut(line) { sawOutput = true; appendLine(line, lineClassFor(line)); }
+    function onErr(line) { sawOutput = true; appendLine(line, lineClassFor(line) || "err"); }
+
+    // Console input. porch_ask()/porch_ask_int() read stdin, and a browser tab has no keyboard, so each
+    // read asks with a browser dialog that shows the program's own prompt text, then echoes the
+    // question and answer into the output like a terminal would. Cancel means "end of input".
+    // Output arrives byte by byte so a prompt with no newline ("Name? ") is visible when asked.
+    var dec = new TextDecoder(), enc = new TextEncoder();
+    function lineSink(onLine) {
+      var bytes = [];
+      function take() { var t = dec.decode(new Uint8Array(bytes)); bytes = []; return t; }
+      return { take: take, put: function (c) {
+        if (c === null || c === undefined) return;
+        c &= 255;
+        if (c === 10) onLine(take()); else bytes.push(c);
+      } };
+    }
+    var so = lineSink(onOut), se = lineSink(onErr);
+    var cur = null, at = 0, eol = false, cancelled = false;
+    function stdin() {
+      if (eol) { eol = false; return null; }          // one line per read, like a terminal
+      if (!cur) {
+        if (cancelled) { var lost = so.take(); if (lost) onOut(lost); return null; }   // already cancelled: don't nag again
+        var asked = so.take();                        // e.g. "What is your name? "
+        var answer = window.prompt(asked || "Input:", "");
+        if (answer === null) {
+          cancelled = true;
+          onOut(asked);
+          appendLine("(input cancelled \u2014 the program now sees the end of its input)", "sys");
+          return null;
+        }
+        answer = answer.replace(/[\r\n]+/g, " ");
+        onOut(asked + answer);                        // echo the question and the answer
+        cur = enc.encode(answer + "\n"); at = 0;
+      }
+      var c = cur[at++];
+      if (at >= cur.length) { cur = null; eol = true; }
+      return c;
+    }
+
+    try {
+      // One fresh module instance per run, matching the Makefile's
+      // MODULARIZE+EXIT_RUNTIME design: script state, the once-per-run
+      // sandbox-warning flag, and the extern table all start clean every
+      // time, with nothing left over from a previous run.
+      var Module = await createCobModule({
+        stdin: stdin, stdout: so.put, stderr: se.put,
+        print: onOut, printErr: onErr   // fallbacks if a build ignores stdout/stderr
+      });
+      Module.FS.writeFile("/program.cob", editor.value);
+      // --no-cache: a fresh in-memory FS every run makes a .strawberry
+      // cache pointless, and skipping it avoids ever reading a stale one.
+      Module.callMain(["/program.cob", "--no-cache"]);
+      var rest = so.take(); if (rest) onOut(rest);
+    } catch (e) {
+      // callMain throws on a nonzero exit() (an ExitStatus object) as
+      // well as on a real crash -- only the latter is unexpected here.
+      if (!(e && typeof e.status === "number")) {
+        appendLine("Internal error running the sandbox: " + e, "err");
+      } else if (!sawOutput) {
+        appendLine("(exited with status " + e.status + ", no output)", "sys");
+      }
+    } finally {
+      running = false;
+      runBtn.disabled = false;
+    }
+  }
+
+  runBtn.addEventListener("click", run);
+  editor.addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
+    // Plain-textarea editors eat Tab by default (focus moves away) --
+    // insert a real tab character instead, since Cob's while-blocks are
+    // indentation-delimited.
+    if (e.key === "Tab") {
+      e.preventDefault();
+      var start = editor.selectionStart, end = editor.selectionEnd;
+      editor.value = editor.value.slice(0, start) + "    " + editor.value.slice(end);
+      editor.selectionStart = editor.selectionEnd = start + 4;
+    }
+  });
+})();
+</script>
 
 </body>
 </html>
