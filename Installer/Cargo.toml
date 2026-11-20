@@ -1,0 +1,10 @@
+[package]
+name = "my_app_sfx"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+dirs = "5.0"
+rfd = "0.15"
