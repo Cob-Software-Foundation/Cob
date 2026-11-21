@@ -12,8 +12,6 @@ fn stdlib_module_for(name: &str) -> Option<&'static str> {
         ("granary_", "granary"),
         ("pantry_", "pantry"),
         ("barn_", "barn"),
-        ("bushel_", "bushel"),
-        ("furrow_", "furrow"),
         ("husk_", "cornmath"),
         ("ear_", "cornmath"),
         ("stalk_", "cornmath"),

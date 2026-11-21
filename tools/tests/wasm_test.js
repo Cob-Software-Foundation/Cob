@@ -63,7 +63,7 @@ const read = (f) => fs.readFileSync(path.join(HERE, f), "utf8");
 
 (async () => {
   // 1. the shared fixtures: wasm must produce the .expected output
-  for (const name of ["functions", "if_statements", "lists_and_arrays"]) {
+  for (const name of ["functions", "if_statements"]) {
     const r = await runWasm(read(name + ".cob"));
     expectEq("wasm  " + name + " (matches .expected)", r.out, read(name + ".expected"));
   }
@@ -73,7 +73,7 @@ const read = (f) => fs.readFileSync(path.join(HERE, f), "utf8");
   }
 
   // 2. differential: stdout, stderr and exit code identical to the native build
-  for (const name of ["parity_language", "parity_stdlib", "functions", "if_statements", "lists_and_arrays"]) {
+  for (const name of ["parity_language", "parity_stdlib", "functions", "if_statements"]) {
     const w = await runWasm(read(name + ".cob"));
     const n = runNative(path.join(HERE, name + ".cob"));
     expectEq("parity " + name + " stdout", w.out, n.out);

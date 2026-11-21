@@ -1,7 +1,7 @@
 [package]
 name = "cob-wasm"
 description = "The Cob interpreter for the browser playground (WebAssembly)"
-version = "0.0.10"
+version = "0.0.9"
 edition = "2021"
 license-file = "../../LICENSE.md"
 build = "build.rs"
@@ -16,8 +16,6 @@ porch = { path = "../../stdlib-rs/porch" }
 cornmath = { path = "../../stdlib-rs/cornmath" }
 kernels = { path = "../../stdlib-rs/kernels" }
 almanac = { path = "../../stdlib-rs/almanac" }
-bushel = { path = "../../stdlib-rs/bushel" }
-furrow = { path = "../../stdlib-rs/furrow" }
 
 # Built for wasm32-unknown-unknown, so it lives outside the main workspace
 # (`cargo build --workspace` on a normal machine must not try to link it).

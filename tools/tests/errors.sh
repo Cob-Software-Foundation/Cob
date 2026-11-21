@@ -15,8 +15,6 @@ expect "call with too few arguments"  'recipe f(a, b):\n    serve a\npop(f(1))\n
 expect "call to an unknown name"      'pop(nothere(1))\n'                          "call to 'nothere', which is not a recipe or a library function"
 expect "stdlib function without shuck" 'pop(porch_ask("x"))\n'                     "add \`shuck porch\`"
 expect "stdlib cornmath without shuck" 'pop(ear_max(1, 2))\n'                      "add \`shuck cornmath\`"
-expect "stdlib bushel without shuck"   'pop(bushel_len(1))\n'                       "add \`shuck bushel\`"
-expect "stdlib furrow without shuck"   'pop(furrow_get(1, 0))\n'                     "add \`shuck furrow\`"
 expect "old input() is gone"          'set x = input("a")\n'                       "'input' is now porch_ask()"
 expect "old input_int() is gone"      'set x = input_int("a")\n'                   "porch_ask_int"
 expect "old sql_open() is gone"       'set h = sql_open("a.db")\n'                 "pantry_open"

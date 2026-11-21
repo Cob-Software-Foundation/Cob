@@ -156,7 +156,7 @@ impl Session {
         out("  :load <file.cob>  run a file inside this session\n");
         out("  :reset            forget all variables, recipes and loaded libraries\n");
         out("  :quit             leave (or press Ctrl-D)\n");
-        out("Libraries: shuck porch | cornmath | kernels | almanac | granary | bushel | furrow | pantry | barn | silo\n");
+        out("Libraries: shuck porch | cornmath | kernels | almanac | granary | pantry | barn | silo\n");
     }
 
     /// Returns true to leave the REPL.
