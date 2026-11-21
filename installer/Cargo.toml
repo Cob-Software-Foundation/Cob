@@ -1,0 +1,25 @@
+[package]
+name = "cob_installer"
+version = "0.0.10"
+edition = "2021"
+description = "Self-extracting setup wizard for Cob"
+
+# Not part of the main Cob workspace (it needs a newer Rust than the 1.75 MSRV
+# and pulls in a GUI stack the language itself must never depend on).
+[workspace]
+
+[dependencies]
+eframe = "0.29"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+dirs = "5.0"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

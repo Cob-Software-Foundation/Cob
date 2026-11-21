@@ -8,6 +8,7 @@
 #   bin/lib/                 the STANDARD LIBRARY: one shared library per
 #                            module plus the tiny .cob wrapper `shuck <m>`
 #                            loads:  porch cornmath kernels almanac granary
+#                            bushel (lists) furrow (arrays)
 #                            pantry (SQLite, from vendor/SQLite)
 #
 # `make` (the default `all` target) builds the free tools and, when
@@ -67,7 +68,7 @@ else
 endif
 
 REL         = $(OUT_ROOT)/release
-STDLIB_MODULES = porch cornmath kernels almanac granary pantry
+STDLIB_MODULES = porch cornmath kernels almanac granary pantry bushel furrow
 STDLIB_COB  = $(wildcard stdlib/*.cob)
 SLEEP_CMD  ?= sleep 1
 

@@ -1,3 +1,59 @@
+# Cob Language v0.0.10
+
+## Overview
+
+**Lists and arrays.** Two new standard library modules, loaded with `shuck`
+like every other. They are ordinary shared libraries (and are linked into
+the browser playground), so the core language, the `.strawberry` cache
+format and the C that `popcorn_comp` emits are unchanged.
+
+```
+shuck bushel
+shuck furrow
+
+set fruit = bushel_new()
+bushel_push(fruit, "pear")
+bushel_push(fruit, 30)
+bushel_sort(fruit)
+pop(bushel_join(fruit, ", "))        # 30, pear
+
+set row = furrow_new(5)              # five slots, all 0
+furrow_set(row, 2, 7)
+pop(furrow_sum(row))                 # 7
+```
+
+- `bushel` -- lists that grow: `bushel_new`, `bushel_free`, `bushel_len`,
+  `bushel_push`, `bushel_get`, `bushel_set`, `bushel_insert`,
+  `bushel_remove`, `bushel_clear`, `bushel_find`, `bushel_sort`,
+  `bushel_reverse`, `bushel_extend`, `bushel_copy`, `bushel_join`,
+  `bushel_split`.
+- `furrow` -- fixed-length arrays: `furrow_new`, `furrow_free`,
+  `furrow_len`, `furrow_get`, `furrow_set`, `furrow_fill`, `furrow_swap`,
+  `furrow_find`, `furrow_sum`, `furrow_sort`, `furrow_copy`.
+
+Items are numbers or strings, mixed freely; positions count from 0; a
+number never equals a string (`bushel_find(b, 3)` will not match "3").
+Like `harvest()` and `pantry_open()`, a list or array is a handle (a whole
+number, 1 or more). A bad handle or an out-of-range position prints one
+`[bushel]` / `[furrow]` warning and gives 0 (or 1 from the functions that
+return a status) -- it never stops the program. A list holds at most
+10,000,000 items. `silo` is unchanged.
+
+**Setup wizards for Windows and macOS.** A graphical installer in the Cob
+colours: `Cob-0.0.10-Setup-windows-amd64.exe`, and a `.dmg` with `Cob Setup.app`
+for each of Apple Silicon (`macos-arm64`) and Intel (`macos-amd64`). It unpacks
+Cob to a folder you choose -- portable, with no registry, `PATH` or
+administrator changes -- and shows real progress. The installers are not code
+signed yet, so Windows SmartScreen and macOS Gatekeeper will each ask you to
+approve them once.
+
+## Notes
+
+- Programs written for 0.0.9 run unchanged.
+- Builds of Cob older than 0.0.10 carry the old DRM public keys.
+
+---
+
 # Cob Language v0.0.9
 
 ## Overview

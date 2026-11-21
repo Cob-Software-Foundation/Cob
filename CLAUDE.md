@@ -18,7 +18,7 @@ make wasm-test       # build the browser module, check it against native under N
 make TARGET=<triple> # cross-compile (rustup target add <triple> first)
 ```
 
-`make test` must end with `17 passed, 0 failed` and exit 0. Run the interpreter
+`make test` must end with `19 passed, 0 failed` and exit 0. Run the interpreter
 from the repo with `bin/cob_interp file.cob` (add `--no-cache` while testing, or
 a stale `.strawberry` cache can hide your change).
 

@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "almanac"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
  "libc",
@@ -32,6 +32,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "bushel"
+version = "0.0.10"
+dependencies = [
+ "cob-abi",
 ]
 
 [[package]]
@@ -57,11 +64,11 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "cob-abi"
-version = "0.0.9"
+version = "0.0.10"
 
 [[package]]
 name = "cob-core"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
  "libloading",
@@ -69,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "cob-drm"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "blake2",
  "curve25519-dalek",
@@ -79,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "cob_interp"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
  "cob-core",
@@ -88,14 +95,14 @@ dependencies = [
 
 [[package]]
 name = "cob_sign"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-drm",
 ]
 
 [[package]]
 name = "cornmath"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
 ]
@@ -174,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "farmer"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-core",
  "sha2",
@@ -198,6 +205,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "furrow"
+version = "0.0.10"
+dependencies = [
+ "cob-abi",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -209,14 +223,14 @@ dependencies = [
 
 [[package]]
 name = "granary"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
 ]
 
 [[package]]
 name = "kernels"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
 ]
@@ -249,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "pantry"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cc",
  "cob-abi",
@@ -263,7 +277,7 @@ checksum = "9245c6e7c5a6bcdd7977fdf6d1e1c67f4cc2d0d58c041df0ea5940953033e6ca"
 
 [[package]]
 name = "popcorn_comp"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
  "cob-core",
@@ -272,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "porch"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "cob-abi",
 ]

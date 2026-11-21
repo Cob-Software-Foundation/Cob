@@ -468,6 +468,115 @@ jobs:
           dist/cob-*-embed_enterprise-${{ matrix.goos }}-${{ matrix.goarch }}.zip.hashfrag
 
   # ---------------------------------------------------------------------
+  # Setup wizards (installer/). One per platform, built natively on its own
+  # runner. Each embeds THAT platform's release archive from the matrix above
+  # (the wizard strips the archive's wrapper folder), so the installer and the
+  # zip always carry the same files.
+  #
+  #   Windows  Cob-<version>-Setup-windows-amd64.exe
+  #   macOS    Cob-<version>-Setup-macos-<arm64|amd64>.dmg  (Cob Setup.app inside)
+  #
+  # Unsigned: Windows SmartScreen and macOS Gatekeeper will each ask the user to
+  # approve it once. The files are named artifact-installer-* so the release job
+  # publishes them, while the deb job (artifact-cob-linux-*) never sees them.
+  # ---------------------------------------------------------------------
+  installer:
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            runner: windows-2022
+            payload: cob-windows-amd64
+            ext: exe
+          - name: macos-arm64
+            runner: macos-15
+            payload: cob-darwin-arm64
+            ext: dmg
+          - name: macos-amd64
+            runner: macos-15-intel
+            payload: cob-darwin-amd64
+            ext: dmg
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true
+
+    - name: Download this platform's release archive
+      uses: actions/download-artifact@v4
+      with:
+        name: artifact-${{ matrix.payload }}
+        path: payload-in
+
+    - name: Use it as the wizard's payload
+      shell: bash
+      run: |
+        zip_path=$(find payload-in -name "${{ matrix.payload }}.zip" | head -n 1)
+        [ -n "$zip_path" ] || { echo "no ${{ matrix.payload }}.zip in the artifact"; find payload-in; exit 1; }
+        cp "$zip_path" installer/payload.zip
+        ls -l installer/payload.zip
+
+    # egui 0.29 needs a newer Rust than the main workspace's 1.75 MSRV.
+    - name: Use a current stable Rust
+      shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup default stable
+        cargo --version
+
+    - name: Build the wizard
+      shell: bash
+      working-directory: installer
+      run: |
+        if [ "$RUNNER_OS" = "macOS" ]; then export MACOSX_DEPLOYMENT_TARGET=11.0; fi
+        cargo build --release
+
+    - name: Package it
+      shell: bash
+      working-directory: installer
+      run: |
+        VERSION=$(tr -d '[:space:]' < ../VERSION)
+        OUT="dist/Cob-${VERSION}-Setup-${{ matrix.name }}.${{ matrix.ext }}"
+        mkdir -p dist
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          cp target/release/cob_installer.exe "$OUT"
+        else
+          tools/package_macos.sh target/release/cob_installer "$OUT"
+        fi
+        ls -l dist
+
+    - name: Attest Build Provenance
+      uses: actions/attest-build-provenance@v4.2.2
+      with:
+        subject-path: installer/dist/Cob-*-Setup-${{ matrix.name }}.${{ matrix.ext }}
+
+    - name: Generate individual hash and text fragment
+      shell: bash
+      working-directory: installer/dist
+      run: |
+        . ../../tools/ci/portable.sh
+        for f in Cob-*-Setup-${{ matrix.name }}.${{ matrix.ext }}; do
+          sha256 "$f" > "$f.sha256"
+          sha256 "$f" > "$f.hashfrag"
+        done
+
+    - name: Upload installer artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifact-installer-${{ matrix.name }}
+        if-no-files-found: error
+        path: |
+          installer/dist/Cob-*-Setup-${{ matrix.name }}.${{ matrix.ext }}
+          installer/dist/Cob-*-Setup-${{ matrix.name }}.${{ matrix.ext }}.sha256
+          installer/dist/Cob-*-Setup-${{ matrix.name }}.${{ matrix.ext }}.hashfrag
+
+  # ---------------------------------------------------------------------
   # Debian package. ONE signed .deb that carries every Linux architecture
   # (amd64, i386, arm64, armhf), built from the Linux zips the matrix above
   # already produced. On install, the postinst script keeps the build that
@@ -883,7 +992,7 @@ jobs:
         if [ -n "${GPG_PASSFILE:-}" ]; then rm -f "$GPG_PASSFILE"; fi
 
   release:
-    needs: [build, deb]
+    needs: [build, deb, installer]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
