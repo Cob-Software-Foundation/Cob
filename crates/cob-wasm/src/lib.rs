@@ -4,8 +4,8 @@
 //!
 //!   * no files: the program text is handed in, and every standard-library
 //!     `.cob` wrapper is compiled in so `shuck porch` just works;
-//!   * no dlopen(): porch, cornmath, kernels and almanac are linked in and bound
-//!     by name; any other `extern` (pantry, granary, barn, your own C) is a
+//!   * no dlopen(): porch, cornmath, kernels, almanac, bushel and furrow are
+//!     linked in and bound by name; any other `extern` (pantry, granary, barn, your own C) is a
 //!     no-op stub that prints one notice per library;
 //!   * console, clock and sleep come from the page (see docs/play/cob_interp.js).
 //!
@@ -23,7 +23,9 @@ use cob_core::Session;
 static WRAPPERS: &[(&str, &str)] = &[
     ("almanac", include_str!("../../../stdlib/almanac.cob")),
     ("barn", include_str!("../../../stdlib/barn.cob")),
+    ("bushel", include_str!("../../../stdlib/bushel.cob")),
     ("cornmath", include_str!("../../../stdlib/cornmath.cob")),
+    ("furrow", include_str!("../../../stdlib/furrow.cob")),
     ("granary", include_str!("../../../stdlib/granary.cob")),
     ("kernels", include_str!("../../../stdlib/kernels.cob")),
     ("pantry", include_str!("../../../stdlib/pantry.cob")),
@@ -34,7 +36,14 @@ static WRAPPERS: &[(&str, &str)] = &[
 /// The linked-in modules' functions, as one table.
 fn static_table() -> &'static [(&'static str, CobFFIFunc)] {
     let mut all: Vec<(&'static str, CobFFIFunc)> = Vec::new();
-    for t in [porch::EXPORTS, cornmath::EXPORTS, kernels::EXPORTS, almanac::EXPORTS] {
+    for t in [
+        porch::EXPORTS,
+        cornmath::EXPORTS,
+        kernels::EXPORTS,
+        almanac::EXPORTS,
+        bushel::EXPORTS,
+        furrow::EXPORTS,
+    ] {
         all.extend_from_slice(t);
     }
     // one table per run (the instance is thrown away afterwards)

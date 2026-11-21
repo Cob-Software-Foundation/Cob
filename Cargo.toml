@@ -14,13 +14,15 @@ members = [
     "stdlib-rs/almanac",
     "stdlib-rs/granary",
     "stdlib-rs/pantry",
+    "stdlib-rs/bushel",
+    "stdlib-rs/furrow",
 ]
 # stdlib-rs/barn (raylib window) is opt-in: it needs X11 + OpenGL dev headers.
 # Build it with `make stdlib-barn`.
 exclude = ["stdlib-rs/barn"]
 
 [workspace.package]
-version = "0.0.9"
+version = "0.0.10"
 edition = "2021"
 license-file = "LICENSE.md"
 repository = "https://github.com/Cob-Software-Foundation/Cob"
