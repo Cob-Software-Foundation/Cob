@@ -547,7 +547,8 @@ jobs:
         if [ "$RUNNER_OS" = "Windows" ]; then
           cp target/release/cob_installer.exe "$OUT"
         else
-          tools/package_macos.sh target/release/cob_installer "$OUT"
+          # run through bash so a lost executable bit (zip / web uploads drop it) cannot break the build
+          bash tools/package_macos.sh target/release/cob_installer "$OUT"
         fi
         ls -l dist
 

@@ -103,6 +103,7 @@
         <button data-ex="recipe">A recipe (function)</button>
         <button data-ex="recursion">Recursion</button>
         <button data-ex="library">Text &amp; math library</button>
+        <button data-ex="lists">Lists &amp; arrays</button>
         <button data-ex="ask">Ask a question</button>
         <button data-ex="add">Add two numbers</button>
         <button data-ex="sandbox">Desktop-only libraries</button>
@@ -128,7 +129,8 @@
     <p class="play-note">
       This is <code>cob_interp</code> built for the browser. A tab can't <code>dlopen()</code> a
       shared library, so the standard library modules that can run in a browser
-      (<code>porch</code>, <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>) are
+      (<code>porch</code>, <code>cornmath</code>, <code>kernels</code>, <code>almanac</code>,
+      <code>bushel</code> for lists, <code>furrow</code> for arrays) are
       compiled into it and <code>shuck</code> loads them as usual. The ones that need a real
       computer &mdash; <code>pantry</code> (SQLite), <code>barn</code> (windows),
       <code>granary</code> (files) &mdash; and any native
@@ -242,6 +244,21 @@
       'pop(stalk_pow(2, 10))\n' +
       'pop(ear_max(3, 9))\n' +
       'pop(silk_mod(0 - 7, 3))\n',
+    lists:
+      '# bushel is a list that grows; furrow is an array of fixed length\n' +
+      'shuck bushel\n' +
+      'shuck furrow\n' +
+      '\n' +
+      'set fruit = bushel_split("pear,apple,fig", ",")\n' +
+      'bushel_push(fruit, "plum")\n' +
+      'bushel_sort(fruit)\n' +
+      'pop(bushel_join(fruit, ", "))\n' +
+      'pop("fruit: " + bushel_len(fruit))\n' +
+      '\n' +
+      'set row = furrow_new(5)\n' +
+      'furrow_fill(row, 2)\n' +
+      'furrow_set(row, 4, 10)\n' +
+      'pop("sum: " + furrow_sum(row))\n',
     ask:
       'shuck porch\n' +
       'set name = porch_ask("What is your name? ")\n' +

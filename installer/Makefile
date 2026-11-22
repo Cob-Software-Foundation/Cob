@@ -30,7 +30,7 @@ else ifeq ($(shell uname -s),Darwin)
     MAC_LABEL  := $(if $(filter arm64 aarch64,$(shell uname -m)),arm64,amd64)
     FINAL_NAME := Cob-$(VERSION)-Setup-macos-$(MAC_LABEL).dmg
     # wrap it in Cob Setup.app and a .dmg (see tools/package_macos.sh)
-    PACKAGE     = tools/package_macos.sh target/release/$(INSTALLER_BIN) $@
+    PACKAGE     = bash tools/package_macos.sh target/release/$(INSTALLER_BIN) $@
     RUN         = open $(FINAL_SETUP)
 else
     EXE_EXT    :=

@@ -2,7 +2,7 @@
 # Packages the release build of the wizard as "Cob Setup.app" inside a .dmg.
 #
 #   cargo build --release
-#   tools/package_macos.sh [path/to/cob_installer] [out.dmg]
+#   bash tools/package_macos.sh [path/to/cob_installer] [out.dmg]
 #
 # Run it on macOS (it needs `codesign` and `hdiutil`). Build on the architecture you
 # are shipping for: the payload inside the wizard is that architecture's Cob, so

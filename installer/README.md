@@ -22,7 +22,7 @@ make run         # build and launch it
 | Platform | What you ship | How it is made |
 |---|---|---|
 | Windows | `Cob-<version>-Setup-windows-amd64.exe` | `cargo build --release`; `build.rs` embeds the icon, version info and manifest |
-| macOS | `Cob-<version>-Setup-macos-<arm64\|amd64>.dmg` containing `Cob Setup.app` | `cargo build --release`, then `tools/package_macos.sh` (run on a Mac) |
+| macOS | `Cob-<version>-Setup-macos-<arm64\|amd64>.dmg` containing `Cob Setup.app` | `cargo build --release`, then `bash tools/package_macos.sh` (run on a Mac) |
 | Linux | `Cob-<version>-Setup-linux` (a bare executable) | `cargo build --release` |
 
 `make` does the right one for the machine it runs on. Each installer embeds the Cob build for
