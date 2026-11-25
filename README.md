@@ -84,7 +84,7 @@ pop(fact(10))
 ### The REPL
 ```
 $ cob_interp
-Cob 0.0.10 REPL -- :help for help, :quit or Ctrl-D to leave
+Cob 0.1.0 REPL -- :help for help, :quit or Ctrl-D to leave
 cob> 1 + 2
 3
 cob> set x = 10

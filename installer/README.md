@@ -79,7 +79,7 @@ wizard can be worked on without building Cob first.
 * **Linux:** built, and driven end to end under a virtual display (every page, a real extraction,
   then the extracted program run).
 * **Windows:** cross-compiled from Linux to a PE32+ x86-64 `.exe`; the embedded icon group (7 sizes),
-  version info (0.0.10) and `asInvoker` manifest were read back out of it. **Not run on Windows.**
+  version info (0.1.0) and `asInvoker` manifest were read back out of it. **Not run on Windows.**
 * **macOS:** the packaging script was run on Linux with stubbed `codesign`/`hdiutil`: the bundle
   layout, executable bit, icon and `Info.plist` (parsed with a real plist parser) are right.
   **Not built or run on a Mac.**

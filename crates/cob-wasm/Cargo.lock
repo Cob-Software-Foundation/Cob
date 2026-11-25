@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "almanac"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
  "libc",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "bushel"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
 ]
@@ -25,11 +25,11 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "cob-abi"
-version = "0.0.10"
+version = "0.1.0"
 
 [[package]]
 name = "cob-core"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
  "libloading",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "cob-wasm"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "almanac",
  "bushel",
@@ -51,21 +51,21 @@ dependencies = [
 
 [[package]]
 name = "cornmath"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
 ]
 
 [[package]]
 name = "furrow"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
 ]
 
 [[package]]
 name = "kernels"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
 ]
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "porch"
-version = "0.0.10"
+version = "0.1.0"
 dependencies = [
  "cob-abi",
 ]
