@@ -1,7 +1,7 @@
 [package]
 name = "cob-wasm"
 description = "The Cob interpreter for the browser playground (WebAssembly)"
-version = "0.1.0"
+version = "0.0.10"
 edition = "2021"
 license-file = "../../LICENSE.md"
 build = "build.rs"

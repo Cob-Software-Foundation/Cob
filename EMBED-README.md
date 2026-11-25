@@ -41,7 +41,7 @@ legal/              Third-party license text for what's actually
                     (inside barn), both zlib License. (SQLite, inside
                     pantry, is public domain -- no separate license file
                     exists for it.)
-VERSION              Plain text, e.g. "0.1.0" -- check this before
+VERSION              Plain text, e.g. "0.0.9" -- check this before
                     assuming a `.strawberry` cache or feature set.
 README.md           This file.
 ```
