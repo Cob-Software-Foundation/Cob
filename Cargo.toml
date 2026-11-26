@@ -22,7 +22,7 @@ members = [
 exclude = ["stdlib-rs/barn"]
 
 [workspace.package]
-version = "0.0.10"
+version = "0.1.0"
 edition = "2021"
 license-file = "LICENSE.md"
 repository = "https://github.com/Cob-Software-Foundation/Cob"

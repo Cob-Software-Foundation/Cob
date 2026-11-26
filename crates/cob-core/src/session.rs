@@ -112,6 +112,8 @@ pub struct Session {
     // parser state
     pub(crate) parse_line: i32,
     pub(crate) recipe_depth: i32,
+    /// Numbers the hidden variables of `for` loops so nested and repeated loops never share them.
+    pub(crate) for_id: u32,
     pub(crate) shuck_stack: Vec<String>,
 }
 
@@ -133,6 +135,7 @@ impl Session {
             embedded_wrappers: &[],
             parse_line: 0,
             recipe_depth: 0,
+            for_id: 0,
             shuck_stack: Vec::new(),
         }
     }

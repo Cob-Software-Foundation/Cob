@@ -1,3 +1,61 @@
+# Cob Language v0.1.0 (beta)
+
+## Overview
+
+**This is a beta release.** It is the first step toward 0.1, so expect rough
+edges and please report anything odd at
+https://github.com/Cob-Software-Foundation/Cob/issues.
+
+**Downloads have moved.** Release builds are now served from
+https://downloads.pixel-pulse.dev, and the download page on the website links
+there. The GitHub release keeps the same files.
+
+**Python-style lists.** The `bushel` lists from 0.0.10 now have the syntax you
+would expect from Python. They still need `shuck bushel`; the brackets, indexes
+and `for` are turned into ordinary `bushel_*` calls when the program is read,
+so the `.strawberry` cache format, the C that `popcorn_comp` emits and the
+extension ABI are unchanged.
+
+```
+shuck bushel
+
+set fruit = ["pear", "apple", 30]     # a list literal; [] is an empty list
+set first = fruit[0]                  # indexing, counted from 0
+set last = fruit[-1]                  # a negative position counts from the end
+set fruit[1] = "fig"                  # store into a position
+set grid = [[1, 2], [3, 4]]           # lists inside lists
+set grid[1][0] = 33
+
+for item in fruit:                    # go through a list
+    pop(item)
+for i in bushel_range(3):             # 0, 1, 2
+    pop(i)
+pop(bushel_str(fruit))                # ["pear", "fig", 30]
+```
+
+- New functions, which the syntax is built on: `bushel_at` and `bushel_put`
+  (`bushel_get` / `bushel_set` with negative positions), `bushel_with` (push,
+  and hand the list back), `bushel_range(n)` and `bushel_str` (the list as
+  text, written like Python writes it). The older `bushel_*` functions work
+  exactly as before: in `bushel_get` and `bushel_set` a negative position is
+  still out of range.
+- A list is a reference, as in Python: `set b = a` makes `b` the same list. Use
+  `bushel_copy` for a separate one. A trailing comma is allowed.
+- `for x in list:` makes two hidden variables, `__for_listN` and `__for_posN`.
+  The loop variable keeps its last value afterwards, and a loop notices if the
+  list grows while it runs, as in Python. There is no `break` or `continue`.
+- Lists are still handles, so `pop(fruit)` prints a whole number. Use
+  `pop(bushel_str(fruit))` to see the items. `==` compares handles, not items.
+- Not in this release: slices (`xs[1:3]`), `in`, `+` to join lists,
+  `len(xs)`, and list comprehensions.
+
+## Notes
+
+- Programs written for 0.0.10 run unchanged. A line that starts with `for`
+  but is not `for NAME in EXPRESSION:` means what it always meant.
+
+---
+
 # Cob Language v0.0.10
 
 ## Overview

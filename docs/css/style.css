@@ -1,3 +1,6 @@
+/* Cob Soft: the site's display face, a soft cut of Fraunces (SIL OFL 1.1, see fonts/OFL.txt and tools/fonts/build_cob_soft.py) */
+@font-face{font-family:'Cob Soft'; src:url(../fonts/cob-soft-regular.woff2) format('woff2'), url(../fonts/cob-soft-regular.ttf) format('truetype'); font-weight:600; font-style:normal; font-display:swap;}
+@font-face{font-family:'Cob Soft'; src:url(../fonts/cob-soft-italic.woff2) format('woff2'), url(../fonts/cob-soft-italic.ttf) format('truetype'); font-weight:600; font-style:italic; font-display:swap;}
 :root{
   --ink:#1C1A0F;
   --husk:#35401F;
@@ -188,3 +191,6 @@ footer a:hover{color:var(--kernel);}
   .foot-grid{grid-template-columns:1fr 1fr;}
   nav.links{display:none;}
 }
+
+/* Cob Soft for the wordmark and every heading; body text stays IBM Plex Sans */
+h1,h2,h3,.brand-word,.foot-brand,.release-card .rv{font-family:'Cob Soft','Fraunces',Georgia,serif; font-weight:600; font-synthesis:none;}

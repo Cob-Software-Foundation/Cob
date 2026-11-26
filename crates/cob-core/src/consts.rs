@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub const PROJECT_NAME: &str = "Cob Language";
 pub const PROJECT_CODENAME: &str = "Project Obsidian Falcon";
-pub const VERSION_STRING: &str = "0.0.10";
+pub const VERSION_STRING: &str = "0.1.0";
 pub const AUTHOR_HANDLE: &str = "Pixel-Pulse";
 pub const REPO_URL: &str = "https://github.com/Cob-Software-Foundation/Cob";
 
@@ -48,6 +48,7 @@ pub fn check_hidden_license_flag(args: &[String]) -> bool {
 
 // ---- vocabulary -----------------------------------------------------------
 pub const KW_WHILE: &str = "while";
+pub const KW_FOR: &str = "for";
 pub const KW_SET: &str = "set";
 pub const KW_POP: &str = "pop";
 pub const KW_SHUCK: &str = "shuck";

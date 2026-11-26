@@ -84,7 +84,7 @@ pop(fact(10))
 ### The REPL
 ```
 $ cob_interp
-Cob 0.0.10 REPL -- :help for help, :quit or Ctrl-D to leave
+Cob 0.1.0 REPL -- :help for help, :quit or Ctrl-D to leave
 cob> 1 + 2
 3
 cob> set x = 10
@@ -123,11 +123,36 @@ Every module is a **shared library** (`lib<name>.so` on Linux, `lib<name>.dylib`
 | `kernels` | text, kernel by kernel | `kernel_len`, `kernel_upper`, `kernel_lower`, `kernel_slice`, `kernel_find`, `kernel_repeat`, `kernel_trim`, `kernel_replace`, `kernel_char`, `kernel_code`, `kernel_from_code`, `kernel_to_int`, `kernel_starts`, `kernel_ends` |
 | `almanac` | the farmer's calendar and clock | `almanac_now`, `almanac_ticks`, `almanac_nap`, `almanac_year`, `almanac_stamp` |
 | `granary` | files, stored like grain | `granary_read`, `granary_write`, `granary_append`, `granary_exists`, `granary_remove` |
-| `bushel` | lists that grow, a bushel of whatever you pick | `bushel_new`, `bushel_push`, `bushel_get`, `bushel_set`, `bushel_insert`, `bushel_remove`, `bushel_len`, `bushel_find`, `bushel_sort`, `bushel_reverse`, `bushel_extend`, `bushel_copy`, `bushel_join`, `bushel_split`, `bushel_clear`, `bushel_free` |
+| `bushel` | lists that grow, a bushel of whatever you pick | `bushel_new`, `bushel_push`, `bushel_get`, `bushel_set`, `bushel_insert`, `bushel_remove`, `bushel_len`, `bushel_find`, `bushel_sort`, `bushel_reverse`, `bushel_extend`, `bushel_copy`, `bushel_join`, `bushel_split`, `bushel_clear`, `bushel_free`, `bushel_at`, `bushel_put`, `bushel_with`, `bushel_range`, `bushel_str` |
 | `furrow` | arrays: a fixed-length row, planted once | `furrow_new`, `furrow_get`, `furrow_set`, `furrow_fill`, `furrow_swap`, `furrow_find`, `furrow_sum`, `furrow_sort`, `furrow_copy`, `furrow_len`, `furrow_free` |
 | `pantry` | a SQLite database to keep things in | `pantry_open`, `pantry_exec`, `pantry_query`, `pantry_close` |
 | `barn` | a window to put things in (raylib + raygui) | `barn_open`, `barn_label`, `barn_wait`, `barn_close`, `barn_button`, `barn_slider`, `barn_textbox` |
 | `silo` | the everyday five in one go | `porch` + `cornmath` + `kernels` + `almanac` + `granary` |
+
+
+### Lists, Python style
+
+With `shuck bushel` (0.1.0) a list reads like a Python list:
+
+```cob
+shuck bushel
+
+set fruit = ["pear", "apple", 30]     # a literal; [] is an empty list
+pop(fruit[0])                         # pear
+pop(fruit[-1])                        # 30: a negative position counts from the end
+set fruit[1] = "fig"                  # store into a position
+set grid = [[1, 2], [3, 4]]
+set grid[1][0] = 33                   # lists inside lists
+
+for item in fruit:                    # go through a list
+    pop(item)
+for i in bushel_range(3):             # 0, 1, 2
+    pop(i)
+pop(bushel_str(fruit))                # ["pear", "fig", 30]
+```
+
+A list is a reference, as in Python (`set b = a` is the same list; `bushel_copy` makes another), and it is still a handle,
+so `pop(fruit)` prints a number and `bushel_str(fruit)` is how to print the items. Slices, `in`, `+` on lists and `len(xs)` are not there yet.
 
 ```cob
 shuck porch

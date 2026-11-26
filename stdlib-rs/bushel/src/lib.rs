@@ -22,6 +22,13 @@
 //!   bushel_join(b, sep)       every item as text, with sep between them
 //!   bushel_split(text, sep)   a new list of the pieces of text (sep "" = one byte each)
 //!
+//! Python-style access (the list syntax of Cob 0.1.0 is built on these four):
+//!   bushel_at(b, i)           like bushel_get, but a negative i counts from the end (-1 = last)
+//!   bushel_put(b, i, v)       like bushel_set, with the same negative positions
+//!   bushel_with(b, v)         add v at the end and hand the list back, so calls can be chained
+//!   bushel_range(n)           a new list holding 0, 1, ... n-1
+//!   bushel_str(b)             the list as text, like Python: [1, "two", 3]
+//!
 //! A number never equals a string: `bushel_find` of 3 will not match "3".
 
 use std::cmp::Ordering;
@@ -50,6 +57,7 @@ static LISTS: Mutex<Vec<Option<Vec<Elem>>>> = Mutex::new(Vec::new());
 static GET: Slot = Slot::new();
 static REMOVE: Slot = Slot::new();
 static JOIN: Slot = Slot::new();
+static STR: Slot = Slot::new();
 
 fn lists() -> MutexGuard<'static, Vec<Option<Vec<Elem>>>> {
     LISTS.lock().unwrap_or_else(|e| e.into_inner())
@@ -86,6 +94,40 @@ fn index(i: i64, len: usize) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// `i` as a position inside a list of `len` items, Python style: a negative `i` counts from the end.
+fn pyindex(i: i64, len: usize) -> Option<usize> {
+    let k = if i < 0 { i.checked_add(len as i64)? } else { i };
+    index(k, len)
+}
+
+/// The list as Python would show it: `[1, "two", 3]`. Strings are quoted and escaped the way a Cob string literal is.
+fn repr(items: &[Elem]) -> Vec<u8> {
+    let mut out = vec![b'['];
+    for (k, e) in items.iter().enumerate() {
+        if k > 0 {
+            out.extend_from_slice(b", ");
+        }
+        match e {
+            Elem::Int(n) => out.extend_from_slice(n.to_string().as_bytes()),
+            Elem::Str(s) => {
+                out.push(b'"');
+                for &c in s {
+                    match c {
+                        b'"' => out.extend_from_slice(b"\\\""),
+                        b'\\' => out.extend_from_slice(b"\\\\"),
+                        b'\n' => out.extend_from_slice(b"\\n"),
+                        b'\t' => out.extend_from_slice(b"\\t"),
+                        _ => out.push(c),
+                    }
+                }
+                out.push(b'"');
+            }
+        }
+    }
+    out.push(b']');
+    out
 }
 
 fn warn_range(func: &str, i: i64, len: usize) {
@@ -441,6 +483,109 @@ pub unsafe extern "C" fn bushel_split(argv: *mut CobValue, argc: c_int) -> CobVa
     cob_int(alloc(pieces.into_iter().map(Elem::Str).collect()))
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn bushel_at(argv: *mut CobValue, argc: c_int) -> CobValue {
+    if !arity(MOD, "bushel_at", argc, 2) {
+        return cob_int(0);
+    }
+    let h = arg_int(MOD, "bushel_at", argv, argc, 0);
+    let i = arg_int(MOD, "bushel_at", argv, argc, 1);
+    match with_list("bushel_at", h, |l| pyindex(i, l.len()).map(|k| l[k].clone()).ok_or(l.len())) {
+        Some(Ok(e)) => ret_elem(&e, &GET),
+        Some(Err(len)) => {
+            warn_range("bushel_at", i, len);
+            cob_int(0)
+        }
+        None => cob_int(0),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bushel_put(argv: *mut CobValue, argc: c_int) -> CobValue {
+    if !arity(MOD, "bushel_put", argc, 3) {
+        return cob_int(1);
+    }
+    let h = arg_int(MOD, "bushel_put", argv, argc, 0);
+    let i = arg_int(MOD, "bushel_put", argv, argc, 1);
+    let v = arg_elem(argv, 2);
+    match with_list("bushel_put", h, |l| match pyindex(i, l.len()) {
+        Some(k) => {
+            l[k] = v;
+            Ok(())
+        }
+        None => Err(l.len()),
+    }) {
+        Some(Ok(())) => cob_int(0),
+        Some(Err(len)) => {
+            warn_range("bushel_put", i, len);
+            cob_int(1)
+        }
+        None => cob_int(1),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bushel_with(argv: *mut CobValue, argc: c_int) -> CobValue {
+    if !arity(MOD, "bushel_with", argc, 2) {
+        return cob_int(0);
+    }
+    let h = arg_int(MOD, "bushel_with", argv, argc, 0);
+    let v = arg_elem(argv, 1);
+    match with_list("bushel_with", h, |l| {
+        if l.len() >= BUSHEL_MAX_ITEMS {
+            return false;
+        }
+        l.push(v);
+        true
+    }) {
+        Some(true) => cob_int(h),
+        Some(false) => {
+            warn_full("bushel_with");
+            cob_int(h)
+        }
+        None => cob_int(0),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bushel_range(argv: *mut CobValue, argc: c_int) -> CobValue {
+    if !arity(MOD, "bushel_range", argc, 1) {
+        return cob_int(0);
+    }
+    let n = arg_int(MOD, "bushel_range", argv, argc, 0);
+    if n > BUSHEL_MAX_ITEMS as i64 {
+        warn_full("bushel_range");
+        return cob_int(0);
+    }
+    cob_int(alloc((0..n.max(0)).map(Elem::Int).collect()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bushel_str(argv: *mut CobValue, argc: c_int) -> CobValue {
+    if !arity(MOD, "bushel_str", argc, 1) {
+        return STR.ret(b"");
+    }
+    let h = arg_int(MOD, "bushel_str", argv, argc, 0);
+    let built = with_list("bushel_str", h, |l| {
+        let mut size = 2usize;
+        for e in l.iter() {
+            size = size.saturating_add(elem_text(e).len() * 2 + 4);
+            if size > BUSHEL_MAX_RESULT {
+                return None;
+            }
+        }
+        Some(repr(l))
+    });
+    match built {
+        Some(Some(buf)) => STR.ret(&buf),
+        Some(None) => {
+            ewrite(&format!("[{}] warning: bushel_str() result is too long\n", MOD));
+            STR.ret(b"")
+        }
+        None => STR.ret(b""),
+    }
+}
+
 /// The same functions as a table, for builds that cannot `dlopen` (the browser).
 pub static EXPORTS: &[(&str, cob_abi::CobFFIFunc)] = &[
     ("bushel_new", bushel_new),
@@ -459,11 +604,34 @@ pub static EXPORTS: &[(&str, cob_abi::CobFFIFunc)] = &[
     ("bushel_copy", bushel_copy),
     ("bushel_join", bushel_join),
     ("bushel_split", bushel_split),
+    ("bushel_at", bushel_at),
+    ("bushel_put", bushel_put),
+    ("bushel_with", bushel_with),
+    ("bushel_range", bushel_range),
+    ("bushel_str", bushel_str),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_positions() {
+        assert_eq!(pyindex(0, 3), Some(0));
+        assert_eq!(pyindex(-1, 3), Some(2));
+        assert_eq!(pyindex(-3, 3), Some(0));
+        assert_eq!(pyindex(-4, 3), None);
+        assert_eq!(pyindex(3, 3), None);
+        assert_eq!(pyindex(-1, 0), None);
+        assert_eq!(pyindex(i64::MIN, 3), None);
+    }
+
+    #[test]
+    fn repr_matches_python_shape() {
+        assert_eq!(repr(&[]), b"[]".to_vec());
+        assert_eq!(repr(&[Elem::Int(1), Elem::Str(b"two".to_vec()), Elem::Int(-3)]), b"[1, \"two\", -3]".to_vec());
+        assert_eq!(repr(&[Elem::Str(b"a\"b\\c\nd".to_vec())]), b"[\"a\\\"b\\\\c\\nd\"]".to_vec());
+    }
 
     #[test]
     fn index_bounds() {
