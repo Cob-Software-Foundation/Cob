@@ -171,9 +171,63 @@ impl Session {
         Some((e, p + 1))
     }
 
+    /// A call to a standard-library function that the list syntax is built on. With `bushel` shucked it is an
+    /// extern call; without, a plain call, so the checker says "add `shuck bushel`" instead of failing at run time.
+    fn std_call(&self, name: &str, args: Vec<Expr>) -> Expr {
+        let call = CallExpr { name: name.to_string(), args, line: self.parse_line };
+        if self.extern_decl.iter().any(|n| n == name) {
+            Expr::ExternCall(call)
+        } else {
+            Expr::Call(call)
+        }
+    }
+
+    /// `[a, b, c]` and `[]`: a new list with the items pushed in order (trailing comma allowed, like Python).
+    fn parse_list_literal(&self, s: &[u8], p: usize) -> P<Expr> {
+        let mut q = skip_blank(s, p + 1);
+        let mut acc = self.std_call("bushel_new", Vec::new());
+        if at(s, q) != b']' {
+            loop {
+                let (item, np) = self.parse_expr(s, q)?;
+                acc = self.std_call("bushel_with", vec![acc, item]);
+                q = skip_blank(s, np);
+                if at(s, q) == b',' {
+                    q = skip_blank(s, q + 1);
+                    if at(s, q) == b']' {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+            if at(s, q) != b']' {
+                return None;
+            }
+        }
+        Some((acc, q + 1))
+    }
+
+    /// A primary followed by any number of `[index]`s: `xs[0]`, `xs[-1]`, `grid[1][2]`.
     fn parse_primary(&self, s: &[u8], p: usize) -> P<Expr> {
+        let (mut e, mut p) = self.parse_atom(s, p)?;
+        while at(s, p) == b'[' {
+            let (idx, np) = self.parse_expr(s, skip_blank(s, p + 1))?;
+            let np = skip_blank(s, np);
+            if at(s, np) != b']' {
+                return None;
+            }
+            e = self.std_call("bushel_at", vec![e, idx]);
+            p = np + 1;
+        }
+        Some((e, p))
+    }
+
+    fn parse_atom(&self, s: &[u8], p: usize) -> P<Expr> {
         let p = skip_blank(s, p);
         let c = at(s, p);
+        if c == b'[' {
+            return self.parse_list_literal(s, p);
+        }
         if c == b'"' {
             let (text, after) = parse_string_literal(s, p)?;
             return Some((Expr::Str(text), after));
@@ -299,12 +353,28 @@ impl Session {
         Ok(expr)
     }
 
-    fn parse_set_statement(&self, after_kw: &[u8], line_no: i32) -> Result<(String, Expr), ()> {
+    /// `set name = expr`, or `set name[i] = expr` (and `set name[i][j] = expr`), which stores into a list.
+    fn parse_set_statement(&self, after_kw: &[u8], line_no: i32) -> Result<Stmt, ()> {
         let p = skip_blank(after_kw, 0);
         let Some((name, p)) = parse_identifier(after_kw, p) else {
             ewrite(&format!("[cob_interp] syntax error at line {}: expected a variable name after 'set'\n", line_no));
             return Err(());
         };
+        let mut idxs: Vec<Expr> = Vec::new();
+        let mut p = p;
+        while at(after_kw, p) == b'[' {
+            let Some((idx, np)) = self.parse_expr(after_kw, skip_blank(after_kw, p + 1)) else {
+                ewrite(&format!("[cob_interp] syntax error at line {}: malformed index in set statement\n", line_no));
+                return Err(());
+            };
+            let np = skip_blank(after_kw, np);
+            if at(after_kw, np) != b']' {
+                ewrite(&format!("[cob_interp] syntax error at line {}: expected ']' to close the index in set statement\n", line_no));
+                return Err(());
+            }
+            idxs.push(idx);
+            p = np + 1;
+        }
         let p = skip_blank(after_kw, p);
         if at(after_kw, p) != b'=' {
             ewrite(&format!("[cob_interp] syntax error at line {}: expected '=' in set statement\n", line_no));
@@ -314,7 +384,39 @@ impl Session {
             ewrite(&format!("[cob_interp] syntax error at line {}: malformed expression in set statement\n", line_no));
             return Err(());
         };
-        Ok((name, expr))
+        let Some(last) = idxs.pop() else {
+            return Ok(Stmt::Set(name, expr));
+        };
+        let mut base = Expr::Var(name);
+        for idx in idxs {
+            base = self.std_call("bushel_at", vec![base, idx]);
+        }
+        Ok(Stmt::Call(self.std_call("bushel_put", vec![base, last, expr])))
+    }
+
+    /// `for name in expr:` -- `Some` only when the line really has that shape, so a line that merely starts with
+    /// `for` still means whatever it meant before. Returns the loop variable and the list expression.
+    fn parse_for_header(&self, after_kw: &[u8], line_no: i32) -> Option<Result<(String, Expr), ()>> {
+        let p = skip_blank(after_kw, 0);
+        let (var, p) = parse_identifier(after_kw, p)?;
+        if !matches!(at(after_kw, p), b' ' | b'\t') {
+            return None;
+        }
+        let p = skip_blank(after_kw, p);
+        if !after_kw.get(p..).map_or(false, |r| r.starts_with(b"in")) || is_ident_char(at(after_kw, p + 2)) {
+            return None;
+        }
+        let p = skip_blank(after_kw, p + 2);
+        let Some((list, p)) = self.parse_expr(after_kw, p) else {
+            ewrite(&format!("[cob_interp] syntax error at line {}: malformed expression in for statement\n", line_no));
+            return Some(Err(()));
+        };
+        let p = skip_blank(after_kw, p);
+        if at(after_kw, p) != b':' || at(after_kw, skip_blank(after_kw, p + 1)) != 0 {
+            ewrite(&format!("[cob_interp] syntax error at line {}: expected ':' to open for block\n", line_no));
+            return Some(Err(()));
+        }
+        Some(Ok((var, list)))
     }
 
     fn parse_block_header(&self, after_kw: &[u8], line_no: i32, kw: &str) -> Result<Cond, ()> {
@@ -583,8 +685,8 @@ impl Session {
 
             let kw = KW_SET.as_bytes();
             if t.starts_with(kw) && at(t, kw.len()) == b' ' {
-                let (name, e) = self.parse_set_statement(&t[kw.len()..], line_no)?;
-                out.push(Stmt::Set(name, e));
+                let st = self.parse_set_statement(&t[kw.len()..], line_no)?;
+                out.push(st);
                 *pos += 1;
                 continue;
             }
@@ -596,6 +698,26 @@ impl Session {
                 let body = self.parse_block(lines, pos, indent)?;
                 out.push(Stmt::While(cond, body));
                 continue;
+            }
+
+            let kw = KW_FOR.as_bytes();
+            if t.starts_with(kw) && at(t, kw.len()) == b' ' {
+                if let Some(header) = self.parse_for_header(&t[kw.len()..], line_no) {
+                    // desugared into a while loop over hidden variables, so the cache format and the compiler are untouched
+                    let (var, list) = header?;
+                    self.for_id += 1;
+                    let (lname, pname) = (format!("__for_list{}", self.for_id), format!("__for_pos{}", self.for_id));
+                    *pos += 1;
+                    let body = self.parse_block(lines, pos, indent)?;
+                    let mut full = vec![Stmt::Set(var, self.std_call("bushel_get", vec![Expr::Var(lname.clone()), Expr::Var(pname.clone())]))];
+                    full.extend(body);
+                    full.push(Stmt::Set(pname.clone(), Expr::Bin(b'+', Box::new(Expr::Var(pname.clone())), Box::new(Expr::Num(1)))));
+                    let cond = Cond { left: Expr::Var(pname.clone()), op: CondOp::Lt, right: Some(self.std_call("bushel_len", vec![Expr::Var(lname.clone())])) };
+                    out.push(Stmt::Set(lname, list));
+                    out.push(Stmt::Set(pname, Expr::Num(0)));
+                    out.push(Stmt::While(cond, full));
+                    continue;
+                }
             }
 
             let kw = KW_IF.as_bytes();

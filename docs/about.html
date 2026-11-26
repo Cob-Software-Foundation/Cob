@@ -118,7 +118,7 @@
       <div class="rmap">
         <span class="status shipped">Shipped</span>
         <h3>Lists and arrays</h3>
-        <p>bushel (lists that grow) and furrow (fixed-length arrays) are standard library modules holding numbers and strings. They are library calls, not syntax: there is no [1, 2, 3] literal or xs[0] indexing syntax. Shipped in 0.0.10.</p>
+        <p>bushel (lists that grow) and furrow (fixed-length arrays) are standard library modules holding numbers and strings. Since 0.1.0 they read like Python lists: <code class="mono">[1, 2, 3]</code> literals, <code class="mono">xs[0]</code> and <code class="mono">xs[-1]</code>, <code class="mono">set xs[1] = 9</code> and <code class="mono">for x in xs:</code>, all turned into ordinary bushel calls. Slices, <code class="mono">in</code> and <code class="mono">len(xs)</code> are not there yet. Lists and arrays shipped in 0.0.10.</p>
       </div>
       <div class="rmap">
         <span class="status shipped">Shipped</span>

@@ -157,7 +157,7 @@ mod tests {
         let dir = scratch("overwrite");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("VERSION"), "old").unwrap();
-        let z = zip_of(&[("VERSION", b"0.0.10")]);
+        let z = zip_of(&[("VERSION", b"0.1.0")]);
 
         let s = extract(&z, &dir, false, |_, _| {}).unwrap();
         assert_eq!((s.written, s.skipped), (0, 1));
@@ -166,7 +166,7 @@ mod tests {
 
         let s = extract(&z, &dir, true, |_, _| {}).unwrap();
         assert_eq!((s.written, s.skipped), (1, 0));
-        assert_eq!(fs::read_to_string(dir.join("VERSION")).unwrap(), "0.0.10");
+        assert_eq!(fs::read_to_string(dir.join("VERSION")).unwrap(), "0.1.0");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -223,7 +223,7 @@ mod tests {
 
         // one folder plus a loose file at the top: nothing is stripped either
         let dir = scratch("nostrip2");
-        let z = zip_of(&[("pkg/x", b"1"), ("VERSION", b"0.0.10")]);
+        let z = zip_of(&[("pkg/x", b"1"), ("VERSION", b"0.1.0")]);
         extract(&z, &dir, true, |_, _| {}).unwrap();
         assert!(dir.join("pkg/x").is_file() && dir.join("VERSION").is_file());
         let _ = fs::remove_dir_all(&dir);
