@@ -26,6 +26,16 @@ fn print_usage(argv0: &str) {
     ));
 }
 
+/// A cache is only trusted if it was written after the source was last changed, so editing a program and running it
+/// again runs the edit (and writes a new cache). When the times cannot be read, the old behaviour is kept.
+fn cache_is_fresh(src: &str, cache: &str) -> bool {
+    let modified = |p: &str| std::fs::metadata(p).and_then(|m| m.modified());
+    match (modified(src), modified(cache)) {
+        (Ok(s), Ok(c)) => c > s,
+        _ => true,
+    }
+}
+
 fn run(args: Vec<String>) -> i32 {
     let argv0 = args.first().cloned().unwrap_or_else(|| "cob_interp".into());
     if check_hidden_version_flag(&args) {
@@ -86,7 +96,7 @@ fn run(args: Vec<String>) -> i32 {
         use_cache = false; // the REPL needs the live program, not a cached copy
     }
 
-    if use_cache && fsutil::exists(&cache_path) {
+    if use_cache && fsutil::exists(&cache_path) && cache_is_fresh(&src_path, &cache_path) {
         match cache::load(&cache_path) {
             Ok(prog) => {
                 if !no_gc && cob_core::ast::program_uses_harvest_or_trash(&prog) {

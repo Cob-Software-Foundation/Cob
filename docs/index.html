@@ -35,11 +35,11 @@
   <section class="hero" style="padding-top:76px;">
     <div class="wrap hero-grid">
       <div>
-        <div class="eyebrow-plain">v0.1.0 (beta) · Project Obsidian Falcon</div>
+        <div class="eyebrow-plain">v0.1.1 (beta) · Project Obsidian Falcon</div>
         <h1>A little language,<br><em>threshed</em> down to size.</h1>
         <p class="lede">Cob is a small corn-themed language with an interpreter, a native compiler, and a package manager — built to boot fast, compile to a real standalone binary, and stay out of your way.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="download.html">Download Cob 0.1.0 (beta)</a>
+          <a class="btn btn-primary" href="download.html">Download Cob 0.1.1 (beta)</a>
           <a class="btn btn-ghost" href="https://docs.cob.pixel-pulse.dev/">Read the docs</a>
         </div>
         <div class="platform-row">
@@ -150,18 +150,23 @@
   <section class="wrap">
     <div class="release">
       <div class="release-card">
-        <div class="rv">0.1.0</div>
+        <div class="rv">0.1.1</div>
         <div class="rd">Latest release &middot; beta</div>
         <ul>
+          <li>Fixes the apt repository: <code class="mono">apt update</code> works again, with a new source line ending in <code class="mono">stable main</code></li>
           <li>A beta: programs written for 0.0.10 run unchanged, and the <code class="mono">.strawberry</code> cache format and extension ABI are the same</li>
           <li>Python-style lists: <code class="mono">[1, 2, 3]</code>, <code class="mono">xs[-1]</code>, <code class="mono">set xs[0] = 9</code> and <code class="mono">for x in xs:</code></li>
-          <li>Downloads and the apt repository are now served from <code class="mono">downloads.pixel-pulse.dev</code></li>
         </ul>
         <a class="rlink" href="download.html">Full release notes →</a>
       </div>
 
       <div class="changelog">
         <h3>Recent history</h3>
+        <div class="entry">
+          <span class="tag">0.1.1</span>
+          <strong>apt fix</strong>
+          <p>The apt repository is now laid out the standard way (<code class="mono">dists/</code> and <code class="mono">pool/</code>), so <code class="mono">apt update</code> finds its <code class="mono">Release</code> file. If you added the old source line, replace it with one ending in <code class="mono">stable main</code>; the <a href="download.html">download page</a> has the commands.</p>
+        </div>
         <div class="entry">
           <span class="tag">0.1.0</span>
           <strong>Python-style lists, first beta</strong>

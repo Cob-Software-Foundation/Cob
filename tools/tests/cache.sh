@@ -13,4 +13,12 @@ for n in fn std; do
     cmp -s first.txt second.txt  || { echo "$n: cached stdout differs"; diff first.txt second.txt; exit 1; }
     cmp -s first.err second.err  || { echo "$n: cached stderr differs"; diff first.err second.err; exit 1; }
 done
+# editing the source must run the edit, not the stale cache
+printf 'pop(1)\n' > edit.cob
+"$INTERP" edit.cob > e1.txt 2> /dev/null
+printf 'pop(2)\n' > edit.cob
+"$INTERP" edit.cob > e2.txt 2> /dev/null
+[ "$(cat e1.txt)" = "1" ] && [ "$(cat e2.txt)" = "2" ] || { echo "an edited program ran its old cache: got '$(cat e2.txt)', wanted 2"; exit 1; }
+"$INTERP" edit.cob > e3.txt 2> /dev/null
+[ "$(cat e3.txt)" = "2" ] || { echo "the rebuilt cache is wrong"; exit 1; }
 echo "caches behave"

@@ -52,7 +52,14 @@ elif count > 5:
     pop("more")
 else:
     pop("fewer")
+
+# combine tests with and / or / not (and ( ) to group); and / or stop early, like Python
+if count > 0 and not count > 9:        # a comment can follow code
+    pop("between")
+if (count < 3 or count > 4) and count != 99:
+    pop("grouped")
 ```
+`not` binds tightest, then `and`, then `or`. A `#` starts a comment, on its own line or after code; inside a string it is just text.
 
 ### Functions (`recipe` / `serve`)
 ```cob
@@ -75,7 +82,7 @@ pop(add(2, 3))
 greet("Ada")
 pop(fact(10))
 ```
-(Comments are whole lines starting with `#`; Cob has no trailing comments.)
+(A `#` starts a comment, on its own line or after code.)
 * A recipe's parameters, and every name it `set`s, are **local** to it. Any other name reads the global of that name. A recipe cannot assign a global — it hands results back with `serve`.
 * Recipes are defined at the top level, and may be called from above where they are written (they are hoisted). They can call each other freely.
 * Arguments are evaluated left to right. A wrong number of arguments, or a call to a name that does not exist, is an error **before the program starts**, with the line number.
@@ -84,7 +91,7 @@ pop(fact(10))
 ### The REPL
 ```
 $ cob_interp
-Cob 0.1.0 REPL -- :help for help, :quit or Ctrl-D to leave
+Cob 0.1.1 REPL -- :help for help, :quit or Ctrl-D to leave
 cob> 1 + 2
 3
 cob> set x = 10
@@ -200,7 +207,7 @@ The built-in `input`, SQLite and window keywords are gone; they are standard lib
 ## ⚙️ Toolchain & Ecosystem
 
 * **`cob_interp`**: The interpreter and REPL. Core language only — no vendor libraries and no X11/OpenGL needed. (`cob_interp_full`, `cob_interp_db` and `cob_interp_window` still exist as `make` targets for old scripts; they now build this same interpreter plus the `pantry` / `barn` modules.)
-* **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. Recipes and **every standard library module** compile, because they are ordinary shared-library calls: the finished program links the same libraries and records the standard library directory as its rpath, so keep `lib/` where it was when you compiled (or set `COB_STDLIB` when compiling). Shared libraries cannot be used from a *statically linked* program, and a cross-compiled program needs the modules built for its target: to cross-compile a program that `shuck`s standard library modules, build those modules for the target, point `COB_STDLIB` at them, and use a dynamically linked target (not static musl).
+* **`popcorn_comp`**: Native compiler. Transpiles to C and spawns a real compiler (Zig by default, or `$CobCC`/`--cc`) to produce a standalone binary — cross-compile with CobOS/CobArch. Recipes and **every standard library module** compile. `porch`, `cornmath`, `kernels`, `almanac`, `bushel` and `furrow` are linked **statically** from `lib/libcob_stdlib.a` when you pass `--static-stdlib` (and by default for musl targets), so the finished program needs no `lib/` folder at run time; otherwise they are shared libraries and the program records the standard library directory as its rpath (keep `lib/` where it was, or set `COB_STDLIB`). `pantry`, `granary` and `barn` wrap C libraries and are always shared libraries, so a program that uses them still needs them next to it. A cross-compiled program needs the modules built for its target, with `COB_STDLIB` pointing at them.
 * **`farmer`**: Package manager. Installs zipped modules from a secure static JSON registry into `cob_modules/` via `farmer harvest <package>`.
 * **Caching Control**: Write `_MakeCache = False` as the literal first line of a `.cob` file to bypass the `.strawberry` fast-boot cache.
 

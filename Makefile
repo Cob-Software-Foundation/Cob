@@ -112,6 +112,8 @@ cob_sign: build | $(BIN_DIR)
 # The standard library: shared libraries + their .cob wrappers.
 stdlib: build | $(LIB_DIR)
 	for m in $(STDLIB_MODULES); do cp $(REL)/$(SO_PREFIX)$$m$(SO_EXT) $(LIB_DIR)/; done
+	# the same modules as one static archive, for `popcorn_comp --static-stdlib`
+	cp $(REL)/libcob_stdlib.a $(LIB_DIR)/ 2>/dev/null || cp $(REL)/cob_stdlib.lib $(LIB_DIR)/ 2>/dev/null || true
 	cp $(STDLIB_COB) $(LIB_DIR)/
 
 # barn (raylib + raygui windows) is opt-in: it needs X11 + OpenGL dev headers

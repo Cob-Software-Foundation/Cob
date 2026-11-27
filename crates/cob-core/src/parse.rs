@@ -81,6 +81,41 @@ fn is_reserved_word(name: &str) -> bool {
     .contains(&name)
 }
 
+/// `set x = 1  # note` -> `set x = 1`. A `#` inside a string literal is not a comment (same escapes as `parse_string_literal`).
+fn strip_trailing_comment(line: &[u8]) -> &[u8] {
+    let (mut in_str, mut i) = (false, 0);
+    while i < line.len() {
+        match line[i] {
+            b'\\' if in_str => i += 1,
+            b'"' => in_str = !in_str,
+            b'#' if !in_str => {
+                let mut end = i;
+                while end > 0 && matches!(line[end - 1], b' ' | b'\t') {
+                    end -= 1;
+                }
+                return &line[..end];
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    line
+}
+
+/// A condition as written: comparisons joined by `not`, `and`, `or` (and parentheses).
+enum BoolExpr {
+    Cmp(Cond),
+    Not(Box<BoolExpr>),
+    And(Box<BoolExpr>, Box<BoolExpr>),
+    Or(Box<BoolExpr>, Box<BoolExpr>),
+}
+
+/// The word `w` at `p`, if it stands alone (not the start of a longer name). Returns the position after it.
+fn word_at(s: &[u8], p: usize, w: &str) -> Option<usize> {
+    let w = w.as_bytes();
+    (s.get(p..)?.starts_with(w) && !is_ident_char(at(s, p + w.len()))).then(|| p + w.len())
+}
+
 /// One non-blank, non-comment source line.
 pub struct PhysLine {
     pub indent: i32,
@@ -128,7 +163,7 @@ pub fn split_lines(src: &[u8], start_line_no: i32) -> Result<Vec<PhysLine>, ()> 
             return Err(());
         }
         let indent = line.iter().take_while(|&&b| b == b' ').count();
-        let trimmed = &line[indent..];
+        let trimmed = strip_trailing_comment(&line[indent..]);
         if !(trimmed.is_empty() || trimmed[0] == b'#') {
             out.push(PhysLine { indent: indent as i32, content: trimmed.to_vec(), line_no });
         }
@@ -309,6 +344,95 @@ impl Session {
         })
     }
 
+    /// `a or b`: the loosest level.
+    fn parse_bool_or(&self, s: &[u8], p: usize) -> P<BoolExpr> {
+        let (mut left, mut p) = self.parse_bool_and(s, p)?;
+        while let Some(after) = word_at(s, skip_blank(s, p), "or") {
+            let (right, np) = self.parse_bool_and(s, after)?;
+            left = BoolExpr::Or(Box::new(left), Box::new(right));
+            p = np;
+        }
+        Some((left, p))
+    }
+
+    fn parse_bool_and(&self, s: &[u8], p: usize) -> P<BoolExpr> {
+        let (mut left, mut p) = self.parse_bool_not(s, p)?;
+        while let Some(after) = word_at(s, skip_blank(s, p), "and") {
+            let (right, np) = self.parse_bool_not(s, after)?;
+            left = BoolExpr::And(Box::new(left), Box::new(right));
+            p = np;
+        }
+        Some((left, p))
+    }
+
+    /// `not x`. A variable that happens to be called `not` still works: `if not:` and `if not == 3:` mean the variable.
+    fn parse_bool_not(&self, s: &[u8], p: usize) -> P<BoolExpr> {
+        let q = skip_blank(s, p);
+        if let Some(after) = word_at(s, q, "not") {
+            let next = at(s, skip_blank(s, after));
+            if next != 0 && !matches!(next, b':' | b'=' | b'!' | b'<' | b'>' | b',' | b')') {
+                let (inner, np) = self.parse_bool_not(s, after)?;
+                return Some((BoolExpr::Not(Box::new(inner)), np));
+            }
+        }
+        self.parse_bool_atom(s, q)
+    }
+
+    /// A comparison, or a parenthesised condition (an expression never starts with `(`, so this is free).
+    fn parse_bool_atom(&self, s: &[u8], p: usize) -> P<BoolExpr> {
+        let q = skip_blank(s, p);
+        if at(s, q) == b'(' {
+            let (inner, np) = self.parse_bool_or(s, q + 1)?;
+            let np = skip_blank(s, np);
+            if at(s, np) != b')' {
+                return None;
+            }
+            return Some((inner, np + 1));
+        }
+        let (cond, np) = self.parse_condition(s, q)?;
+        Some((BoolExpr::Cmp(cond), np))
+    }
+
+    /// Writes the truth of `b` into the hidden variable `f` (1 or 0), with `and` / `or` skipping what they can, like Python.
+    fn flag_stmts(b: &BoolExpr, f: &str, out: &mut Program) {
+        let flag = || Expr::Var(f.to_string());
+        match b {
+            BoolExpr::Cmp(c) => {
+                out.push(Stmt::Set(f.to_string(), Expr::Num(0)));
+                out.push(Stmt::If(c.clone(), vec![Stmt::Set(f.to_string(), Expr::Num(1))], Vec::new()));
+            }
+            BoolExpr::Not(x) => {
+                Self::flag_stmts(x, f, out);
+                out.push(Stmt::Set(f.to_string(), Expr::Bin(b'-', Box::new(Expr::Num(1)), Box::new(flag()))));
+            }
+            BoolExpr::And(a, c) => {
+                Self::flag_stmts(a, f, out);
+                let mut inner = Vec::new();
+                Self::flag_stmts(c, f, &mut inner);
+                out.push(Stmt::If(Cond { left: flag(), op: CondOp::Truthy, right: None }, inner, Vec::new()));
+            }
+            BoolExpr::Or(a, c) => {
+                Self::flag_stmts(a, f, out);
+                let mut inner = Vec::new();
+                Self::flag_stmts(c, f, &mut inner);
+                out.push(Stmt::If(Cond { left: flag(), op: CondOp::Eq, right: Some(Expr::Num(0)) }, inner, Vec::new()));
+            }
+        }
+    }
+
+    /// Statements to run before the test, and the test itself. A plain comparison needs no statements, so a program
+    /// without `and` / `or` / `not` produces exactly the tree it always did.
+    fn lower_bool(&mut self, b: BoolExpr) -> (Program, Cond) {
+        if let BoolExpr::Cmp(c) = b {
+            return (Vec::new(), c);
+        }
+        self.cond_id += 1;
+        let f = format!("__cond{}", self.cond_id);
+        let mut pre = Vec::new();
+        Self::flag_stmts(&b, &f, &mut pre);
+        (pre, Cond { left: Expr::Var(f), op: CondOp::Truthy, right: None })
+    }
+
     fn parse_condition(&self, s: &[u8], p: usize) -> P<Cond> {
         let (left, mut p) = self.parse_expr(s, p)?;
         let (op, right) = match Self::parse_comparator(s, p) {
@@ -419,8 +543,8 @@ impl Session {
         Some(Ok((var, list)))
     }
 
-    fn parse_block_header(&self, after_kw: &[u8], line_no: i32, kw: &str) -> Result<Cond, ()> {
-        let Some((cond, p)) = self.parse_condition(after_kw, 0) else {
+    fn parse_block_header(&mut self, after_kw: &[u8], line_no: i32, kw: &str) -> Result<(Program, Cond), ()> {
+        let Some((cond, p)) = self.parse_bool_or(after_kw, 0) else {
             ewrite(&format!("[cob_interp] syntax error at line {}: malformed condition in {} statement\n", line_no, kw));
             return Err(());
         };
@@ -429,7 +553,7 @@ impl Session {
             ewrite(&format!("[cob_interp] syntax error at line {}: expected ':' to open {} block\n", line_no, kw));
             return Err(());
         }
-        Ok(cond)
+        Ok(self.lower_bool(cond))
     }
 
     fn parse_trash_statement(&self, after_kw: &[u8], line_no: i32) -> Result<String, ()> {
@@ -637,11 +761,12 @@ impl Session {
     // ------------------------------------------------------------------
     // blocks
     // ------------------------------------------------------------------
-    fn parse_if_chain(&mut self, lines: &[PhysLine], pos: &mut usize, kw_len: usize, kw_name: &str) -> Result<Stmt, ()> {
+    fn parse_if_chain(&mut self, lines: &[PhysLine], pos: &mut usize, kw_len: usize, kw_name: &str) -> Result<Program, ()> {
         let line_no = lines[*pos].line_no;
         let this_indent = lines[*pos].indent;
         self.parse_line = line_no;
-        let cond = self.parse_block_header(&lines[*pos].content[kw_len..], line_no, kw_name)?;
+        let content = lines[*pos].content.clone();
+        let (mut stmts, cond) = self.parse_block_header(&content[kw_len..], line_no, kw_name)?;
         *pos += 1;
         let body = self.parse_block(lines, pos, this_indent)?;
         let mut else_body: Program = Vec::new();
@@ -651,7 +776,7 @@ impl Session {
             let els = KW_ELSE.as_bytes();
             if next.starts_with(elif) && at(&next, elif.len()) == b' ' {
                 let nested = self.parse_if_chain(lines, pos, elif.len(), KW_ELIF)?;
-                else_body.push(nested);
+                else_body.extend(nested);
             } else if next.starts_with(els) {
                 let p = skip_blank(&next, els.len());
                 if at(&next, p) == b':' && at(&next, skip_blank(&next, p + 1)) == 0 {
@@ -660,7 +785,8 @@ impl Session {
                 }
             }
         }
-        Ok(Stmt::If(cond, body, else_body))
+        stmts.push(Stmt::If(cond, body, else_body));
+        Ok(stmts)
     }
 
     pub(crate) fn parse_block(&mut self, lines: &[PhysLine], pos: &mut usize, parent_indent: i32) -> Result<Program, ()> {
@@ -693,9 +819,12 @@ impl Session {
 
             let kw = KW_WHILE.as_bytes();
             if t.starts_with(kw) && at(t, kw.len()) == b' ' {
-                let cond = self.parse_block_header(&t[kw.len()..], line_no, KW_WHILE)?;
+                let (pre, cond) = self.parse_block_header(&t[kw.len()..], line_no, KW_WHILE)?;
                 *pos += 1;
-                let body = self.parse_block(lines, pos, indent)?;
+                let mut body = self.parse_block(lines, pos, indent)?;
+                // `and` / `or` / `not` are tested through a hidden flag: set it before the loop and again after every pass
+                out.extend(pre.iter().cloned());
+                body.extend(pre);
                 out.push(Stmt::While(cond, body));
                 continue;
             }
@@ -723,7 +852,7 @@ impl Session {
             let kw = KW_IF.as_bytes();
             if t.starts_with(kw) && at(t, kw.len()) == b' ' {
                 let s = self.parse_if_chain(lines, pos, kw.len(), KW_IF)?;
-                out.push(s);
+                out.extend(s);
                 continue;
             }
 

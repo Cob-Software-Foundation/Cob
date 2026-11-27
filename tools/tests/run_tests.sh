@@ -66,7 +66,7 @@ for inp in "$TESTS"/repl_*.stdin; do
 done
 
 # ---- scripts
-for s in errors cache repl_modes porch_cases wasm; do
+for s in errors cache repl_modes porch_cases wasm static_stdlib apt_repo; do
     [ -f "$TESTS/$s.sh" ] || continue
     if sh "$TESTS/$s.sh" "$INTERP" "$COMP" "$CC_BIN" > "$T/$s.log" 2>&1; then ok "script   $s"
     else bad "script   $s" "$(tail -3 "$T/$s.log" | tr '\n' '|')"; fi

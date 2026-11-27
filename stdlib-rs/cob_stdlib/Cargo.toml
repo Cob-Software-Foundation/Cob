@@ -1,0 +1,17 @@
+[package]
+name = "cob_stdlib"
+description = "Cob standard library, every pure-Rust module in one static library (for popcorn_comp --static-stdlib)"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+porch = { path = "../porch" }
+cornmath = { path = "../cornmath" }
+kernels = { path = "../kernels" }
+almanac = { path = "../almanac" }
+bushel = { path = "../bushel" }
+furrow = { path = "../furrow" }

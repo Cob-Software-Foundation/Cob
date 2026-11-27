@@ -114,6 +114,8 @@ pub struct Session {
     pub(crate) recipe_depth: i32,
     /// Numbers the hidden variables of `for` loops so nested and repeated loops never share them.
     pub(crate) for_id: u32,
+    /// Numbers the hidden flag variables that `and` / `or` / `not` in a condition are lowered to.
+    pub(crate) cond_id: u32,
     pub(crate) shuck_stack: Vec<String>,
 }
 
@@ -136,6 +138,7 @@ impl Session {
             parse_line: 0,
             recipe_depth: 0,
             for_id: 0,
+            cond_id: 0,
             shuck_stack: Vec::new(),
         }
     }

@@ -22,7 +22,9 @@
 //!
 //! The standard library needs no special support: it is `extern` calls into
 //! shared libraries, linked with -l<module> plus -L/rpath for the standard
-//! library directory.
+//! library directory. With --static-stdlib (the default for musl targets, where
+//! shared libraries cannot work) the pure-Rust modules come from one static
+//! archive, libcob_stdlib.a, so the finished program needs no lib/ directory.
 
 mod runtime;
 mod transpile;
@@ -50,10 +52,14 @@ const ZIG_TARGETS: &[(&str, &str, &str)] = &[
 
 fn print_usage(argv0: &str) {
     eprint!(
-        "Usage: {0} <file{1}> -o <output> [--no-gc] [--cc <compiler>] [--emit-c <path.c>]\n\
+        "Usage: {0} <file{1}> -o <output> [--no-gc] [--static-stdlib|--dynamic-stdlib] [--cc <compiler>] [--emit-c <path.c>]\n\
          \x20      {0} --license\n\
          \x20      {0} --version\n\
          \x20 --no-gc        required if the program uses harvest()/trash()\n\
+         \x20 --static-stdlib  link porch, cornmath, kernels, almanac, bushel and furrow from\n\
+         \x20                libcob_stdlib.a: no lib/ directory needed at run time (default for\n\
+         \x20                musl targets). pantry, granary and barn stay shared libraries\n\
+         \x20 --dynamic-stdlib  link every module as a shared library plus an rpath, even for musl\n\
          \x20 --cc PATH      explicit compiler to spawn (default: resolved from\n\
          \x20                CobCC / CobOS+CobArch / PATH -- see file header comment)\n\
          \x20 --emit-c PATH  also write the generated C source for inspection\n\
@@ -140,7 +146,30 @@ fn lib_looks_like_path(lib: &str) -> bool {
 }
 
 /// One token per distinct extern library, ready to append to the compiler line.
-fn build_extern_link_args(externs: &[ExternDecl], cwd: Option<&Path>) -> String {
+/// The standard library modules that are in libcob_stdlib.a.
+const STATIC_STDLIB_MODULES: [&str; 6] = ["porch", "cornmath", "kernels", "almanac", "bushel", "furrow"];
+const STATIC_STDLIB_FILE: &str = "libcob_stdlib.a";
+
+/// Link arguments for the externs. With `static_std`, the modules in `STATIC_STDLIB_MODULES` come from the archive
+/// (named once) instead of `-l<module>` and an rpath. `explicit` says the person asked for that: a missing archive is
+/// then an error, where an implied default just falls back to shared libraries.
+fn build_extern_link_args(externs: &[ExternDecl], cwd: Option<&Path>, static_std: bool, explicit: bool) -> Result<String, String> {
+    let archive = stdlib_dir().map(|d| d.join(STATIC_STDLIB_FILE)).filter(|p| p.exists());
+    let mut static_std = static_std;
+    if static_std && archive.is_none() {
+        if explicit {
+            return Err(format!(
+                "--static-stdlib needs {} in the standard library directory ({}); build it with `make stdlib`",
+                STATIC_STDLIB_FILE,
+                stdlib_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|| "?".into())
+            ));
+        }
+        static_std = false;
+    }
+    if static_std && target_is_windows() {
+        return Err("--static-stdlib is not available for Windows targets yet".to_string());
+    }
+    let mut used_archive = false;
     let mut parts: Vec<String> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
     let (mut any_path, mut any_bare) = (false, false);
@@ -149,7 +178,12 @@ fn build_extern_link_args(externs: &[ExternDecl], cwd: Option<&Path>) -> String 
             continue;
         }
         seen.push(&d.lib);
-        if lib_looks_like_path(&d.lib) {
+        if static_std && !lib_looks_like_path(&d.lib) && STATIC_STDLIB_MODULES.contains(&d.lib.as_str()) {
+            if !used_archive {
+                used_archive = true;
+                parts.push(quote(&archive.as_ref().expect("checked above").to_string_lossy()));
+            }
+        } else if lib_looks_like_path(&d.lib) {
             any_path = true;
             parts.push(quote(&d.lib));
         } else {
@@ -179,7 +213,11 @@ fn build_extern_link_args(externs: &[ExternDecl], cwd: Option<&Path>) -> String 
             parts.push(format!("-Wl,-rpath,{}", quote(&cwd.to_string_lossy())));
         }
     }
-    parts.join(" ")
+    if used_archive {
+        // what a Rust static library needs from the C side
+        parts.push("-lpthread -ldl -lm".to_string());
+    }
+    Ok(parts.join(" "))
 }
 
 /// Runs `compiler -std=c99 -O2 -o out in [link args]`. Success means the
@@ -233,6 +271,7 @@ fn real_main() -> i32 {
     let (mut in_path, mut out_path, mut emit_c, mut cc_override): (Option<String>, Option<String>, Option<String>, Option<String>) =
         (None, None, None, None);
     let mut no_gc = false;
+    let (mut want_static, mut want_dynamic) = (false, false);
     let mut i = 1;
     while i < args.len() {
         let a = &args[i];
@@ -250,6 +289,8 @@ fn real_main() -> i32 {
                 Err(()) => return 1,
             },
             "--no-gc" => no_gc = true,
+            "--static-stdlib" => want_static = true,
+            "--dynamic-stdlib" => want_dynamic = true,
             "--cc" => match take("--cc", &mut i) {
                 Ok(v) => cc_override = Some(v),
                 Err(()) => return 1,
@@ -311,7 +352,20 @@ fn real_main() -> i32 {
         return 1;
     }
     let cwd = std::env::current_dir().ok();
-    let extra = build_extern_link_args(&externs, cwd.as_deref());
+    if want_static && want_dynamic {
+        eprintln!("[popcorn_comp] error: --static-stdlib and --dynamic-stdlib cannot be used together");
+        return 1;
+    }
+    // musl cannot load shared libraries, so a musl target links the standard library statically unless told not to
+    let implied_static = compiler.contains("-linux-musl") && !target_is_windows();
+    let static_std = want_static || (implied_static && !want_dynamic);
+    let extra = match build_extern_link_args(&externs, cwd.as_deref(), static_std, want_static) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("[popcorn_comp] error: {}", msg);
+            return 1;
+        }
+    };
 
     // --- transpile to C ---
     let c_source = transpile(&prog, &externs);
