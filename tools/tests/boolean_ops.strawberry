@@ -1,0 +1,23 @@
+# not a comment
+quote " then # still text
+and: yes
+or: yes
+not: yes
+grouped: yes
+and-else: ok
+elif with and/or: ok
+precedence: ok
+parens: ok
+3
+7
+short-circuit: ok
+noisy ran
+or evaluates the right side when it must
+empty string is false
+truthy: ok
+var named not
+var named or
+out
+big
+small
+small

@@ -13,6 +13,48 @@ static CobValue cob_int(long n) { CobValue v; v.is_str = 0; v.i = n; v.s = NULL;
 static CobValue cob_str(const char *s) { CobValue v; v.is_str = 1; v.i = 0; v.s = cob_strdup_(s); return v; }
 static CobValue cob_str_take(char *s) { CobValue v; v.is_str = 1; v.i = 0; v.s = s; return v; }
 static void cob_free(CobValue *v) { if (v->is_str) { free(v->s); v->s = NULL; } }
+
+/// --- automatic handle cleanup ---
+// A small set of handles allocated by harvest() (and, in future, by extern
+// calls that return handles). Used so that overwriting a variable holding a
+// handle frees it automatically instead of leaking it.
+#define COB_MAX_HANDLES 4096
+static void *cob_handles[COB_MAX_HANDLES];
+static int cob_handles_n = 0;
+
+static void cob_handle_register(void *p) {
+    for (int i = 0; i < cob_handles_n; i++) {
+        if (cob_handles[i] == p) return;
+    }
+    if (cob_handles_n < COB_MAX_HANDLES) {
+        cob_handles[cob_handles_n++] = p;
+    }
+}
+
+static void cob_handle_release(void *p) {
+    if (!p) return;
+    for (int i = 0; i < cob_handles_n; i++) {
+        if (cob_handles[i] == p) {
+            free(p);
+            cob_handles[i] = cob_handles[--cob_handles_n];
+            return;
+        }
+    }
+}
+
+/// If `v` holds an integer that is a registered handle, free it and clear the value.
+static void cob_handle_free_value(CobValue *v) {
+    if (!v->is_str && v->i != 0) {
+        cob_handle_release((void*)(intptr_t)v->i);
+    }
+}
+
+/// Free every registered handle (called at program exit).
+static void cob_handle_free_all(void) {
+    while (cob_handles_n > 0) {
+        cob_handle_release(cob_handles[0]);
+    }
+}
 static CobValue cob_copy(const CobValue *v) { return v->is_str ? cob_str(v->s ? v->s : "") : cob_int(v->i); }
 static void cob_long_to_str(long n, char *buf, size_t bufsize) { snprintf(buf, bufsize, "%ld", n); }
 static CobValue cob_add(CobValue l, CobValue r) {
@@ -53,6 +95,15 @@ static long cob_harvest_bytes(CobValue v) {
     long bytes = cob_to_long_for_harvest(v);
     if (bytes < 0) { fprintf(stderr, "[cob] warning: harvest() with negative size, treated as 0\n"); bytes = 0; }
     return bytes;
+}
+
+/// Allocate `bytes` (from a harvest() value), register the pointer so it can be
+/// automatically freed when overwritten, and return it as a long.
+static long cob_harvest_registered(CobValue v) {
+    long bytes = cob_harvest_bytes(v);
+    void *p = malloc((size_t)bytes);
+    if (p) cob_handle_register(p);
+    return (long)(intptr_t)p;
 }
 static int cob_cmp_raw(CobValue l, CobValue r, int *mismatch) {
     int result;

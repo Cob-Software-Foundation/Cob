@@ -105,6 +105,12 @@ fn run(args: Vec<String>) -> i32 {
                 }
                 sess.recipes_register(&prog);
                 sess.execute(&prog);
+                // Free any handles left in globals now that the program has finished.
+                for (_, v) in sess.vars.items.iter() {
+                    if let cob_core::Value::Int(id) = v {
+                        let _ = sess.handles.free(*id);
+                    }
+                }
                 return 0;
             }
             Err(()) => {
@@ -132,6 +138,14 @@ fn run(args: Vec<String>) -> i32 {
 
     if use_cache {
         cache::write(&cache_path, &prog);
+    }
+    if !enter_repl {
+        // Free any handles left in globals now that the program has finished.
+        for (_, v) in sess.vars.items.iter() {
+            if let cob_core::Value::Int(id) = v {
+                let _ = sess.handles.free(*id);
+            }
+        }
     }
     if enter_repl {
         sess.repl(true);

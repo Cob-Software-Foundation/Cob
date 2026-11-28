@@ -356,9 +356,19 @@ fn real_main() -> i32 {
         eprintln!("[popcorn_comp] error: --static-stdlib and --dynamic-stdlib cannot be used together");
         return 1;
     }
-    // musl cannot load shared libraries, so a musl target links the standard library statically unless told not to
+    // musl cannot load shared libraries, so a musl target links the standard library statically unless told not to.
+    // For every other non-Windows target, default to static linking whenever libcob_stdlib.a exists, so that
+    // compiled programs are standalone by default and do not need to ship lib/ or set COB_STDLIB.
+    // Windows: static linking is not available yet (see build_extern_link_args), so dynamic remains the default.
     let implied_static = compiler.contains("-linux-musl") && !target_is_windows();
-    let static_std = want_static || (implied_static && !want_dynamic);
+    let mut static_std = want_static || (implied_static && !want_dynamic);
+    if !want_static && !want_dynamic && !target_is_windows() {
+        if let Some(dir) = stdlib_dir() {
+            if dir.join(STATIC_STDLIB_FILE).exists() {
+                static_std = true;
+            }
+        }
+    }
     let extra = match build_extern_link_args(&externs, cwd.as_deref(), static_std, want_static) {
         Ok(a) => a,
         Err(msg) => {

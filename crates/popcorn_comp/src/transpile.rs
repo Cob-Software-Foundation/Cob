@@ -193,7 +193,7 @@ fn emit_expr(o: &mut Out, e: &Expr) {
             emit_sequenced(o, f, l, r);
         }
         Expr::Harvest(x) => {
-            o.s("cob_int((long)(intptr_t)malloc((size_t)cob_harvest_bytes(");
+            o.s("cob_int(cob_harvest_registered(");
             emit_expr(o, x);
             o.s(")))");
         }
@@ -278,7 +278,7 @@ fn emit_program(o: &mut Out, p: &Program) {
                 // right-hand side may read the very variable being assigned.
                 o.s("{ CobValue cob_tmp = ");
                 emit_expr(o, e);
-                o.s(&format!("; cob_free(&cob_var_{0}); cob_var_{0} = cob_tmp; }}\n", name));
+                o.s(&format!("; cob_handle_free_value(&cob_var_{0}); cob_free(&cob_var_{0}); cob_var_{0} = cob_tmp; }}\n", name));
             }
             Stmt::Trash(n) => o.s(&format!(
                 "if (cob_var_{0}.is_str) fprintf(stderr, \"[cob] warning: trash({0}) -- variable holds a string, not a handle\\n\");\nelse {{ free((void*)(intptr_t)cob_var_{0}.i); cob_var_{0}.i = 0; }}\n",
@@ -379,7 +379,7 @@ fn emit_recipe(o: &mut Out, r: &Recipe) {
     emit_program(o, &r.body);
     o.s("cob_done:\ncob_depth--;\ncob_leave:\n");
     for l in &locals.0 {
-        o.s(&format!("cob_free(&cob_var_{});\n", l));
+        o.s(&format!("cob_handle_free_value(&cob_var_{}); cob_free(&cob_var_{});\n", l, l));
     }
     o.s("return cob_retval;\n}\n");
 }
@@ -435,7 +435,7 @@ pub fn transpile(prog: &Program, externs: &[ExternDecl]) -> Vec<u8> {
     for g in &globals.0 {
         o.s(&format!("cob_free(&cob_var_{});\n", g));
     }
-    o.s("return 0;\n}\n");
+    o.s("cob_handle_free_all();\nreturn 0;\n}\n");
     o.0
 }
 

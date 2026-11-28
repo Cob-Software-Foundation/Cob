@@ -36,6 +36,18 @@ impl VarTable {
             self.items.push((name.to_string(), value));
         }
     }
+
+    /// Replaces the value bound to `name`, returning the previous value (if any).
+    /// Used so that overwriting a variable that holds a memory handle can free it.
+    pub fn replace(&mut self, name: &str, value: Value) -> Option<Value> {
+        if let Some(slot) = self.items.iter_mut().find(|(n, _)| n == name) {
+            let old = std::mem::replace(&mut slot.1, value);
+            Some(old)
+        } else {
+            self.items.push((name.to_string(), value));
+            None
+        }
+    }
 }
 
 /// `harvest()` / `trash()` memory handles: 1-based ids, never raw pointers.

@@ -203,6 +203,14 @@ impl Session {
         let saved_ret = std::mem::replace(&mut self.ret, Value::Int(0));
         self.call_depth += 1;
         let returned = self.execute(&def.body);
+        // Free any handles left in the recipe's locals before they are dropped.
+        if let Some(l) = &self.locals {
+            for (_, v) in l.items.iter() {
+                if let Value::Int(id) = v {
+                    let _ = self.handles.free(*id);
+                }
+            }
+        }
         let result = std::mem::replace(&mut self.ret, saved_ret);
         self.locals = saved_locals;
         self.call_depth -= 1;
@@ -263,10 +271,16 @@ impl Session {
                 }
                 Stmt::Set(name, e) => {
                     let v = self.eval_expr(e);
-                    // inside a recipe, every `set` target is one of its locals
-                    match &mut self.locals {
-                        Some(l) => l.set(name, v),
-                        None => self.vars.set(name, v),
+                    // inside a recipe, every `set` target is one of its locals.
+                    // Free the old value if it was a memory handle, so that
+                    // reassigning a variable that held a list/array/database
+                    // handle does not leak it.
+                    let old = match &mut self.locals {
+                        Some(l) => l.replace(name, v),
+                        None => self.vars.replace(name, v),
+                    };
+                    if let Some(Value::Int(id)) = old {
+                        let _ = self.handles.free(id);
                     }
                 }
                 Stmt::Trash(name) => {
