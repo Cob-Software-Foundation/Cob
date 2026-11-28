@@ -10,13 +10,13 @@ recipe plus_two(n):
     serve n + 2
 pop("file ran")
 XEOF
-out=$(printf 'plus_two(base)\nset base = 1\nbase\n' | "$INTERP" lib_for_repl.cob -i)
+out=$(printf 'plus_two(base)\nset base = 1\nbase\n' | "$INTERP" lib_for_repl.cob -i | tr -d '\r')
 expected="file ran
 42
 1"
 [ "$out" = "$expected" ] || { echo "-i session wrong: $out"; exit 1; }
 # no prompt noise when stdin is not a terminal
-out=$(printf '2 * 21\n' | "$INTERP")
+out=$(printf '2 * 21\n' | "$INTERP" | tr -d '\r')
 [ "$out" = "42" ] || { echo "quiet repl wrong: $out"; exit 1; }
 # a bad program given with -i must not start the REPL
 printf 'pop(nothere(1))\n' > bad.cob

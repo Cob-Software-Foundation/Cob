@@ -43,15 +43,19 @@ for src in "$TESTS"/*.cob; do
     stdin_file=/dev/null; [ -f "$TESTS/$name.stdin" ] && stdin_file="$TESTS/$name.stdin"
     w="$T/$name"; mkdir -p "$w"; cp "$src" "$w/$name.cob"
     ( cd "$w" && "$INTERP" "$name.cob" --no-cache < "$stdin_file" > out.txt 2> err.txt )
-    if cmp -s "$w/out.txt" "$exp"; then ok "interp   $name"
-    else bad "interp   $name" "diff: $(diff "$w/out.txt" "$exp" | head -4 | tr '\n' '|')"; fi
+    tr -d '\r' < "$w/out.txt" > "$w/out_lf.txt"
+    if cmp -s "$w/out_lf.txt" "$exp"; then ok "interp   $name"
+    else bad "interp   $name" "diff: $(diff "$w/out_lf.txt" "$exp" | head -4 | tr '\n' '|')"; fi
     if [ -n "$CC_BIN" ]; then
         ( cd "$w" && "$INTERP" "$name.cob" < /dev/null > /dev/null 2>&1 )   # writes NAME.strawberry
         if ( cd "$w" && "$COMP" "$name.strawberry" -o native --cc "$CC_BIN" > /dev/null 2> cerr.txt ); then
             ( cd "$w" && ./native < "$stdin_file" > nout.txt 2> nerr.txt )
             sed 's/\[cob_interp\]/[cob]/' "$w/err.txt" > "$w/err_norm.txt"
-            if cmp -s "$w/nout.txt" "$exp" && cmp -s "$w/err_norm.txt" "$w/nerr.txt"; then ok "compiled $name"
-            else bad "compiled $name" "diff: $(diff "$w/nout.txt" "$exp" | head -4 | tr '\n' '|') $(diff "$w/err_norm.txt" "$w/nerr.txt" | head -4 | tr '\n' '|')"; fi
+            tr -d '\r' < "$w/nout.txt" > "$w/nout_lf.txt"
+            tr -d '\r' < "$w/err_norm.txt" > "$w/err_norm_lf.txt"
+            tr -d '\r' < "$w/nerr.txt" > "$w/nerr_lf.txt"
+            if cmp -s "$w/nout_lf.txt" "$exp" && cmp -s "$w/err_norm_lf.txt" "$w/nerr_lf.txt"; then ok "compiled $name"
+            else bad "compiled $name" "diff: $(diff "$w/nout_lf.txt" "$exp" | head -4 | tr '\n' '|') $(diff "$w/err_norm_lf.txt" "$w/nerr_lf.txt" | head -4 | tr '\n' '|')"; fi
         else bad "compiled $name" "popcorn_comp failed: $(tail -2 "$w/cerr.txt" | tr '\n' ' ')"; fi
     fi
 done
@@ -61,8 +65,9 @@ for inp in "$TESTS"/repl_*.stdin; do
     [ -f "$inp" ] || continue
     name=$(basename "$inp" .stdin)
     "$INTERP" --repl < "$inp" > "$T/$name.out" 2> "$T/$name.err"
-    if cmp -s "$T/$name.out" "$TESTS/$name.expected"; then ok "repl     $name"
-    else bad "repl     $name" "diff: $(diff "$T/$name.out" "$TESTS/$name.expected" | head -4 | tr '\n' '|')"; fi
+    tr -d '\r' < "$T/$name.out" > "$T/$name.out_lf.txt"
+    if cmp -s "$T/$name.out_lf.txt" "$TESTS/$name.expected"; then ok "repl     $name"
+    else bad "repl     $name" "diff: $(diff "$T/$name.out_lf.txt" "$TESTS/$name.expected" | head -4 | tr '\n' '|')"; fi
 done
 
 # ---- scripts

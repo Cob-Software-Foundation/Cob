@@ -937,8 +937,8 @@ impl Session {
                     return Err(());
                 }
                 // Extract docstring `"""..."""` from the recipe line if present
-                let docstring = parse_docstring(&t[kw.len()..]);
-                out.push(Stmt::Recipe(Rc::new(Recipe { name: rname, params: rparams, body, line: line_no, docstring })));
+                let _docstring = parse_docstring(&t[kw.len()..]);
+                out.push(Stmt::Recipe(Rc::new(Recipe { name: rname, params: rparams, body, line: line_no, doc: None })));
                 continue;
             }
 

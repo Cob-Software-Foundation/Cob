@@ -21,9 +21,13 @@ Fixed: Automatic memory handle management:
 - Program exit cleanup frees all global handles
 - Compiled code uses cob_harvest_registered() and cob_handle_free_value() / cob_handle_free_all()
 
-Note: No more needing to remember _free / _close calls for lists, arrays, and databases.
-
 ### Trailing Comments
 Requiring # comments to be on their own separate lines is an unusual restriction that will trip up people coming from Python.
 
 Fixed: Comments can now follow code directly: set x = 1 # note works; a # inside a string is still just text.
+
+### Docstrings Disabled
+The `"""..."""` docstring feature has been disabled in the Rust interpreter.
+- Docstring parsing function `parse_docstring()` now returns `None` always
+- `Recipe` struct no longer contains `docstring` field
+- This was done to simplify the interpreter and avoid ambiguity with string literals
