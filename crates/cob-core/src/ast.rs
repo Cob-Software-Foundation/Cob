@@ -52,6 +52,7 @@ pub struct Recipe {
     pub params: Vec<String>,
     pub body: Program,
     pub line: i32,
+    pub docstring: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -81,6 +81,41 @@ fn is_reserved_word(name: &str) -> bool {
     .contains(&name)
 }
 
+/// Parse a docstring `"""..."""` from the start of a line, returning the content inside.
+/// The triple quotes themselves are consumed but not included in the result.
+fn parse_docstring(line: &[u8]) -> Option<String> {
+    // Check if line starts with `"""`
+    if line.len() < 3 || line[0] != 0x22 || line[1] != 0x22 || line[2] != 0x22 {
+        return None;
+    }
+    let mut p = 3usize;
+    // Skip leading whitespace/newlines inside the docstring
+    while p < line.len() && (line[p] == b' ' || line[p] == b'\t' || line[p] == b'\n' || line[p] == b'\r') {
+        p += 1;
+    }
+    // Collect content until we find closing `"""`
+    let mut content = Vec::new();
+    while p + 2 < line.len() {
+        // Check for closing """
+        if line[p] == 0x22 && line[p + 1] == 0x22 && line[p + 2] == 0x22 {
+            // Found closing triple quote - return the content
+            let s = String::from_utf8_lossy(&content).into_owned();
+            return Some(s);
+        }
+        // Handle escape sequences inside the docstring (basic handling)
+        if line[p] == b'\\' && p + 1 < line.len() {
+            p += 2;
+            if p < line.len() {
+                content.push(line[p]);
+            }
+        } else {
+            content.push(line[p]);
+            p += 1;
+        }
+    }
+    None // No closing """ found
+}
+
 /// `set x = 1  # note` -> `set x = 1`. A `#` inside a string literal is not a comment (same escapes as `parse_string_literal`).
 fn strip_trailing_comment(line: &[u8]) -> &[u8] {
     let (mut in_str, mut i) = (false, 0);
@@ -901,7 +936,9 @@ impl Session {
                     ewrite(&format!("[cob_interp] syntax error at line {}: recipe {} needs an indented body\n", line_no, rname));
                     return Err(());
                 }
-                out.push(Stmt::Recipe(Rc::new(Recipe { name: rname, params: rparams, body, line: line_no })));
+                // Extract docstring `"""..."""` from the recipe line if present
+                let docstring = parse_docstring(&t[kw.len()..]);
+                out.push(Stmt::Recipe(Rc::new(Recipe { name: rname, params: rparams, body, line: line_no, docstring })));
                 continue;
             }
 

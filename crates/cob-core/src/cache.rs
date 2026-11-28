@@ -255,7 +255,7 @@ fn read_stmt(r: &mut Rd) -> R<Stmt> {
                 params.push(r.string()?);
             }
             let body = read_program(r)?;
-            Stmt::Recipe(Rc::new(Recipe { name, params, body, line: 0 }))
+            Stmt::Recipe(Rc::new(Recipe { name, params, body, line: 0, docstring: None }))
         }
         7 => Stmt::Serve(read_expr(r)?),
         8 => Stmt::Call(read_expr(r)?),
